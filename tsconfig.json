@@ -31,5 +31,17 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    "api-core",
+    "api-geospatial",
+    "api-taludes",
+    "backend",
+    "digital-twin",
+    "digital-twin-app",
+    "geo-app",
+    "hidroalerta",
+    "hidrogeo-brasil",
+    "app-sondagem"
+  ]
 }

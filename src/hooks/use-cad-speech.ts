@@ -2,7 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-type SpeechRecognitionCtor = new () => SpeechRecognition;
+type CadSpeechRecognition = {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  continuous: boolean;
+  onresult: ((event: CadSpeechRecognitionEvent) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type CadSpeechRecognitionEvent = {
+  results: { [index: number]: { [index: number]: { transcript?: string } } };
+};
+
+type SpeechRecognitionCtor = new () => CadSpeechRecognition;
 
 function getSpeechRecognition(): SpeechRecognitionCtor | null {
   if (typeof window === "undefined") return null;
@@ -19,7 +35,7 @@ export function useCadSpeech(lang = "pt-BR") {
   const [speechSupported] = useState(() =>
     typeof window !== "undefined" ? Boolean(getSpeechRecognition()) : false,
   );
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<CadSpeechRecognition | null>(null);
 
   const stopListening = useCallback(() => {
     recognitionRef.current?.stop();
@@ -38,7 +54,7 @@ export function useCadSpeech(lang = "pt-BR") {
       recognition.maxAlternatives = 1;
       recognition.continuous = false;
 
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
+      recognition.onresult = (event: CadSpeechRecognitionEvent) => {
         const text = event.results[0]?.[0]?.transcript?.trim() ?? "";
         setTranscript(text);
         onResult?.(text);

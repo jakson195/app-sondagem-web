@@ -88,14 +88,14 @@ export function cadProjectToGeoJson(project: CadProject): GeoJSON.FeatureCollect
   return { type: "FeatureCollection", features };
 }
 
-export function exportCadProjectShapefileZip(project: CadProject): ArrayBuffer {
+export async function exportCadProjectShapefileZip(project: CadProject): Promise<ArrayBuffer> {
   const geojson = cadProjectToGeoJson(project);
   if (geojson.features.length === 0) {
     throw new Error("Nenhuma geometria para exportar.");
   }
 
   const utmZone = detectProjectUtmZone(project.entities);
-  const zipBase64 = shpwrite.zip(geojson, {
+  const zipBuffer = await shpwrite.zip<"arraybuffer">(geojson, {
     folder: project.name.replace(/[^\w\-]+/g, "_").slice(0, 40) || "cad_export",
     types: {
       point: "pontos",
@@ -103,10 +103,9 @@ export function exportCadProjectShapefileZip(project: CadProject): ArrayBuffer {
       line: "linhas",
     },
     prj: sirgas2000UtmPrj(utmZone),
+    compression: "DEFLATE",
+    outputType: "arraybuffer",
   });
 
-  const binary = atob(zipBase64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
+  return zipBuffer;
 }

@@ -265,7 +265,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
       setExportingFormat(format);
       try {
         if (format === "shp") {
-          const zip = exportCadProjectShapefileZip(src);
+          const zip = await exportCadProjectShapefileZip(src);
           downloadBlob(new Blob([zip], { type: "application/zip" }), `${baseName}_cad.zip`);
           return;
         }

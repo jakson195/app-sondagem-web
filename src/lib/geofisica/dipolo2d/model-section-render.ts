@@ -9,6 +9,8 @@ import { quantizeDisplayT } from "./res2dinv-colormap";
 import { cloneFloat64Array } from "./model-visual-scale";
 import type { Dipolo2DReading } from "./types";
 
+type Float64Grid = Float64Array<ArrayBufferLike>;
+
 /** Perfil de cobertura estrito (sem ganho nem suavização) — inversão física. */
 export function buildSensitivityZCoverProfile(
   readings: Dipolo2DReading[],
@@ -168,8 +170,8 @@ export function smoothLogModelHorizontalForDisplay(
   passes = 2,
   alpha = 0.22,
 ): Float64Array {
-  let cur = cloneFloat64Array(mLog);
-  let next = new Float64Array(cur.length);
+  let cur: Float64Grid = cloneFloat64Array(mLog);
+  let next: Float64Grid = new Float64Array(cur.length);
   const a = Math.max(0, Math.min(0.4, alpha));
 
   for (let p = 0; p < passes; p++) {
@@ -205,8 +207,8 @@ export function smoothLogModelForDisplay(
   passes = 2,
   alpha = 0.24,
 ): Float64Array {
-  let cur = cloneFloat64Array(mLog);
-  let next = new Float64Array(cur.length);
+  let cur: Float64Grid = cloneFloat64Array(mLog);
+  let next: Float64Grid = new Float64Array(cur.length);
   const a = Math.max(0, Math.min(0.45, alpha));
 
   for (let p = 0; p < passes; p++) {
@@ -318,8 +320,8 @@ export function featherHorizontalLayersVertically(
   passes = 1,
   alpha = 0.14,
 ): Float64Array {
-  let cur = cloneFloat64Array(mLog);
-  let next = new Float64Array(cur.length);
+  let cur: Float64Grid = cloneFloat64Array(mLog);
+  let next: Float64Grid = new Float64Array(cur.length);
   const a = Math.max(0, Math.min(0.35, alpha));
 
   for (let p = 0; p < passes; p++) {

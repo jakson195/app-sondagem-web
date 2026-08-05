@@ -122,8 +122,8 @@ export type ModelDrawOptions = {
   /** RMS relativo médio em % (Ω·m) — compatível com RES2DINV «Abs. error». */
   rmsPercent?: number;
   methodLabel?: string;
-  /** Motor de inversão (sempre ResIPy R2). */
-  invertEngine?: "physics";
+  /** Motor de inversão (ResIPy R2 ou proxy). */
+  invertEngine?: "physics" | "proxy";
   /** Exagero horizontal do perfil (1 = natural). */
   scaleXM?: number;
   /** Exagero vertical / profundidade (1 = natural). */
