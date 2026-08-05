@@ -18,8 +18,8 @@ export function isAuthBypassEnabled(): boolean {
   ) {
     return true;
   }
-  // datageodigital.com.br (Vercel): sem variáveis extra, entrada directa por agora
-  return process.env.NODE_ENV === "production";
+  // Produção: bypass só se AUTH_BYPASS_PRODUCTION=1 (isolamento multi-tenant por omissão)
+  return process.env.AUTH_BYPASS_PRODUCTION === "1";
 }
 
 /** @deprecated Prefer isAuthBypassEnabled */

@@ -47,7 +47,7 @@ export function SptHubClient() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(apiUrl("/api/obra"));
+        const r = await fetch(apiUrl("/api/obra"), { credentials: "include" });
         const data = await r.json();
         if (cancelled || !r.ok) return;
         if (Array.isArray(data)) setObras(data as ObraListItem[]);

@@ -25,18 +25,12 @@ function withAppParam(base: string, app?: string): string {
   return `${base}${sep}app=${encodeURIComponent(app)}`;
 }
 
-/** Base do iframe — em dev usa Vite directo (:5175); produção usa proxy Next. */
+/** Base do iframe — proxy same-origin no DataGeo (public/ ou Vite via HIDROGEO_VITE_URL). */
 function resolveHidroGeoViewerBase(): string {
   const fromEnv = process.env.NEXT_PUBLIC_HIDROGEO_URL?.trim();
   if (fromEnv) {
     const base = fromEnv.replace(/\/$/, "");
     if (!LEGACY_WRONG_PORT.test(base)) return base;
-  }
-  if (process.env.NODE_ENV === "development") {
-    const vite =
-      process.env.NEXT_PUBLIC_HIDROGEO_VITE_URL?.trim()?.replace(/\/$/, "") ||
-      "http://localhost:5175";
-    return `${vite}/hidrogeo-viewer`;
   }
   return "/hidrogeo-viewer";
 }

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { requireObraAccessFromRequest } from "@/lib/obra-access";
 import {
   initialInsarJobQueuedProperties,
   kickInsarPipelineJob,
@@ -88,7 +89,7 @@ function serializeJob(
   return base;
 }
 
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const obraId = parseObraId((await ctx.params).id);
   if (obraId === null) {
     return NextResponse.json({ error: "id inválido" }, { status: 400 });
@@ -96,11 +97,14 @@ export async function GET(_req: Request, ctx: Ctx) {
 
   const obra = await prisma.obra.findUnique({
     where: { id: obraId },
-    select: { id: true },
+    select: { id: true, companyId: true, createdByUserId: true },
   });
   if (!obra) {
     return NextResponse.json({ error: "Obra não encontrada" }, { status: 404 });
   }
+
+  const access = await requireObraAccessFromRequest(req, obra);
+  if (!access.ok) return access.response;
 
   const jobs = await prisma.insarPipelineJob.findMany({
     where: { obraId },
@@ -145,11 +149,14 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const obra = await prisma.obra.findUnique({
     where: { id: obraId },
-    select: { id: true },
+    select: { id: true, companyId: true, createdByUserId: true },
   });
   if (!obra) {
     return NextResponse.json({ error: "Obra não encontrada" }, { status: 404 });
   }
+
+  const access = await requireObraAccessFromRequest(req, obra, { write: true });
+  if (!access.ok) return access.response;
 
   const name =
     typeof body.name === "string" && body.name.trim()

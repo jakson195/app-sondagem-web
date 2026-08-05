@@ -1,9 +1,11 @@
 import { nextResponseDbFailure } from "@/lib/db-route-error";
 import { ensureUniqueCompanySlug, normalizeClientSlugInput } from "@/lib/client-slug";
 import { listAccessibleCompaniesForUser } from "@/lib/client-portal-auth";
+import { isPlatformSuperAdmin } from "@/lib/platform-admin";
 import { prisma } from "@/lib/prisma";
 import { garantirModulosPadraoEmpresa } from "@/lib/seed-empresa-modulos";
 import { getAuthUserFromRequest } from "@/lib/server-auth";
+import { provisionSubscriptionForCompany } from "@/lib/saas/subscription-service";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -25,11 +27,17 @@ export async function GET(req: Request) {
   }
 }
 
-/** Cria cliente/empresa e vincula o utilizador autenticado como ADMIN. */
+/** Cria cliente/empresa — apenas administrador de plataforma. */
 export async function POST(req: Request) {
   const authUser = await getAuthUserFromRequest(req);
   if (!authUser) {
     return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+  }
+  if (!isPlatformSuperAdmin(authUser.systemRole)) {
+    return NextResponse.json(
+      { error: "Sem permissão para criar empresas." },
+      { status: 403 },
+    );
   }
 
   let body: { nome?: unknown };
@@ -66,6 +74,7 @@ export async function POST(req: Request) {
     });
 
     await garantirModulosPadraoEmpresa(company.id);
+    await provisionSubscriptionForCompany(company.id, "trial");
 
     return NextResponse.json({ id: company.id, nome: company.name, slug: company.slug });
   } catch (e) {

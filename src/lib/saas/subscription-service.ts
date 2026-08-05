@@ -1,9 +1,10 @@
 import type { SaasPlanSlug, SubscriptionStatus } from "@prisma/client";
 import { isAuthBypassEnabled } from "@/lib/auth-bypass";
+import { isPrismaMissingTableError } from "@/lib/pg-error-utils";
 import { prisma } from "@/lib/prisma";
 import { PLAN_LIMITS } from "@/lib/saas/plan-limits";
 
-const TRIAL_DAYS = 14;
+const TRIAL_DAYS = 90;
 
 export function trialEndsAtFromNow(): Date {
   const d = new Date();
@@ -69,20 +70,50 @@ function companyPlanToSlug(plan: string | null | undefined): SaasPlanSlug {
   return "trial";
 }
 
+async function companySubscriptionFallback(companyId: number) {
+  return prisma.company.findUnique({
+    where: { id: companyId },
+    select: { plan: true, status: true },
+  });
+}
+
+function evaluateCompanyStatusAccess(
+  status: SubscriptionStatus,
+): SubscriptionAccessResult {
+  if (status === "SUSPENDED") {
+    return {
+      ok: false,
+      code: "SUSPENDED",
+      message: "Assinatura suspensa. Regularize o pagamento em Assinatura.",
+    };
+  }
+  if (status === "CANCELLED") {
+    return {
+      ok: false,
+      code: "CANCELLED",
+      message: "Assinatura cancelada. Renove o plano para continuar.",
+    };
+  }
+  return { ok: true };
+}
+
 /** Obtém assinatura; cria a partir de `Company` se a linha ainda não existir. */
 export async function getOrProvisionSubscription(companyId: number): Promise<SubscriptionRow> {
   try {
     const existing = await prisma.subscription.findUnique({ where: { companyId } });
     if (existing) return existing;
   } catch (e) {
-    console.error("[subscription] findUnique failed — run npm run db:push && npx prisma generate", e);
+    if (isPrismaMissingTableError(e, "Subscription")) {
+      console.warn(
+        "[subscription] Tabela Subscription em falta — execute scripts/sql/neon-subscription-table.sql na Neon.",
+      );
+      return null;
+    }
+    console.error("[subscription] findUnique failed", e);
     return null;
   }
 
-  const company = await prisma.company.findUnique({
-    where: { id: companyId },
-    select: { plan: true, status: true },
-  });
+  const company = await companySubscriptionFallback(companyId);
   if (!company) return null;
 
   try {
@@ -90,6 +121,9 @@ export async function getOrProvisionSubscription(companyId: number): Promise<Sub
       status: company.status,
     });
   } catch (e) {
+    if (isPrismaMissingTableError(e, "Subscription")) {
+      return null;
+    }
     console.error("[subscription] provision failed", e);
     return null;
   }
@@ -145,11 +179,15 @@ export async function assertSubscriptionAllowsAccess(
     if (isAuthBypassEnabled()) {
       return { ok: true };
     }
+    const company = await companySubscriptionFallback(companyId);
+    if (company) {
+      return evaluateCompanyStatusAccess(company.status);
+    }
     return {
       ok: false,
       code: "MISSING",
       message:
-        "Assinatura não configurada. Execute: npm run db:push && npx prisma generate && npm run auth:seed-admin (opcional: npx tsx scripts/backfill-subscriptions.ts)",
+        "Assinatura não configurada. Execute na Neon: scripts/sql/neon-subscription-table.sql (ou npm run db:push).",
     };
   }
   return evaluateSubscriptionAccess(sub);

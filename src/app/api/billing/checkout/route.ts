@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth/require-auth";
+import { isPlatformSuperAdmin } from "@/lib/platform-admin";
 import { getBillingProvider } from "@/lib/billing/mercadopago-config";
 import { appBaseUrl, getStripe, isStripeConfigured, stripePriceIdForPlan } from "@/lib/billing/stripe-config";
 import { prisma } from "@/lib/prisma";
@@ -28,6 +29,9 @@ export async function POST(req: Request) {
 
   const { user, company, response } = await requireAuth(req);
   if (response) return response;
+  if (!user || !isPlatformSuperAdmin(user.systemRole)) {
+    return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+  }
   if (!company) {
     return NextResponse.json({ error: "Empresa activa não definida." }, { status: 400 });
   }

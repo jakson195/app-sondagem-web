@@ -1,7 +1,7 @@
 import type { ObraStatus, Prisma } from "@prisma/client";
 import type { Polygon } from "geojson";
-import { requireCompanyAccessFromRequest } from "@/lib/client-portal-auth";
 import { nextResponseDbFailure } from "@/lib/db-route-error";
+import { requireObraAccessFromRequest } from "@/lib/obra-access";
 import { serializeObraApi } from "@/lib/obra-api-serialize";
 import { modulosProjetoFromUnknown } from "@/lib/modulos-projeto";
 import { parsePolygonBody, polygonCentroidLngLat } from "@/lib/obra-aoi-polygon";
@@ -40,7 +40,7 @@ export async function GET(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Obra não encontrada" }, { status: 404 });
   }
 
-  const access = await requireCompanyAccessFromRequest(req, obra.companyId);
+  const access = await requireObraAccessFromRequest(req, obra);
   if (!access.ok) return access.response;
 
   let areaOfInterestGeojson: Polygon | null = null;
@@ -76,7 +76,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Obra não encontrada" }, { status: 404 });
   }
 
-  const access = await requireCompanyAccessFromRequest(req, existing.companyId, {
+  const access = await requireObraAccessFromRequest(req, existing, {
     write: true,
   });
   if (!access.ok) return access.response;
@@ -335,34 +335,38 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Obra não encontrada" }, { status: 404 });
   }
 
-  const access = await requireCompanyAccessFromRequest(_req, existing.companyId, {
+  const access = await requireObraAccessFromRequest(_req, existing, {
     write: true,
   });
   if (!access.ok) return access.response;
 
-  const resultado = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-    const furos = await tx.furo.findMany({
-      where: { obraId: id },
-      select: { id: true },
-    });
-    const furoIds = furos.map((f: { id: number }) => f.id);
-
-    let sptApagados = 0;
-    if (furoIds.length > 0) {
-      const spt = await tx.sPT.deleteMany({
-        where: { furoId: { in: furoIds } },
+  try {
+    const resultado = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const furos = await tx.furo.findMany({
+        where: { obraId: id },
+        select: { id: true },
       });
-      sptApagados = spt.count;
-    }
+      const furoIds = furos.map((f: { id: number }) => f.id);
 
-    const furosDelete = await tx.furo.deleteMany({ where: { obraId: id } });
-    await tx.obra.delete({ where: { id } });
+      let sptApagados = 0;
+      if (furoIds.length > 0) {
+        const spt = await tx.sPT.deleteMany({
+          where: { furoId: { in: furoIds } },
+        });
+        sptApagados = spt.count;
+      }
 
-    return {
-      furosApagados: furosDelete.count,
-      sptApagados,
-    };
-  });
+      const furosDelete = await tx.furo.deleteMany({ where: { obraId: id } });
+      await tx.obra.delete({ where: { id } });
 
-  return NextResponse.json({ ok: true, ...resultado });
+      return {
+        furosApagados: furosDelete.count,
+        sptApagados,
+      };
+    });
+
+    return NextResponse.json({ ok: true, ...resultado });
+  } catch (e) {
+    return nextResponseDbFailure(e);
+  }
 }

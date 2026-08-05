@@ -7,6 +7,11 @@ import {
 } from "@/lib/saas/subscription-service";
 import type { SaasPlanSlug } from "@prisma/client";
 
+function companyPlanToSlug(plan: string | null | undefined): SaasPlanSlug {
+  if (plan === "pro" || plan === "enterprise") return plan;
+  return "trial";
+}
+
 export async function assertCanCreateObra(companyId: number) {
   const access = await assertSubscriptionAllowsAccess(companyId);
   if (!access.ok) {
@@ -19,8 +24,25 @@ export async function assertCanCreateObra(companyId: number) {
     };
   }
 
-  const sub = await prisma.subscription.findUnique({ where: { companyId } });
-  const maxObras = sub?.maxObras ?? PLAN_LIMITS.trial.maxObras;
+  let maxObras = PLAN_LIMITS.trial.maxObras;
+  try {
+    const sub = await prisma.subscription.findUnique({ where: { companyId } });
+    if (sub) {
+      maxObras = sub.maxObras;
+    } else {
+      const company = await prisma.company.findUnique({
+        where: { id: companyId },
+        select: { plan: true },
+      });
+      maxObras = PLAN_LIMITS[companyPlanToSlug(company?.plan)].maxObras;
+    }
+  } catch {
+    const company = await prisma.company.findUnique({
+      where: { id: companyId },
+      select: { plan: true },
+    });
+    maxObras = PLAN_LIMITS[companyPlanToSlug(company?.plan)].maxObras;
+  }
   if (maxObras >= 999) return { ok: true as const };
 
   const count = await countCompanyObras(companyId);

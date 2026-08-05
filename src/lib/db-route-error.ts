@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   isPgUndefinedColumnError,
   isPostgisFunctionMissingError,
+  isPrismaMissingTableError,
 } from "@/lib/pg-error-utils";
 
 function isPrismaClientValidationError(cause: unknown): boolean {
@@ -57,6 +58,20 @@ export function nextResponseDbFailure(cause: unknown) {
         hint: "Na máquina local e na CI antes do deploy: `npx prisma generate`. Confirme que o painel da Vercel usa o mesmo commit que inclui `schema.prisma`. Algumas atualizações (AOI JSON, tipo de monitorização) usam `$executeRaw` para funcionar com clientes mais antigos; se o erro citar outro campo, sincronize o schema com `migrate deploy` e gere de novo o client.",
       },
       { status: 400 },
+    );
+  }
+
+  if (isPrismaMissingTableError(cause, "Subscription")) {
+    const msg = cause instanceof Error ? cause.message : String(cause);
+    return NextResponse.json(
+      {
+        error:
+          "Tabela Subscription em falta — não é possível validar limites de obras.",
+        detail: msg.slice(0, 2000),
+        fixSqlFile: "scripts/sql/neon-subscription-table.sql",
+        hint: "Neon → SQL Editor → executar fixSqlFile. Depois `npx tsx scripts/backfill-subscriptions.ts`. Confirme DATABASE_URL na Vercel (Production, Preview, Build).",
+      },
+      { status: 503 },
     );
   }
 
@@ -116,7 +131,7 @@ export function nextResponseDbFailure(cause: unknown) {
       " O Prisma está a ligar a «x:5432» — remova `DATABASE_URL=postgresql://x` das variáveis de ambiente do Windows (Painel de controlo → Sistema → Variáveis de ambiente) ou use `STORAGE_POSTGRES_URL` na Vercel. Reinicie `npm run dev` após corrigir `.env.local`.";
   } else {
     fixHint =
-      " Ver erros 42703/42883: `scripts/sql/neon-obra-insar-columns.sql` na Neon. Vercel: `DATABASE_URL` em Production, Preview e Build.";
+      " Ver scripts/sql/neon-subscription-table.sql e scripts/sql/neon-obra-insar-columns.sql na Neon. Vercel: DATABASE_URL em Production, Preview e Build.";
   }
 
   return NextResponse.json(

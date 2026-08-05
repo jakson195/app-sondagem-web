@@ -10,18 +10,18 @@ export function SitePlatformSection() {
         <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
           <div>
             <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-              Motor científico + dashboard
+              Campo + escritório num só lugar
             </h2>
             <p className="mt-4 leading-relaxed text-[var(--dg-muted)]">
-              Inversão 2D com Poisson FDM/FEM no motor Python (porta 8092), API
-              autenticada e secções ERT guardadas por obra no PostgreSQL.
+              Sondagem SPT, mapas, relatórios PDF e portal do cliente — com dados
+              guardados por obra na cloud.
             </p>
             <ul className="mt-8 space-y-3 text-sm">
               {[
-                "API: POST /api/geophysics/inversion",
-                "Multi-empresa com assinatura e limites",
+                "Registo de furos e ensaios SPT em campo",
+                "Contas isoladas por utilizador",
                 "Relatórios PDF e portal do cliente",
-                "Deploy Vercel + motor desacoplado",
+                "Deploy cloud e acesso por browser",
               ].map((item) => (
                 <li key={item} className="flex gap-3">
                   <span className="mt-0.5 text-[var(--dg-cyan)]">✓</span>

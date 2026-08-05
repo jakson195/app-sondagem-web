@@ -32,7 +32,7 @@ export default function FuncionalidadesPage() {
             href="/cadastro?plan=trial"
             className="inline-flex rounded-full bg-[var(--dg-cyan)] px-8 py-3 text-sm font-semibold text-[var(--dg-black)] hover:bg-[var(--dg-blue)]"
           >
-            Começar trial grátis
+            Começar trial grátis (90 dias)
           </Link>
         </div>
       </section>

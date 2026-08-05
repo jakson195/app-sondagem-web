@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { CAMPO_TIPO, isCampoTipo, type CampoTipo } from "@/lib/campo-sondagem-tipo";
+import { requireObraAccessFromRequest } from "@/lib/obra-access";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -36,10 +37,16 @@ export async function POST(req: Request) {
     );
   }
 
-  const obra = await prisma.obra.findUnique({ where: { id: obraId } });
+  const obra = await prisma.obra.findUnique({
+    where: { id: obraId },
+    select: { companyId: true, createdByUserId: true },
+  });
   if (!obra) {
     return NextResponse.json({ error: "Obra não encontrada" }, { status: 404 });
   }
+
+  const access = await requireObraAccessFromRequest(req, obra, { write: true });
+  if (!access.ok) return access.response;
 
   try {
     const furo = await prisma.furo.create({
@@ -85,6 +92,9 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Furo não encontrado" }, { status: 404 });
     }
 
+    const access = await requireObraAccessFromRequest(req, furo.obra);
+    if (!access.ok) return access.response;
+
     return NextResponse.json(furo);
   }
 
@@ -97,6 +107,17 @@ export async function GET(req: Request) {
       { status: 400 },
     );
   }
+
+  const obra = await prisma.obra.findUnique({
+    where: { id: obraId },
+    select: { companyId: true, createdByUserId: true },
+  });
+  if (!obra) {
+    return NextResponse.json({ error: "Obra não encontrada" }, { status: 404 });
+  }
+
+  const access = await requireObraAccessFromRequest(req, obra);
+  if (!access.ok) return access.response;
 
   const tipoQ =
     searchParams.get("tipo") ?? searchParams.get("tipoCampo");

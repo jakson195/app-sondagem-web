@@ -21,15 +21,6 @@ const sectors: Sector[] = [
     pattern: "radial-gradient(circle at 80% 20%, rgba(0,194,168,0.35), transparent 50%)",
   },
   {
-    id: "geofisica",
-    title: "Geofísica",
-    headline: "Inversão física, não só desenho",
-    body: "ERT dipolo-dipolo com motor FDM/FEM, QC de linha e volume 3D. Integração directa com o motor Python.",
-    tags: ["ERT", "Python"],
-    gradient: "from-[#0a1830] via-slate-900 to-[var(--dg-black)]",
-    pattern: "radial-gradient(circle at 30% 30%, rgba(59,158,255,0.4), transparent 55%)",
-  },
-  {
     id: "obras",
     title: "Obras & infraestrutura",
     headline: "Multi-obra, multi-cliente",
@@ -71,12 +62,12 @@ export function SiteIndustries() {
             </h2>
           </div>
           <p className="max-w-sm text-sm leading-relaxed text-[var(--dg-muted)]">
-            Consultorias de geotecnia, geofísica e engenharia que precisam de campo,
-            processamento e entrega num só fluxo.
+            Consultorias de geotecnia, mineração e engenharia que precisam de campo,
+            relatórios e entrega num só fluxo.
           </p>
         </div>
 
-        <div className="mt-10 grid gap-5 sm:grid-cols-2">
+        <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {sectors.map((sector) => (
             <article
               key={sector.id}
@@ -114,7 +105,7 @@ export function SiteIndustries() {
             href="/cadastro?plan=trial"
             className="rounded-full bg-[var(--dg-cyan)] px-8 py-3 text-sm font-semibold text-[var(--dg-black)] transition hover:bg-[var(--dg-blue)]"
           >
-            Trial grátis 14 dias
+            Trial grátis 90 dias
           </Link>
           <Link
             href="/funcionalidades"

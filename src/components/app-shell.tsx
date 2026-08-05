@@ -10,11 +10,25 @@ import { useObraModulos } from "@/components/obra-context";
 import { AppSidebarNav } from "@/components/sidebar/app-sidebar-nav";
 import { CompanySwitcher } from "@/components/saas/company-switcher";
 import { useModuleNav } from "@/hooks/use-module-nav";
+import { isPlatformAdminNavHref } from "@/lib/platform-admin-nav";
+
+/** Rotas ocultas no menu (módulos permanecem acessíveis por URL directa). */
+const hiddenNavPathPrefixes = [
+  "/geofisica",
+  "/hidrologia/chuvas-sc",
+  "/hidrologia/chuvas-br",
+] as const;
+
+function isHiddenNavHref(href: string): boolean {
+  const path = href.split("?")[0] ?? href;
+  return hiddenNavPathPrefixes.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+  );
+}
 
 const coreNav = [
   { href: "/dashboard", label: "📊 Painel" },
-  { href: "/hidrologia/chuvas-sc", label: "🌧️ Chuvas SC (HidroChu)" },
-  { href: "/hidrologia/chuvas-br", label: "🇧🇷 HidroBrasil (ANA + IA)" },
+  { href: "/cad", label: "📐 Ambiente CAD" },
   { href: "/hidrologia/hidrogeo-brasil", label: "🗺️ HidroGeo Brasil (CPRM + ANM)" },
   { href: "/mineracao/leilao-anm", label: "⛏️ ANM · Leilão SOPLE" },
   { href: "/obras", label: "📁 Obras · mapas" },
@@ -88,11 +102,13 @@ function GlobalQuickActions({
   setObraContext,
   pathname,
   search,
+  isPlatformAdmin,
 }: {
   selectedObraId: number | null;
   setObraContext: (id: number | null) => void;
   pathname: string;
   search: string;
+  isPlatformAdmin: boolean;
 }) {
   const [obras, setObras] = useState<Array<{ id: number; nome: string }>>([]);
   const [loadingObras, setLoadingObras] = useState(false);
@@ -188,12 +204,14 @@ function GlobalQuickActions({
           </span>
         )}
       </label>
-      <Link
-        href={empresaHref}
-        className="dg-btn-outline"
-      >
-        Cadastrar empresa
-      </Link>
+      {isPlatformAdmin && (
+        <Link
+          href={empresaHref}
+          className="dg-btn-outline"
+        >
+          Cadastrar empresa
+        </Link>
+      )}
       <Link href={obraHref} className="dg-btn-primary">
         Criar obra
       </Link>
@@ -217,7 +235,13 @@ function GlobalQuickActions({
   );
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  isPlatformAdmin = false,
+}: {
+  children: React.ReactNode;
+  isPlatformAdmin?: boolean;
+}) {
   const pathname = usePathname() ?? "";
   const searchParams = useSearchParams();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -251,8 +275,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         href: hrefWithObra(x.href, selectedObraId),
         label: x.label,
       })),
-    ];
-  }, [moduleNav, selectedObraId]);
+    ].filter(
+      (item) =>
+        !isHiddenNavHref(item.href) &&
+        (isPlatformAdmin || !isPlatformAdminNavHref(item.href)),
+    );
+  }, [moduleNav, selectedObraId, isPlatformAdmin]);
 
   return (
     <div className="dg-mesh-bg flex min-h-screen bg-[var(--surface)]">
@@ -261,7 +289,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="mb-6">
           <BrandLogo href="/dashboard" height={36} />
         </div>
-        <CompanySwitcher />
+        <CompanySwitcher isPlatformAdmin={isPlatformAdmin} />
         <AppSidebarNav pathname={pathname} flatItems={flatNavItems} />
         {selectedObraId != null && (
           <ObraContextCard
@@ -299,7 +327,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <X className="h-5 w-5" />
           </button>
         </div>
-        <CompanySwitcher />
+        <CompanySwitcher isPlatformAdmin={isPlatformAdmin} />
         <AppSidebarNav
           pathname={pathname}
           flatItems={flatNavItems}
@@ -338,6 +366,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             setObraContext={setObraContext}
             pathname={pathname}
             search={searchParams?.toString() ?? ""}
+            isPlatformAdmin={isPlatformAdmin}
           />
           {children}
         </main>

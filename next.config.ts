@@ -16,49 +16,76 @@ const nextConfig: NextConfig = {
   turbopack: {},
   serverExternalPackages: ["leaflet", "@prisma/client", "cesium", "pg"],
   async rewrites() {
-const hidrogeoVite =
-  process.env.HIDROGEO_VITE_URL?.replace(/\/$/, "") || "http://localhost:5175";
+    const hidrogeoVite = process.env.HIDROGEO_VITE_URL?.replace(/\/$/, "");
+    const hidrogeoApi =
+      process.env.HIDROGEO_API_URL?.replace(/\/$/, "") || "http://127.0.0.1:8010";
+    const tilesUrl =
+      process.env.HIDROGEO_TILESERV_URL?.replace(/\/$/, "") || "http://localhost:7800";
+
+    /** Vite dev (:5175) só quando HIDROGEO_VITE_URL está definido; caso contrário usa public/hidrogeo-viewer */
+    const viewerRewrites = hidrogeoVite
+      ? [
+          {
+            source: "/anm-leilao-viewer",
+            destination: `${hidrogeoVite}/anm-leilao-viewer/`,
+          },
+          {
+            source: "/anm-leilao-viewer/",
+            destination: `${hidrogeoVite}/anm-leilao-viewer/`,
+          },
+          {
+            source: "/anm-leilao-viewer/:path*",
+            destination: `${hidrogeoVite}/anm-leilao-viewer/:path*`,
+          },
+          {
+            source: "/hidrogeo-viewer",
+            destination: `${hidrogeoVite}/hidrogeo-viewer/`,
+          },
+          {
+            source: "/hidrogeo-viewer/",
+            destination: `${hidrogeoVite}/hidrogeo-viewer/`,
+          },
+          {
+            source: "/hidrogeo-viewer/:path*",
+            destination: `${hidrogeoVite}/hidrogeo-viewer/:path*`,
+          },
+        ]
+      : [
+          {
+            source: "/hidrogeo-viewer",
+            destination: "/hidrogeo-viewer/index.html",
+          },
+          {
+            source: "/hidrogeo-viewer/",
+            destination: "/hidrogeo-viewer/index.html",
+          },
+          {
+            source: "/anm-leilao-viewer",
+            destination: "/hidrogeo-viewer/index.html",
+          },
+          {
+            source: "/anm-leilao-viewer/",
+            destination: "/hidrogeo-viewer/index.html",
+          },
+        ];
 
     const hidrogeoRewrites = [
-      {
-        source: "/anm-leilao-viewer",
-        destination: `${hidrogeoVite}/anm-leilao-viewer/`,
-      },
-      {
-        source: "/anm-leilao-viewer/",
-        destination: `${hidrogeoVite}/anm-leilao-viewer/`,
-      },
-      {
-        source: "/anm-leilao-viewer/:path*",
-        destination: `${hidrogeoVite}/anm-leilao-viewer/:path*`,
-      },
+      ...viewerRewrites,
       {
         source: "/api/anm-leilao/v1/:path*",
-        destination: "http://127.0.0.1:8010/api/v1/:path*",
+        destination: `${hidrogeoApi}/api/v1/:path*`,
       },
       {
         source: "/tiles/anm-leilao/:path*",
-        destination: "http://localhost:7800/:path*",
-      },
-      {
-        source: "/hidrogeo-viewer",
-        destination: `${hidrogeoVite}/hidrogeo-viewer/`,
-      },
-      {
-        source: "/hidrogeo-viewer/",
-        destination: `${hidrogeoVite}/hidrogeo-viewer/`,
-      },
-      {
-        source: "/hidrogeo-viewer/:path*",
-        destination: `${hidrogeoVite}/hidrogeo-viewer/:path*`,
+        destination: `${tilesUrl}/:path*`,
       },
       {
         source: "/api/hidrogeo/v1/:path*",
-        destination: "http://127.0.0.1:8010/api/v1/:path*",
+        destination: `${hidrogeoApi}/api/v1/:path*`,
       },
       {
         source: "/tiles/hidrogeo/:path*",
-        destination: "http://localhost:7800/:path*",
+        destination: `${tilesUrl}/:path*`,
       },
     ];
 

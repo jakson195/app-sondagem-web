@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
-import { createClientSignupAccount } from "@/lib/auth-user-sync";
+import { createClientSignupAccount, createJwtSignupAccount } from "@/lib/auth-user-sync";
 import { clientIpFromRequest, checkRateLimit } from "@/lib/auth/rate-limit";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
-  isSupabaseAuthConfigured,
-  missingSupabaseAuthEnv,
-  supabaseAuthSetupMessage,
-} from "@/lib/supabase";
+  applyActiveCompanyCookie,
+} from "@/lib/auth/active-company";
+import { authCookieName, authCookieOptions, signAuthToken } from "@/lib/server-auth";
+import { provisionSubscriptionForCompany } from "@/lib/saas/subscription-service";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { isSupabaseAuthConfigured } from "@/lib/supabase";
 import { createSupabaseRouteHandlerClient } from "@/lib/supabase/route-handler";
 
 export const dynamic = "force-dynamic";
@@ -58,13 +59,42 @@ export async function POST(req: Request) {
   };
 
   if (!isSupabaseAuthConfigured()) {
-    return NextResponse.json(
-      {
-        error: supabaseAuthSetupMessage(),
-        missing: missingSupabaseAuthEnv(),
-      },
-      { status: 503 },
-    );
+    try {
+      const { localUser, company } = await createJwtSignupAccount({
+        name,
+        email,
+        password,
+        companyName,
+        plan,
+        cnpj: common.cnpj,
+        phone: common.phone,
+        companyEmail: common.companyEmail,
+        address: common.address,
+      });
+      await provisionSubscriptionForCompany(company.id, "trial");
+
+      const token = signAuthToken({
+        userId: localUser.id,
+        systemRole: localUser.systemRole,
+      });
+      const response = NextResponse.json({
+        ok: true,
+        authProvider: "local-jwt",
+        company: { id: company.id, slug: company.slug, name: company.name, plan: company.plan },
+        user: { id: localUser.id, email: localUser.email, name: localUser.name },
+        checkoutRequired: false,
+      });
+      response.cookies.set(authCookieName(), token, authCookieOptions());
+      applyActiveCompanyCookie(response, company.id);
+      return response;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Falha ao criar cliente.";
+      const status = msg === "EMAIL_IN_USE" ? 409 : 400;
+      return NextResponse.json(
+        { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
+        { status },
+      );
+    }
   }
 
   const admin = createSupabaseAdminClient();
@@ -91,6 +121,8 @@ export async function POST(req: Request) {
       email: common.companyEmail,
     });
 
+    await provisionSubscriptionForCompany(company.id, "trial");
+
     const { supabase, applyCookies } = await createSupabaseRouteHandlerClient();
     const signIn = await supabase.auth.signInWithPassword({ email, password });
     if (signIn.error) {
@@ -107,6 +139,7 @@ export async function POST(req: Request) {
       user: { id: localUser.id, email: localUser.email, name: localUser.name },
       checkoutRequired: plan === "pro",
     });
+    applyActiveCompanyCookie(response, company.id);
     return applyCookies(response);
   } catch (e) {
     if (createdAuthUserId) {

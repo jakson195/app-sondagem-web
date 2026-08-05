@@ -4,7 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 
 type CompanyRow = { id: number; name: string; slug: string };
 
-export function CompanySwitcher() {
+export function CompanySwitcher({
+  isPlatformAdmin = false,
+}: {
+  isPlatformAdmin?: boolean;
+}) {
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -36,7 +40,7 @@ export function CompanySwitcher() {
     void load();
   }, [load]);
 
-  if (loading || companies.length <= 1) return null;
+  if (!isPlatformAdmin || loading || companies.length <= 1) return null;
 
   async function onChange(companyId: number) {
     const res = await fetch("/api/auth/active-company", {

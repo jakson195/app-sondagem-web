@@ -1,44 +1,19 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { getHidroGeoDirectUrl, getHidroGeoViewerUrl } from "@/lib/hidrogeo-url";
+import { checkHidroGeoApiHealth, HIDROGEO_START_HINT } from "@/lib/hidrogeo-health";
+import { useHidroGeoIframeReady } from "@/hooks/use-hidrogeo-iframe-ready";
 
 export function HidroGeoBrasilClient() {
   const viewerUrl = getHidroGeoViewerUrl();
   const directUrl = getHidroGeoDirectUrl();
-  const [status, setStatus] = useState<"checking" | "loading" | "ready" | "failed">("checking");
+  const { status, slowHint, onIframeLoad } = useHidroGeoIframeReady(viewerUrl);
+  const [apiOk, setApiOk] = useState<boolean | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    setStatus("checking");
-
-    void (async () => {
-      try {
-        const res = await fetch(viewerUrl, { method: "GET", cache: "no-store" });
-        if (cancelled) return;
-        if (!res.ok) {
-          setStatus("failed");
-          return;
-        }
-        const html = await res.text();
-        if (!html.includes('id="root"')) {
-          setStatus("failed");
-          return;
-        }
-        setStatus("loading");
-      } catch {
-        if (!cancelled) setStatus("failed");
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [viewerUrl]);
-
-  const onIframeLoad = useCallback(() => {
-    setStatus("ready");
+    void checkHidroGeoApiHealth().then(setApiOk);
   }, []);
 
   return (
@@ -88,17 +63,14 @@ export function HidroGeoBrasilClient() {
 
       {status === "failed" ? (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-5 text-sm text-[var(--text)]">
-          <p className="font-medium">Servidor HidroGeo offline</p>
+          <p className="font-medium">Mapa HidroGeo indisponível</p>
           <p className="mt-2 text-[var(--muted)]">
-            Inicie o Vite na porta <strong>5175</strong> e reinicie o DataGeo se alterou o{" "}
-            <code className="rounded bg-black/10 px-1 text-xs dark:bg-white/10">next.config.ts</code>:
+            O viewer não carregou. Reinicie o DataGeo (
+            <code className="rounded bg-black/10 px-1 text-xs dark:bg-white/10">npm run dev</code>
+            ) — o build estático é sincronizado automaticamente.
           </p>
           <pre className="mt-3 overflow-x-auto rounded-lg bg-black/20 p-3 text-xs text-slate-200">
-            {`cd hidrogeo-brasil/frontend
-npm run dev
-
-cd app-web
-npm run dev`}
+            {HIDROGEO_START_HINT}
           </pre>
           <a
             href={directUrl}
@@ -111,12 +83,26 @@ npm run dev`}
           </a>
         </div>
       ) : (
-        <div className="relative overflow-hidden rounded-xl border border-[var(--border)] shadow-sm">
-          {(status === "checking" || status === "loading") && (
+        <>
+          {apiOk === false && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-[var(--text)]">
+              <p className="font-medium">API HidroGeo offline — mapa base pode abrir sem camadas ANA/CPRM.</p>
+              <pre className="mt-2 overflow-x-auto rounded-lg bg-black/15 p-3 text-xs text-slate-300">
+                {HIDROGEO_START_HINT}
+              </pre>
+            </div>
+          )}
+        <div className="relative min-h-[min(82vh,920px)] overflow-hidden rounded-xl border border-[var(--border)] bg-slate-950 shadow-sm">
+          {status !== "ready" && (
             <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-slate-950/90 text-sm text-slate-300">
               <span>
                 {status === "checking" ? "A verificar HidroGeo…" : "A carregar mapa…"}
               </span>
+              {slowHint && (
+                <span className="max-w-md px-4 text-center text-xs text-amber-300">
+                  Mapa lento — confirme PostGIS (:5434), tiles (:7800) e API (:8010), depois Ctrl+F5.
+                </span>
+              )}
               <a
                 href={directUrl}
                 target="_blank"
@@ -127,17 +113,16 @@ npm run dev`}
               </a>
             </div>
           )}
-          {(status === "loading" || status === "ready") && (
-            <iframe
-              key={viewerUrl}
-              title="HidroGeo Brasil — mapa"
-              src={viewerUrl}
-              className="h-[min(82vh,920px)] w-full bg-slate-950"
-              allow="fullscreen; webgl"
-              onLoad={onIframeLoad}
-            />
-          )}
+          <iframe
+            key={viewerUrl}
+            title="HidroGeo Brasil — mapa"
+            src={viewerUrl}
+            className="h-[min(82vh,920px)] w-full border-0 bg-slate-950"
+            allow="fullscreen; webgl"
+            onLoad={onIframeLoad}
+          />
         </div>
+        </>
       )}
 
       <p className="text-center text-xs text-[var(--muted)]">

@@ -2,8 +2,8 @@
 export const BRAND = {
   name: "DataGeo Digital",
   nameShort: "DataGeo",
-  tagline: "Sondagens e geotecnia digital",
-  legalLine: "DataGeo Digital — Sondagens e geotecnia",
+  tagline: "Geotecnia e mineração digital",
+  legalLine: "DataGeo Digital — Geotecnia e mineração",
   footerContact: "www.datageodigital.com.br",
   packageName: "datageo-digital",
   storagePrefix: "datageo-digital",

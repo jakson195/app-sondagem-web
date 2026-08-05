@@ -1,4 +1,5 @@
 import { authCookieName, authCookieOptions } from "@/lib/server-auth";
+import { clearActiveCompanyCookie } from "@/lib/auth/active-company";
 import { isSupabaseAuthConfigured } from "@/lib/supabase";
 import { createSupabaseRouteHandlerClient } from "@/lib/supabase/route-handler";
 import { NextResponse } from "next/server";
@@ -19,5 +20,6 @@ export async function POST() {
   }
   const res = NextResponse.json({ ok: true });
   res.cookies.set(authCookieName(), "", { ...authCookieOptions(), maxAge: 0 });
+  clearActiveCompanyCookie(res);
   return applyCookies(res);
 }

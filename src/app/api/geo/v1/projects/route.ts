@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
+import { scopeWhereObrasForUser } from "@/lib/obra-access";
 import { prisma } from "@/lib/prisma";
+import { getAuthUserFromRequest } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -13,9 +15,14 @@ const DEMO_ITEM = {
   properties: {},
 };
 
-async function prismaObraProjects(): Promise<typeof DEMO_ITEM[]> {
+async function prismaObraProjects(req: Request): Promise<typeof DEMO_ITEM[]> {
   try {
+    const user = await getAuthUserFromRequest(req);
+    if (!user) return [];
+
+    const where = await scopeWhereObrasForUser(user);
     const obras = await prisma.obra.findMany({
+      where,
       orderBy: { id: "desc" },
       take: 100,
       select: { id: true, nome: true, cliente: true, description: true },
@@ -38,10 +45,10 @@ async function prismaObraProjects(): Promise<typeof DEMO_ITEM[]> {
 }
 
 /** Lista projetos do gêmeo digital (obras na BD principal quando não há GEO_DATABASE_URL). */
-export async function GET() {
+export async function GET(req: Request) {
   const url = process.env.GEO_DATABASE_URL;
   if (!url) {
-    const obraItems = await prismaObraProjects();
+    const obraItems = await prismaObraProjects(req);
     if (obraItems.length > 0) {
       return NextResponse.json({ items: obraItems });
     }

@@ -1,8 +1,11 @@
 import { nextResponseDbFailure } from "@/lib/db-route-error";
+import { resolveObraListCompanyFilter } from "@/lib/auth/active-company";
 import {
   listAccessibleCompanyIdsForUser,
   requireCompanyAccessFromRequest,
 } from "@/lib/client-portal-auth";
+import { scopeWhereObrasForUser } from "@/lib/obra-access";
+import { isPlatformSuperAdmin } from "@/lib/platform-admin";
 import { serializeObraApi } from "@/lib/obra-api-serialize";
 import {
   defaultModulosProjetoTodosAtivos,
@@ -15,6 +18,7 @@ import { parseObraStatus } from "@/lib/obra-status";
 import { syncProjectModules } from "@/lib/project-modules-db";
 import { prisma } from "@/lib/prisma";
 import { assertCanCreateObra } from "@/lib/saas/enforce-limits";
+import { getOrProvisionSubscription } from "@/lib/saas/subscription-service";
 import { getAuthUserFromRequest } from "@/lib/server-auth";
 import type { ObraStatus, Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
@@ -29,27 +33,29 @@ export async function GET(req: Request) {
     }
 
     const { searchParams } = new URL(req.url);
-    const rawCompany =
-      searchParams.get("companyId") ?? searchParams.get("empresaId");
-    const companyId =
-      rawCompany === null || rawCompany === "" ? null : Number(rawCompany);
+    const companyId = await resolveObraListCompanyFilter(user, req);
 
     const statusFilter = parseObraStatus(searchParams.get("status"));
     const q = (searchParams.get("q") ?? "").trim();
 
     const parts: Prisma.ObraWhereInput[] = [];
     const accessibleIds = await listAccessibleCompanyIdsForUser(user);
+    const isAdmin = isPlatformSuperAdmin(user.systemRole);
 
-    if (companyId !== null && Number.isFinite(companyId)) {
-      if (!accessibleIds.includes(companyId) && user.systemRole === "USER") {
+    if (!isAdmin) {
+      parts.push(await scopeWhereObrasForUser(user));
+    }
+
+    if (companyId !== null) {
+      if (!isAdmin && !accessibleIds.includes(companyId)) {
         return NextResponse.json(
           { error: "Sem acesso a este cliente." },
           { status: 403 },
         );
       }
       parts.push({ companyId });
-    } else if (user.systemRole === "USER") {
-      parts.push({ companyId: { in: accessibleIds.length > 0 ? accessibleIds : [-1] } });
+    } else if (!isAdmin && accessibleIds.length === 0) {
+      parts.push({ companyId: -1 });
     }
     if (statusFilter) {
       parts.push({ status: statusFilter });
@@ -188,6 +194,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Empresa não encontrada" }, { status: 404 });
     }
 
+    await getOrProvisionSubscription(companyId);
+
     const limitCheck = await assertCanCreateObra(companyId);
     if (!limitCheck.ok) return limitCheck.response;
 
@@ -213,6 +221,9 @@ export async function POST(req: Request) {
           connect: {
             id: Number(companyId),
           },
+        },
+        createdByUser: {
+          connect: { id: access.user.id },
         },
       },
     });

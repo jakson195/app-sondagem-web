@@ -3,14 +3,14 @@ import { MarketingShell } from "@/components/marketing/marketing-shell";
 
 export const metadata: Metadata = {
   title: {
-    default: "DataGeo Digital — Geotecnia e geofísica em SaaS",
+    default: "DataGeo Digital — Geotecnia e mineração em SaaS",
     template: "%s · DataGeo Digital",
   },
   description:
-    "Plataforma SaaS para sondagem SPT, geofísica ERT, relatórios técnicos e portal do cliente. Trial grátis.",
+    "Plataforma SaaS para geotecnia e mineração — SPT, relatórios técnicos e portal do cliente. Trial grátis 90 dias.",
   openGraph: {
     title: "DataGeo Digital",
-    description: "Geotecnia e geofísica de campo — do registo ao relatório.",
+    description: "Geotecnia e mineração — do registo ao relatório.",
     locale: "pt_BR",
     type: "website",
   },

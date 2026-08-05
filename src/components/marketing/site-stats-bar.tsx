@@ -1,6 +1,6 @@
 const stats = [
-  { value: "14 dias", label: "Trial grátis" },
-  { value: "2D/3D", label: "Inversão ERT" },
+  { value: "90 dias", label: "Trial grátis" },
+  { value: "SPT", label: "Sondagem de campo" },
   { value: "Multi", label: "Empresa & obras" },
   { value: "PDF", label: "Relatórios Soilsul" },
 ];

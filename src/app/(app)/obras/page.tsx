@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Building2, Filter, FolderKanban, PanelLeft, Search } from "lucide-react";
 import { apiUrl } from "@/lib/api-url";
+import { isPlatformSuperAdmin } from "@/lib/platform-admin";
 import { useObraModulos } from "@/components/obra-context";
 import { OBRA_STATUS_LABEL, OBRA_STATUS_ORDER } from "@/lib/obra-status";
 import type { ObraStatus } from "@prisma/client";
@@ -37,6 +38,9 @@ export default function ObrasPage() {
   const [q, setQ] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [activeCompanyId, setActiveCompanyId] = useState<number | null>(null);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [filterReady, setFilterReady] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setQ(qInput), 380);
@@ -45,13 +49,29 @@ export default function ObrasPage() {
 
   const carregarEmpresas = useCallback(async () => {
     try {
-      const r = await fetch(apiUrl("/api/empresas"));
-      const data = await r.json();
-      if (r.ok && Array.isArray(data)) {
+      const [empresasRes, meRes] = await Promise.all([
+        fetch(apiUrl("/api/empresas"), { credentials: "include" }),
+        fetch(apiUrl("/api/auth/me"), { credentials: "include" }),
+      ]);
+      const data = await empresasRes.json();
+      const meJson = (await meRes.json().catch(() => ({}))) as {
+        activeCompany?: { companyId: number; companyName?: string } | null;
+        user?: { systemRole?: string };
+      };
+      if (meRes.ok && meJson.user?.systemRole) {
+        setIsPlatformAdmin(isPlatformSuperAdmin(meJson.user.systemRole as "USER"));
+      }
+      if (empresasRes.ok && Array.isArray(data)) {
         setEmpresas(data as EmpresaOpt[]);
       }
+      const activeId = meJson.activeCompany?.companyId ?? null;
+      setActiveCompanyId(activeId);
+      if (activeId) {
+        setCompanyFilter(String(activeId));
+      }
+      setFilterReady(true);
     } catch {
-      /* ignore */
+      setFilterReady(true);
     }
   }, []);
 
@@ -61,10 +81,16 @@ export default function ObrasPage() {
     try {
       const params = new URLSearchParams();
       if (q.trim()) params.set("q", q.trim());
-      if (companyFilter) params.set("companyId", companyFilter);
+      if (companyFilter) {
+        params.set("companyId", companyFilter);
+      } else if (isPlatformAdmin) {
+        params.set("all", "1");
+      }
       if (statusFilter) params.set("status", statusFilter);
       const qs = params.toString();
-      const r = await fetch(apiUrl(`/api/obra${qs ? `?${qs}` : ""}`));
+      const r = await fetch(apiUrl(`/api/obra${qs ? `?${qs}` : ""}`), {
+        credentials: "include",
+      });
       const data = await r.json();
       if (!r.ok) {
         setErro(
@@ -82,15 +108,16 @@ export default function ObrasPage() {
     } finally {
       setLoading(false);
     }
-  }, [q, companyFilter, statusFilter]);
+  }, [q, companyFilter, statusFilter, isPlatformAdmin]);
 
   useEffect(() => {
     void carregarEmpresas();
   }, [carregarEmpresas]);
 
   useEffect(() => {
+    if (!filterReady) return;
     void carregarObras();
-  }, [carregarObras]);
+  }, [carregarObras, filterReady]);
 
   async function guardarNomeObra(id: number) {
     const nome = editingNome.trim();
@@ -105,6 +132,7 @@ export default function ObrasPage() {
     try {
       const r = await fetch(apiUrl(`/api/obra/${id}`), {
         method: "PATCH",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ nome }),
       });
@@ -134,13 +162,19 @@ export default function ObrasPage() {
     setErro(null);
     setMensagem(null);
     try {
-      const r = await fetch(apiUrl(`/api/obra/${o.id}`), { method: "DELETE" });
+      const r = await fetch(apiUrl(`/api/obra/${o.id}`), {
+        method: "DELETE",
+        credentials: "include",
+      });
       const data = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) {
         setErro(typeof data.error === "string" ? data.error : "Erro ao excluir obra");
         return;
       }
       setObras((prev) => prev.filter((obra) => obra.id !== o.id));
+      if (selectedObraId === o.id) {
+        setObraContext(null);
+      }
       if (editingId === o.id) {
         setEditingId(null);
         setEditingNome("");
@@ -156,7 +190,7 @@ export default function ObrasPage() {
   function limparFiltros() {
     setQInput("");
     setQ("");
-    setCompanyFilter("");
+    setCompanyFilter(activeCompanyId ? String(activeCompanyId) : "");
     setStatusFilter("");
   }
 
@@ -169,8 +203,9 @@ export default function ObrasPage() {
             Obras
           </h1>
           <p className="mt-1 max-w-xl text-sm text-[var(--muted)]">
-            Projetos de campo por <strong className="text-[var(--text)]">empresa</strong>.
-            Filtre por organização, estado ou texto.
+            {isPlatformAdmin
+              ? "Projetos de campo por empresa. Filtre por organização, estado ou texto."
+              : "Os seus projetos de campo. Filtre por estado ou texto."}
           </p>
         </div>
         <Link
@@ -202,6 +237,7 @@ export default function ObrasPage() {
               />
             </div>
           </div>
+          {isPlatformAdmin && (
           <div className="w-full sm:w-52">
             <label className="text-xs font-medium text-[var(--muted)]">Empresa</label>
             <select
@@ -209,7 +245,7 @@ export default function ObrasPage() {
               onChange={(e) => setCompanyFilter(e.target.value)}
               className="mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm"
             >
-              <option value="">Todas</option>
+              <option value="">Todas as empresas</option>
               {empresas.map((e) => (
                 <option key={e.id} value={e.id}>
                   {e.nome}
@@ -217,6 +253,7 @@ export default function ObrasPage() {
               ))}
             </select>
           </div>
+          )}
           <div className="w-full sm:w-44">
             <label className="text-xs font-medium text-[var(--muted)]">Estado</label>
             <select

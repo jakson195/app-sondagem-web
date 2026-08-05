@@ -1,19 +1,19 @@
 const faqs = [
   {
     q: "Preciso instalar algo no servidor?",
-    a: "A app web corre na Vercel ou no seu host Node.js. O motor geofísico Python é opcional em localhost:8092 ou num serviço separado (Fly.io / Railway).",
+    a: "A app web corre na cloud (Vercel ou o seu host Node.js). Basta browser e ligação à internet para campo e escritório.",
   },
   {
     q: "Quantas obras posso ter no trial?",
-    a: "O trial inclui até 2 obras e 14 dias. Planos Pro ampliam limites conforme assinatura.",
+    a: "O trial inclui até 2 obras e 90 dias grátis. Planos Pro ampliam limites conforme acordo comercial.",
   },
   {
     q: "Os dados ficam isolados por cliente?",
-    a: "Sim. Cada empresa (tenant) tem obras, utilizadores, módulos e portal próprios.",
+    a: "Sim. Cada conta tem as suas obras e dados separados dos restantes utilizadores.",
   },
   {
-    q: "A inversão geofísica é física ou só visual?",
-    a: "É inversão física (FDM/FEM) via motor Python — não é apenas desenho de pseudoseção.",
+    q: "Como funciona o relatório SPT?",
+    a: "Registo de campo, gráficos NSPT e exportação PDF alinhados ao fluxo técnico da consultoria.",
   },
 ];
 

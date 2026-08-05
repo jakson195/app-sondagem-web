@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { requireObraAccessFromRequest } from "@/lib/obra-access";
 import { geoJsonPolygonToWkt } from "@/lib/geojson-polygon-wkt";
 import { obraIdFromGeoProjectId } from "@/lib/geo-project-map";
 import {
@@ -39,7 +40,7 @@ function asFlatInsarJob(
   };
 }
 
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const { projectId } = await ctx.params;
   const obraId = obraIdFromGeoProjectId(projectId);
   if (obraId === null) {
@@ -48,11 +49,14 @@ export async function GET(_req: Request, ctx: Ctx) {
 
   const obra = await prisma.obra.findUnique({
     where: { id: obraId },
-    select: { id: true },
+    select: { id: true, companyId: true, createdByUserId: true },
   });
   if (!obra) {
     return NextResponse.json({ error: "Obra não encontrada" }, { status: 404 });
   }
+
+  const access = await requireObraAccessFromRequest(req, obra);
+  if (!access.ok) return access.response;
 
   const jobs = await prisma.insarPipelineJob.findMany({
     where: { obraId },
@@ -89,11 +93,14 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const obra = await prisma.obra.findUnique({
     where: { id: obraId },
-    select: { id: true },
+    select: { id: true, companyId: true, createdByUserId: true },
   });
   if (!obra) {
     return NextResponse.json({ error: "Obra não encontrada" }, { status: 404 });
   }
+
+  const access = await requireObraAccessFromRequest(req, obra, { write: true });
+  if (!access.ok) return access.response;
 
   const name =
     typeof body.name === "string" && body.name.trim()

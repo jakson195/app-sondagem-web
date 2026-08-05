@@ -13,7 +13,7 @@ export default function PlanosPage() {
         <div className="mx-auto max-w-6xl text-center">
           <h1 className="text-4xl font-bold tracking-tight">Planos</h1>
           <p className="mx-auto mt-4 max-w-xl text-[var(--dg-muted)]">
-            Trial, Pro e Enterprise — pagamento via Stripe na área de assinatura.
+            Trial 90 dias grátis. Planos Pro e Enterprise sob consulta.
           </p>
         </div>
       </section>

@@ -24,6 +24,12 @@ export default async function AdmLayout({
           </div>
           <nav className="flex flex-wrap gap-3 text-sm">
             <Link
+              href="/admin/users"
+              className="font-medium text-teal-700 hover:underline dark:text-teal-400"
+            >
+              Utilizadores
+            </Link>
+            <Link
               href="/admin/companies"
               className="font-medium text-teal-700 hover:underline dark:text-teal-400"
             >

@@ -11,7 +11,7 @@ export function PricingSection({ compact = false }: Props) {
       <div className="mx-auto max-w-6xl px-4 text-center sm:px-6">
         <h2 className="text-3xl font-bold sm:text-4xl">Planos flexíveis</h2>
         <p className="mx-auto mt-4 max-w-xl text-[var(--dg-muted)]">
-          Trial sem cartão, Pro para equipas em crescimento, Enterprise sob medida.
+          Trial 90 dias sem cartão. Valores Pro e Enterprise mediante contacto comercial.
         </p>
 
         <div className={`mt-12 grid gap-6 ${compact ? "md:grid-cols-3" : "lg:grid-cols-3"}`}>

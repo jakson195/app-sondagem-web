@@ -15,13 +15,6 @@ function resolveAnmLeilaoViewerBase(): string {
     const base = fromEnv.replace(/\/$/, "");
     if (!LEGACY_WRONG_PORT.test(base)) return base;
   }
-  if (process.env.NODE_ENV === "development") {
-    const vite =
-      process.env.NEXT_PUBLIC_ANM_LEILAO_VITE_URL?.trim()?.replace(/\/$/, "") ||
-      process.env.NEXT_PUBLIC_HIDROGEO_VITE_URL?.trim()?.replace(/\/$/, "") ||
-      "http://localhost:5175";
-    return `${vite}/anm-leilao-viewer`;
-  }
   return "/anm-leilao-viewer";
 }
 

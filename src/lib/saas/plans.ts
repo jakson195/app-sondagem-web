@@ -1,5 +1,5 @@
 /**
- * Planos comerciais DataGeo Digital (Etapa 1 — UI; billing na Etapa 3).
+ * Planos comerciais DataGeo Digital (site — valores sob consulta).
  */
 
 export type SaasPlanId = "trial" | "pro" | "enterprise";
@@ -22,12 +22,12 @@ export const SAAS_PLANS: SaasPlan[] = [
     name: "Trial",
     description: "Experimente a plataforma com a sua equipa.",
     priceLabel: "Grátis",
-    priceDetail: "14 dias · 1 empresa · 2 obras",
+    priceDetail: "90 dias · 2 obras",
     cta: "Começar grátis",
     ctaHref: "/cadastro?plan=trial",
     features: [
       "SPT e relatórios básicos",
-      "1 obra ativa",
+      "2 obras",
       "Suporte por e-mail",
       "Sem cartão de crédito",
     ],
@@ -36,14 +36,14 @@ export const SAAS_PLANS: SaasPlan[] = [
     id: "pro",
     name: "Pro",
     description: "Para consultorias e equipas de campo em crescimento.",
-    priceLabel: "R$ 497",
-    priceDetail: "/ mês · faturamento mensal",
+    priceLabel: "Sob consulta",
+    priceDetail: "contacte-nos",
     highlighted: true,
-    cta: "Assinar Pro",
-    ctaHref: "/cadastro?plan=pro",
+    cta: "Falar com vendas",
+    ctaHref: "/contato?assunto=pro",
     features: [
-      "Geofísica 2D/3D + motor Python",
-      "Obras e equipas ilimitadas*",
+      "Todos os módulos de geotecnia",
+      "Mais obras e utilizadores",
       "Portal do cliente",
       "InSAR / GEO temporal (módulos)",
       "Prioridade no suporte",
@@ -60,7 +60,7 @@ export const SAAS_PLANS: SaasPlan[] = [
     features: [
       "Tudo do Pro",
       "SSO e API dedicada",
-      "Motor on-premise ou VPC",
+      "Implementação assistida",
       "Formação e implementação",
       "Gestor de conta dedicado",
     ],

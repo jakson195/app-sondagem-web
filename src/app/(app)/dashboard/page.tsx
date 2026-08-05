@@ -7,6 +7,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { listAccessibleCompanyIdsForUser } from "@/lib/client-portal-auth";
+import { scopeWhereObrasForUser, userOwnsObra } from "@/lib/obra-access";
 import { prisma } from "@/lib/prisma";
 import { OBRA_STATUS_LABEL, OBRA_STATUS_ORDER } from "@/lib/obra-status";
 import { getAuthUserFromCookies } from "@/lib/server-auth";
@@ -25,10 +26,8 @@ export default async function DashboardPage({
   const filtroObraRaw = q.obraId ?? q.projectId ?? "";
   const filtroObraId = Number(filtroObraRaw);
   const accessibleCompanyIds = await listAccessibleCompanyIdsForUser(user);
-  const companyScope =
-    user.systemRole === "USER"
-      ? { companyId: { in: accessibleCompanyIds.length > 0 ? accessibleCompanyIds : [-1] } }
-      : {};
+  const obraScope =
+    user.systemRole === "USER" ? await scopeWhereObrasForUser(user) : {};
 
   const [empresaCount, obraCount, companiesWithObras, statusRows, recent] =
     await Promise.all([
@@ -38,25 +37,25 @@ export default async function DashboardPage({
             ? { id: { in: accessibleCompanyIds.length > 0 ? accessibleCompanyIds : [-1] } }
             : undefined,
       }),
-      prisma.obra.count({ where: companyScope }),
+      prisma.obra.count({ where: obraScope }),
       prisma.company.count({
         where:
           user.systemRole === "USER"
             ? {
                 id: { in: accessibleCompanyIds.length > 0 ? accessibleCompanyIds : [-1] },
-                obras: { some: {} },
+                obras: { some: { createdByUserId: user.id } },
               }
             : { obras: { some: {} } },
       }),
       prisma.obra.groupBy({
         by: ["status"],
-        where: companyScope,
+        where: obraScope,
         _count: { _all: true },
       }),
       prisma.obra.findMany({
         take: 10,
         orderBy: { id: "desc" },
-        where: companyScope,
+        where: obraScope,
         include: {
           company: { select: { id: true, name: true } },
         },
@@ -76,7 +75,8 @@ export default async function DashboardPage({
   if (
     obraResumo &&
     user.systemRole === "USER" &&
-    !accessibleCompanyIds.includes(obraResumo.companyId)
+    (!accessibleCompanyIds.includes(obraResumo.companyId) ||
+      !userOwnsObra(user, obraResumo))
   ) {
     redirect("/dashboard");
   }
@@ -106,7 +106,9 @@ export default async function DashboardPage({
             Painel DataGeo Digital
           </h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Visão multiempresa: empresas contratantes e obras de campo.
+            {user.systemRole === "USER"
+              ? "Resumo das suas obras de campo."
+              : "Visão multiempresa: empresas contratantes e obras de campo."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -126,20 +128,22 @@ export default async function DashboardPage({
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-500/15 text-teal-600 dark:text-teal-400">
-              <Building2 className="h-5 w-5" strokeWidth={2} />
-            </span>
-            <div>
-              <p className="text-2xl font-semibold tabular-nums text-[var(--text)]">
-                {empresaCount}
-              </p>
-              <p className="text-sm text-[var(--muted)]">Empresas</p>
+      <div className={`grid gap-4 ${user.systemRole === "USER" ? "sm:grid-cols-1" : "sm:grid-cols-3"}`}>
+        {user.systemRole !== "USER" && (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-teal-500/15 text-teal-600 dark:text-teal-400">
+                <Building2 className="h-5 w-5" strokeWidth={2} />
+              </span>
+              <div>
+                <p className="text-2xl font-semibold tabular-nums text-[var(--text)]">
+                  {empresaCount}
+                </p>
+                <p className="text-sm text-[var(--muted)]">Empresas</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--accent-muted)] text-[var(--accent)]">
@@ -153,19 +157,21 @@ export default async function DashboardPage({
             </div>
           </div>
         </div>
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <MapPin className="h-5 w-5" strokeWidth={2} />
-            </span>
-            <div>
-              <p className="text-2xl font-semibold tabular-nums text-[var(--text)]">
-                {companiesWithObras}
-              </p>
-              <p className="text-sm text-[var(--muted)]">Empresas com obras</p>
+        {user.systemRole !== "USER" && (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                <MapPin className="h-5 w-5" strokeWidth={2} />
+              </span>
+              <div>
+                <p className="text-2xl font-semibold tabular-nums text-[var(--text)]">
+                  {companiesWithObras}
+                </p>
+                <p className="text-sm text-[var(--muted)]">Empresas com obras</p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">

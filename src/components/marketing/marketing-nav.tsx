@@ -44,7 +44,7 @@ export function MarketingNav() {
             Entrar
           </Link>
           <Link href="/cadastro?plan=trial" className="site-btn-primary px-4 py-2">
-            Trial grátis
+            Trial 90 dias
           </Link>
         </div>
 
@@ -81,7 +81,7 @@ export function MarketingNav() {
               className="site-btn-primary px-3 py-2 text-center text-sm"
               onClick={() => setOpen(false)}
             >
-              Trial grátis
+              Trial 90 dias
             </Link>
           </nav>
         </div>

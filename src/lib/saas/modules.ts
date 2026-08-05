@@ -6,8 +6,7 @@ import {
   Layers,
   Map,
   Mountain,
-  Radio,
-  Waves,
+  PenTool,
 } from "lucide-react";
 
 export type MarketingModule = {
@@ -28,18 +27,11 @@ export const MARKETING_MODULES: MarketingModule[] = [
     tag: "Geotecnia",
   },
   {
-    id: "geofisica",
-    title: "Geofísica ERT",
-    description:
-      "Dipolo-dipolo 2D, inversão FDM/FEM, QC de linha, volume 3D e interpretação com IA.",
-    icon: Radio,
-    tag: "Motor Python",
-  },
-  {
-    id: "ves",
-    title: "VES 1D",
-    description: "Curvas de sondagem elétrica vertical Wenner/Schlumberger e modelos em camadas.",
-    icon: Waves,
+    id: "cad",
+    title: "Ambiente CAD",
+    description: "Plantas, coordenadas, perfis e exportação técnica integrada ao projeto.",
+    icon: PenTool,
+    tag: "CAD",
   },
   {
     id: "geo",
@@ -65,14 +57,7 @@ export const MARKETING_MODULES: MarketingModule[] = [
     id: "hidrologia",
     title: "Hidrologia",
     description:
-      "Chuvas SC/BR, HidroGeo Brasil (mapa 3D ANA + CPRM) e apoio a estudos hidrológicos regionais.",
-    icon: BarChart3,
-  },
-  {
-    id: "geotecnia",
-    title: "Geotecnia",
-    description:
-      "SPT, sondagem, perfis estratigráficos e relatórios alinhados ao padrão de campo.",
+      "HidroGeo Brasil (mapa 3D ANA + CPRM) e apoio a estudos hidrológicos regionais.",
     icon: BarChart3,
   },
   {
@@ -89,15 +74,15 @@ export const MARKETING_BENEFITS = [
     body: "Cada cliente é uma empresa isolada: utilizadores, obras, módulos e portal próprios.",
   },
   {
-    title: "Motor científico real",
-    body: "Inversão 2D com Poisson FDM/FEM — não é só desenho de pseudoseção.",
+    title: "Geotecnia de ponta a ponta",
+    body: "Do registo SPT no campo ao relatório PDF e à entrega no portal do cliente.",
   },
   {
     title: "Campo + escritório",
-    body: "Do registo no furo ao relatório PDF e à entrega no portal do cliente.",
+    body: "Mapas, perfis e resumos técnicos ligados à mesma obra.",
   },
   {
     title: "Escala cloud",
-    body: "PostgreSQL, deploy Vercel e motor Python desacoplado para crescer com a sua operação.",
+    body: "PostgreSQL, deploy Vercel e acesso por browser em qualquer dispositivo.",
   },
 ] as const;

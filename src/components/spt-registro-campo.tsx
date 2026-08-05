@@ -12,8 +12,17 @@ import { SptRelatorioSoilsulPdf } from "@/components/spt-relatorio-soilsul-pdf";
 import { aguardarMapaPdfNoDom } from "@/lib/aguardar-mapa-pdf-dom";
 import { html2canvasReportOptions } from "@/lib/html2canvas-report-options";
 import { CoordenadasUtmFuroPanel } from "@/components/coordenadas-utm-furo-panel";
+import { CamadasGeologicasEditor } from "@/components/camadas-geologicas-editor";
 import { SoloNomenclaturaCampo } from "@/components/solo-nomenclatura-campo";
+import {
+  type CamadaGeol,
+  novaCamadaGeolNoFinal,
+} from "@/lib/camadas-geologicas";
 import { utmDeWgs84, wgs84DeUtm } from "@/lib/coordenadas-utm-campo";
+import {
+  buildSptDadosCampo,
+  normalizeSptDadosCampo,
+} from "@/lib/spt-dados-campo";
 import { corSoloSpt } from "@/lib/spt-solo-cor";
 import { wgsPairFromInputs } from "@/lib/spt-map-coords";
 import { LS_SPT_LOCAL_DRAFT, LS_SPT_NOME } from "@/lib/sondagem-nome-storage";
@@ -29,6 +38,7 @@ import {
   parProfundidadesSptParaClique,
   profDesdeMetroESuplemento,
   profParaMetroESuplemento,
+  formatarProfSptPt,
   round2ProfSpt,
   rowSpanGrupoAmostraSpt,
   somasGolpes30cm,
@@ -253,6 +263,7 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
   const [mapaRelLatStr, setMapaRelLatStr] = useState("");
   const [mapaRelLngStr, setMapaRelLngStr] = useState("");
   const [fotosRelatorio, setFotosRelatorio] = useState<string[]>([]);
+  const [camadasGeologicas, setCamadasGeologicas] = useState<CamadaGeol[]>([]);
   const [projetoSaving, setProjetoSaving] = useState(false);
   const [projetoMsg, setProjetoMsg] = useState<{
     type: "ok" | "err";
@@ -641,6 +652,84 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
     }
   }, [furoId]);
 
+  function buildDadosCampoSpt() {
+    return buildSptDadosCampo({
+      camadasGeologicas,
+      fotosRelatorio,
+      dataInicio,
+      dataFim,
+      paginaPdf,
+      totalPaginasPdf,
+      amostradorExt,
+      amostradorInt,
+      revestimentoMeta,
+      revestimentoComprimento,
+      trado,
+      alturaQueda,
+      pesoMartelo,
+      sistema,
+      cota,
+      nivelAgua,
+      naProfundidade,
+      sondador,
+      responsavel,
+      crea,
+      rodapeContato,
+      enderecoEmpresa,
+      mapaRelLatStr,
+      mapaRelLngStr,
+    });
+  }
+
+  function adicionarCamadaGeol() {
+    setCamadasGeologicas((prev) => {
+      const ultima = prev[prev.length - 1];
+      const deSugerido = ultima?.ate?.trim() ?? "";
+      const maxProf =
+        dados.length > 0
+          ? Math.max(...dados.map((l) => round2ProfSpt(l.prof)))
+          : 0;
+      const ateSugerido =
+        prev.length === 0 && maxProf > 0 ? formatarProfSptPt(maxProf) : "";
+      return novaCamadaGeolNoFinal(prev, { deSugerido, ateSugerido });
+    });
+  }
+
+  function aplicarDadosCampoSpt(raw: unknown) {
+    const dc = normalizeSptDadosCampo(raw);
+    if (!dc) return;
+    if (dc.camadasGeologicas && dc.camadasGeologicas.length > 0) {
+      setCamadasGeologicas(dc.camadasGeologicas);
+    }
+    if (dc.fotosRelatorio && dc.fotosRelatorio.length > 0) {
+      setFotosRelatorio(dc.fotosRelatorio);
+    }
+    if (dc.dataInicio) setDataInicio(dc.dataInicio);
+    if (dc.dataFim) setDataFim(dc.dataFim);
+    if (dc.paginaPdf != null) setPaginaPdf(dc.paginaPdf);
+    if (dc.totalPaginasPdf != null) setTotalPaginasPdf(dc.totalPaginasPdf);
+    if (dc.amostradorExt) setAmostradorExt(dc.amostradorExt);
+    if (dc.amostradorInt) setAmostradorInt(dc.amostradorInt);
+    if (dc.revestimentoMeta) setRevestimentoMeta(dc.revestimentoMeta);
+    if (dc.revestimentoComprimento) {
+      setRevestimentoComprimento(dc.revestimentoComprimento);
+    }
+    if (dc.trado) setTrado(dc.trado);
+    if (dc.alturaQueda) setAlturaQueda(dc.alturaQueda);
+    if (dc.pesoMartelo) setPesoMartelo(dc.pesoMartelo);
+    if (dc.sistema) setSistema(dc.sistema);
+    if (dc.cota) setCota(dc.cota);
+    if (dc.nivelAgua) setNivelAgua(dc.nivelAgua);
+    if (dc.naProfundidade) setNaProfundidade(dc.naProfundidade);
+    if (dc.sondador) setSondador(dc.sondador);
+    if (dc.responsavel) setResponsavel(dc.responsavel);
+    if (dc.crea) setCrea(dc.crea);
+    if (dc.rodapeContato) setRodapeContato(dc.rodapeContato);
+    if (dc.enderecoEmpresa) setEnderecoEmpresa(dc.enderecoEmpresa);
+    if (dc.mapaRelLatStr) setMapaRelLatStr(dc.mapaRelLatStr);
+    if (dc.mapaRelLngStr) setMapaRelLngStr(dc.mapaRelLngStr);
+  }
+
   const carregarMetaFuro = useCallback(async () => {
     if (furoId === undefined || !Number.isFinite(furoId)) return;
     try {
@@ -650,6 +739,7 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
         obraId?: number;
         latitude?: number | null;
         longitude?: number | null;
+        dadosCampo?: unknown;
         obra?: {
           cliente?: string;
           nome?: string;
@@ -661,6 +751,7 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
       };
       if (!r.ok || json.error || typeof json.codigo !== "string") return;
       setCodigoFuro(json.codigo);
+      aplicarDadosCampoSpt(json.dadosCampo);
       if (typeof json.obraId === "number" && Number.isFinite(json.obraId)) {
         setObraIdMapa(json.obraId);
       } else {
@@ -768,6 +859,7 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
       const j = JSON.parse(raw) as {
         codigoFuro?: string;
         dados?: Linha[];
+        dadosCampo?: unknown;
         coordN?: string;
         coordE?: string;
         fuso?: string;
@@ -777,6 +869,7 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
       rascunhoLocalCarregado.current = true;
       if (typeof j.codigoFuro === "string" && j.codigoFuro.trim())
         setCodigoFuro(j.codigoFuro);
+      aplicarDadosCampoSpt(j.dadosCampo);
       if (typeof j.coordN === "string") setCoordN(j.coordN);
       if (typeof j.coordE === "string") setCoordE(j.coordE);
       if (typeof j.fuso === "string" && j.fuso.trim()) setFuso(j.fuso);
@@ -822,7 +915,10 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
         const rNome = await fetch(apiUrl(`/api/furo/${furoId}`), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ codigo }),
+          body: JSON.stringify({
+            codigo,
+            dadosCampo: buildDadosCampoSpt(),
+          }),
         });
         const jNome = (await rNome.json().catch(() => ({}))) as {
           error?: string;
@@ -891,6 +987,7 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
         fuso,
         mapaRelLatStr,
         mapaRelLngStr,
+        dadosCampo: buildDadosCampoSpt(),
         dados: dados.map((l) => {
           const { id: _id, ...rest } = l;
           return rest;
@@ -1859,6 +1956,13 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
               wrapperClassName="sm:col-span-2"
             />
           </div>
+
+          <CamadasGeologicasEditor
+            camadas={camadasGeologicas}
+            onChange={setCamadasGeologicas}
+            onAdicionar={adicionarCamadaGeol}
+            descricao="Litologia da sondagem para o boletim. Cada «+ Camada» acrescenta uma linha no final da lista; use ✕ para apagar."
+          />
 
           <button
             type="button"

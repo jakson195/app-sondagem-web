@@ -150,6 +150,55 @@ export function authCookieName(): typeof AUTH_TOKEN_COOKIE {
   return AUTH_TOKEN_COOKIE;
 }
 
+export async function loginWithLocalPassword(email: string, password: string) {
+  const secret = getJwtSecret();
+  if (!secret) {
+    return { ok: false as const, error: "JWT_SECRET não definido no servidor." };
+  }
+
+  const normalized = email.trim().toLowerCase();
+  if (!normalized || !password) {
+    return { ok: false as const, error: "Email e senha são obrigatórios." };
+  }
+
+  const user = await prisma.user.findFirst({
+    where: { email: { equals: normalized, mode: "insensitive" } },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      systemRole: true,
+      password: true,
+    },
+  });
+
+  if (!user?.password) {
+    return { ok: false as const, error: "Credenciais inválidas." };
+  }
+
+  const bcrypt = await import("bcrypt");
+  const valid = await bcrypt.compare(password, user.password);
+  if (!valid) {
+    return { ok: false as const, error: "Credenciais inválidas." };
+  }
+
+  const token = signAuthToken({
+    userId: user.id,
+    systemRole: user.systemRole,
+  });
+
+  return {
+    ok: true as const,
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      systemRole: user.systemRole,
+    },
+  };
+}
+
 export function authCookieOptions(): {
   httpOnly: boolean;
   secure: boolean;

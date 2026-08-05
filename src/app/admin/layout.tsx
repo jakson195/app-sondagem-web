@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Building2, LayoutDashboard, ChevronRight } from "lucide-react";
+import { Building2, LayoutDashboard, ChevronRight, Users } from "lucide-react";
 import { isPlatformSuperAdmin } from "@/lib/platform-admin";
 import { getAuthUserFromCookies } from "@/lib/server-auth";
 
 const nav = [
   { href: "/admin/companies", label: "Empresas", icon: Building2 },
+  { href: "/admin/users", label: "Utilizadores", icon: Users },
   { href: "/adm", label: "Resumo da plataforma", icon: LayoutDashboard },
 ] as const;
 

@@ -22,7 +22,7 @@ export const metadata: Metadata = {
     template: "%s · DataGeo Digital",
   },
   description:
-    "Plataforma SaaS de geotecnia e geofísica — SPT, ERT, relatórios e portal do cliente.",
+    "Plataforma SaaS de geotecnia e mineração — SPT, relatórios e portal do cliente.",
 };
 
 export default function RootLayout({

@@ -3,7 +3,7 @@ import { HeroVideoBackground } from "./hero-video-background";
 
 const highlights = [
   { value: "SPT", label: "Sondagem & relatórios" },
-  { value: "ERT", label: "Geofísica 2D/3D" },
+  { value: "CAD", label: "Ambiente técnico" },
   { value: "SaaS", label: "Multi-empresa" },
   { value: "PDF", label: "Portal do cliente" },
 ];
@@ -20,11 +20,11 @@ export function HeroSection() {
           </p>
           <h1 className="mt-4 text-center text-3xl font-bold leading-tight tracking-tight sm:text-left sm:text-4xl lg:text-5xl">
             Plataforma SaaS para{" "}
-            <span className="text-gradient-brand">geotecnia e geofísica</span>
+            <span className="text-gradient-brand">geotecnia e mineração</span>
           </h1>
           <p className="mt-5 text-center text-base leading-relaxed text-dg-muted sm:text-left sm:text-lg">
-            SPT, inversão ERT com motor Python, mapas GEO, relatórios PDF e portal
-            white-label — do registo no furo à entrega ao cliente.
+            SPT, mapas GEO, relatórios PDF e portal white-label — do registo no furo
+            à entrega ao cliente.
           </p>
 
           <ul className="mt-8 grid grid-cols-2 gap-3 sm:gap-4">
@@ -41,7 +41,7 @@ export function HeroSection() {
 
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
             <Link href="/cadastro?plan=trial" className="site-btn-primary px-6 py-3.5 text-center">
-              Trial grátis 14 dias
+              Trial grátis 90 dias
             </Link>
             <Link href="/funcionalidades" className="site-btn-outline px-6 py-3.5 text-center">
               Ver módulos

@@ -1,11 +1,13 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
+import { useEffect, useState } from "react";
 import {
   getLeilaoANMDirectUrl,
   getLeilaoANMViewerUrl,
   getLeilaoANMViteDirectUrl,
 } from "@/lib/anm-leilao-url";
+import { checkAnmLeilaoApiHealth, HIDROGEO_START_HINT } from "@/lib/hidrogeo-health";
 import { useAnmLeilaoIframeReady } from "@/hooks/use-anm-leilao-iframe-ready";
 
 export function LeilaoANMClient() {
@@ -13,6 +15,11 @@ export function LeilaoANMClient() {
   const directUrl = getLeilaoANMDirectUrl();
   const viteDirectUrl = getLeilaoANMViteDirectUrl();
   const { status, slowHint, onIframeLoad } = useAnmLeilaoIframeReady(viewerUrl);
+  const [apiOk, setApiOk] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    void checkAnmLeilaoApiHealth().then(setApiOk);
+  }, []);
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-4">
@@ -43,14 +50,24 @@ export function LeilaoANMClient() {
 
       {status === "failed" ? (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-5 text-sm">
-          <p className="font-medium">Servidor ANM Leilão offline</p>
+          <p className="font-medium">Viewer ANM Leilão indisponível</p>
+          <p className="mt-2 text-[var(--muted)]">
+            Reinicie o DataGeo — o mapa ANM usa o mesmo bundle estático do HidroGeo.
+          </p>
           <pre className="mt-3 overflow-x-auto rounded-lg bg-black/20 p-3 text-xs text-slate-200">
-            {`cd hidrogeo-brasil/frontend && npm run dev
-cd hidrogeo-brasil/backend && uvicorn app.main:app --reload --port 8010
-cd app-web && npm run dev`}
+            {HIDROGEO_START_HINT}
           </pre>
         </div>
       ) : (
+        <>
+          {apiOk === false && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
+              <p className="font-medium">API ANM offline — camadas SIGMINE/leilão indisponíveis.</p>
+              <pre className="mt-2 overflow-x-auto rounded-lg bg-black/15 p-3 text-xs text-slate-300">
+                {HIDROGEO_START_HINT}
+              </pre>
+            </div>
+          )}
         <div className="relative min-h-[min(82vh,920px)] overflow-hidden rounded-xl border border-[var(--border)] bg-slate-950 shadow-sm">
           {status !== "ready" && (
             <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-slate-950/90 text-sm text-slate-300">
@@ -59,7 +76,7 @@ cd app-web && npm run dev`}
               </span>
               {slowHint && (
                 <span className="max-w-md px-4 text-center text-xs text-amber-300">
-                  Mapa lento — confirme Vite :5175 e API :8010 activos, depois Ctrl+F5.
+                  Mapa lento — confirme PostGIS (:5434), tiles (:7800) e API (:8010), depois Ctrl+F5.
                 </span>
               )}
             </div>
@@ -73,6 +90,7 @@ cd app-web && npm run dev`}
             onLoad={onIframeLoad}
           />
         </div>
+        </>
       )}
 
       <p className="text-center text-xs text-[var(--muted)]">

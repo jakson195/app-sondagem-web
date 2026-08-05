@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth/require-auth";
+import { isPlatformSuperAdmin } from "@/lib/platform-admin";
 import { appBaseUrl, getStripe, isStripeConfigured } from "@/lib/billing/stripe-config";
 import { prisma } from "@/lib/prisma";
 
@@ -10,8 +11,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Stripe não configurado." }, { status: 503 });
   }
 
-  const { company, response } = await requireAuth(req);
+  const { user, company, response } = await requireAuth(req);
   if (response) return response;
+  if (!user || !isPlatformSuperAdmin(user.systemRole)) {
+    return NextResponse.json({ error: "Sem permissão." }, { status: 403 });
+  }
   if (!company) {
     return NextResponse.json({ error: "Empresa activa não definida." }, { status: 400 });
   }

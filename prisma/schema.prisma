@@ -62,6 +62,8 @@ model User {
   createdReportShares ClientReportShare[] @relation("ClientReportShareCreator")
   geoPhotos           GeoPhoto[]
   streetFrames        StreetFrame[]
+  cadUserProjects     CadUserProject[]
+  obrasCreated        Obra[]              @relation("ObraCreatedBy")
 }
 
 /**
@@ -215,6 +217,9 @@ model Obra {
   /** Empresa proprietária (multi-tenant) — coluna física `empresaId`. */
   companyId Int        @map("empresaId")
   company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  /** Utilizador que criou a obra — isolamento entre contas. */
+  createdByUserId Int?  @map("created_by_user_id")
+  createdByUser   User? @relation("ObraCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   furos          Furo[]
   projectModules ProjectModule[]
@@ -469,4 +474,20 @@ model Sentinel1CatalogEntry {
 
   @@index([obraId, acquisitionAt])
   @@map("Sentinel1CatalogEntry")
+}
+
+/** Projetos CAD salvos por utilizador (Ambiente CAD / RTK). */
+model CadUserProject {
+  id        String   @id @default(cuid())
+  userId    Int      @map("user_id")
+  name      String
+  data      Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([updatedAt])
+  @@map("cad_user_projects")
 }

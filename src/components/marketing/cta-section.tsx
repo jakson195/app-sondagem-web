@@ -6,10 +6,10 @@ export function CtaSection() {
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="rounded-3xl border border-[var(--dg-cyan)]/30 bg-gradient-to-br from-[var(--dg-cyan)]/10 to-[var(--dg-blue)]/10 p-8 text-center sm:p-12">
           <h2 className="text-2xl font-bold sm:text-3xl">
-            Comece com trial grátis de 14 dias
+            Comece com trial grátis de 90 dias
           </h2>
           <p className="mx-auto mt-4 max-w-lg text-[var(--dg-muted)]">
-            Crie a empresa, convide a equipa e teste SPT, geofísica e relatórios.
+            Crie a sua conta, convide a equipa e teste SPT, mapas e relatórios.
             Sem cartão de crédito no trial.
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-4">

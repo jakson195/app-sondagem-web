@@ -1,5 +1,18 @@
 import { Prisma } from "@prisma/client";
 
+/** Prisma P2021 — tabela inexistente (migração em falta). */
+export function isPrismaMissingTableError(e: unknown, tableHint?: string): boolean {
+  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2021") {
+    const table = String((e.meta as { table?: string } | undefined)?.table ?? "");
+    if (!tableHint) return true;
+    return table.toLowerCase().includes(tableHint.toLowerCase());
+  }
+  const msg = e instanceof Error ? e.message : String(e);
+  if (!/does not exist in the current database/i.test(msg)) return false;
+  if (!tableHint) return true;
+  return msg.toLowerCase().includes(tableHint.toLowerCase());
+}
+
 /** PostgreSQL 42703 — coluna ou relação inexistente (esquema desatualizado). */
 export function isPgUndefinedColumnError(e: unknown): boolean {
   if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2010") {

@@ -22,9 +22,9 @@ const blocks: GuideBlock[] = [
       </svg>
     ),
     items: [
-      { label: "01", text: "Crie a empresa, convide a equipa e active os módulos (SPT, geofísica, GEO)." },
-      { label: "02", text: "Registe dados de campo: furos SPT, linhas ERT, fotos e coordenadas por obra." },
-      { label: "03", text: "Processe inversão 2D/3D no motor Python e interprete com IA opcional." },
+      { label: "01", text: "Crie a conta, convide a equipa e active os módulos (SPT, GEO, CAD)." },
+      { label: "02", text: "Registe dados de campo: furos SPT, fotos e coordenadas por obra." },
+      { label: "03", text: "Visualize mapas, perfis e resumos técnicos no painel da obra." },
       { label: "04", text: "Gere relatórios PDF e partilhe no portal do cliente com a sua marca." },
     ],
   },
@@ -43,10 +43,10 @@ const blocks: GuideBlock[] = [
     ),
     items: [
       { label: "SPT", text: "Registo de campo, gráficos NSPT e relatórios alinhados ao padrão Soilsul." },
-      { label: "ERT", text: "Dipolo-dipolo, inversão FDM/FEM, QC de linha e volume 3D." },
+      { label: "CAD", text: "Ambiente técnico para plantas, coordenadas e exportação." },
       { label: "GEO", text: "Mapas, InSAR, Landsat e camadas de contexto por obra." },
       { label: "Portal", text: "Área do cliente white-label por empresa." },
-      { label: "SaaS", text: "Trial, planos Pro e limites por assinatura." },
+      { label: "SaaS", text: "Trial 90 dias e planos conforme acordo comercial." },
     ],
   },
   {
@@ -62,9 +62,9 @@ const blocks: GuideBlock[] = [
     ),
     items: [
       { label: "Obra", text: "Crie a obra com localização e módulos activos antes do campo." },
-      { label: "Motor", text: "Para inversão física, mantenha o motor Python na porta 8092." },
-      { label: "Equipe", text: "Defina papéis ADMIN / MEMBER e empresas isoladas por cliente." },
-      { label: "Plano", text: "Trial 14 dias; evolua para Pro quando precisar de mais obras." },
+      { label: "Equipa", text: "Defina quem acede à conta e mantenha obras isoladas por utilizador." },
+      { label: "Campo", text: "Registe furos com código, coordenadas e ensaios SPT no mesmo fluxo." },
+      { label: "Plano", text: "Trial 90 dias grátis; contacte-nos para ampliar limites." },
     ],
   },
 ];
@@ -87,7 +87,7 @@ export function SiteServiceGuide() {
             Guia da plataforma
           </p>
           <h2 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
-            Geotecnia e geofísica, explicados de forma directa
+            Geotecnia e mineração, explicados de forma directa
           </h2>
           <p className="mt-3 text-[var(--dg-muted)]">
             Estrutura pensada para consultorias que precisam de rigor técnico, isolamento

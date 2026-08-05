@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FieldCampaignMap,
@@ -34,6 +34,7 @@ import {
 } from "@/lib/field-export-kml-gpx";
 import { CAMPO_TIPO } from "@/lib/campo-sondagem-tipo";
 import { apiUrl } from "@/lib/api-url";
+import { isPlatformSuperAdmin } from "@/lib/platform-admin";
 import { OBRA_STATUS_LABEL } from "@/lib/obra-status";
 import type { ObraStatus } from "@prisma/client";
 import {
@@ -113,6 +114,7 @@ type ResumoObraApi = {
 };
 
 export default function ObraDetalhe() {
+  const router = useRouter();
   const params = useParams<{ id?: string }>();
   const idParam = typeof params?.id === "string" ? params.id : "";
   const obraId = Number(idParam);
@@ -142,6 +144,52 @@ export default function ObraDetalhe() {
   const [recenterKey, setRecenterKey] = useState(0);
   const [furoAGuardar, setFuroAGuardar] = useState<number | null>(null);
   const [aObterGpsParaFuro, setAObterGpsParaFuro] = useState(false);
+
+  const [aExcluirObra, setAExcluirObra] = useState(false);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await fetch(apiUrl("/api/auth/me"), { credentials: "include" });
+        const data = (await r.json().catch(() => ({}))) as {
+          user?: { systemRole?: string };
+        };
+        if (r.ok && data.user?.systemRole) {
+          setIsPlatformAdmin(isPlatformSuperAdmin(data.user.systemRole as "USER"));
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, []);
+
+  async function excluirObra() {
+    if (!obra) return;
+    const ok = window.confirm(
+      `Excluir a obra «${obra.nome}»?\n\nTodos os furos, registos SPT e dados associados serão removidos permanentemente.`,
+    );
+    if (!ok) return;
+
+    setErro(null);
+    setAExcluirObra(true);
+    try {
+      const r = await fetch(apiUrl(`/api/obra/${obra.id}`), {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const data = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) {
+        setErro(typeof data.error === "string" ? data.error : "Erro ao excluir obra");
+        return;
+      }
+      router.push("/obras");
+    } catch {
+      setErro("Falha de rede ao excluir obra.");
+    } finally {
+      setAExcluirObra(false);
+    }
+  }
 
   const carregarObra = useCallback(async () => {
     if (!Number.isFinite(obraId)) {
@@ -632,16 +680,30 @@ export default function ObraDetalhe() {
             <span className="shrink-0 rounded-full bg-teal-500/15 px-3 py-1 text-xs font-semibold text-teal-700 dark:text-teal-300">
               {OBRA_STATUS_LABEL[obra.status]}
             </span>
+            <button
+              type="button"
+              onClick={() => void excluirObra()}
+              disabled={aExcluirObra}
+              className="shrink-0 rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300 dark:hover:bg-red-950/60"
+            >
+              {aExcluirObra ? "A excluir…" : "Excluir obra"}
+            </button>
           </div>
           {obra.company && (
             <p className="mt-3 border-t border-[var(--border)] pt-3 text-xs text-[var(--muted)]">
               Empresa:{" "}
-              <Link
-                href={`/empresa/${obra.company.id}/gestao`}
-                className="font-medium text-teal-600 hover:underline dark:text-teal-400"
-              >
-                {obra.company.name}
-              </Link>
+              {isPlatformAdmin ? (
+                <Link
+                  href={`/empresa/${obra.company.id}/gestao`}
+                  className="font-medium text-teal-600 hover:underline dark:text-teal-400"
+                >
+                  {obra.company.name}
+                </Link>
+              ) : (
+                <span className="font-medium text-[var(--text)]">
+                  {obra.company.name}
+                </span>
+              )}
             </p>
           )}
           {obra.description?.trim() && (

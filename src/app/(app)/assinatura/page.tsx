@@ -1,10 +1,12 @@
 import { SubscriptionPanel } from "@/components/saas/subscription-panel";
+import { requirePlatformAdminPage } from "@/lib/platform-admin-page-guard";
 
 type Props = {
   searchParams?: Promise<{ checkout?: string }>;
 };
 
 export default async function AssinaturaPage({ searchParams }: Props) {
+  await requirePlatformAdminPage();
   const params = (await searchParams) ?? {};
   const checkoutHint =
     params.checkout === "success" || params.checkout === "cancel"
