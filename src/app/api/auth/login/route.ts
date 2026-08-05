@@ -15,21 +15,10 @@ import {
   supabaseAuthSetupMessage,
 } from "@/lib/supabase";
 import { createSupabaseRouteHandlerClient } from "@/lib/supabase/route-handler";
+import { isSupabaseUnavailableError } from "@/lib/auth/supabase-errors";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
-
-function isSupabaseUnavailableError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const msg = error.message.toLowerCase();
-  const cause = (error as Error & { cause?: { code?: string } }).cause;
-  return (
-    msg.includes("fetch failed") ||
-    cause?.code === "ENOTFOUND" ||
-    cause?.code === "ECONNREFUSED" ||
-    cause?.code === "ETIMEDOUT"
-  );
-}
 
 export async function POST(req: Request) {
   const ip = clientIpFromRequest(req);

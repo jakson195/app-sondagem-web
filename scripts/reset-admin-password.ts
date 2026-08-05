@@ -4,10 +4,16 @@ import { PrismaClient } from "@prisma/client";
 const prisma = new PrismaClient();
 
 async function main() {
+  const emailArg = process.argv[2]?.trim().toLowerCase();
   const email = (
-    process.env.MASTER_ADMIN_EMAIL?.trim() || "admin@datageodigital.com.br"
+    emailArg ||
+    process.env.MASTER_ADMIN_EMAIL?.trim() ||
+    "admin@datageodigital.com.br"
   ).toLowerCase();
-  const plain = process.env.MASTER_ADMIN_PASSWORD?.trim() || "Admin@DataGeo2026";
+  const plain =
+    process.env.MASTER_ADMIN_PASSWORD?.trim() ||
+    process.env.NEW_PASSWORD?.trim() ||
+    "Admin@DataGeo2026";
 
   if (plain.length < 8) {
     throw new Error("MASTER_ADMIN_PASSWORD deve ter pelo menos 8 caracteres.");

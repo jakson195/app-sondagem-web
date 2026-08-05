@@ -1,18 +1,10 @@
 import { NextResponse } from "next/server";
 import { consumePasswordResetToken } from "@/lib/auth/password-reset";
 import { clientIpFromRequest, checkRateLimit } from "@/lib/auth/rate-limit";
-import { isSupabaseAuthConfigured } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  if (isSupabaseAuthConfigured()) {
-    return NextResponse.json(
-      { error: "Use o fluxo Supabase em /redefinir-senha após o link do email." },
-      { status: 400 },
-    );
-  }
-
   const ip = clientIpFromRequest(req);
   const limited = checkRateLimit(`reset:${ip}`, 10, 60 * 60 * 1000);
   if (!limited.ok) {

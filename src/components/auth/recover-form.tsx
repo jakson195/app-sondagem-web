@@ -27,7 +27,7 @@ export function RecoverForm() {
         message?: string;
       };
       if (!response.ok) {
-        setError(data.error ?? "Falha ao enviar o email.");
+        setError(data.error ?? data.message ?? "Falha ao enviar o email.");
         return;
       }
       if (data.devResetLink) {
