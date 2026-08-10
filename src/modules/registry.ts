@@ -103,6 +103,13 @@ export const platformModules: PlatformModuleDef[] = [
           "Monitoramento temporal: optical flow, DSM, IA, mapa 2D/3D",
       },
       {
+        href: "/taludes",
+        label: "Estabilidade de Taludes",
+        icon: Mountain,
+        parent: "digital-twin",
+        description: "Análise geotécnica de taludes (Bishop, Fellenius, Janbu)",
+      },
+      {
         href: `${DIGITAL_TWIN_BASE}/nuvem-pontos`,
         label: "Nuvem de Pontos",
         icon: Cloud,

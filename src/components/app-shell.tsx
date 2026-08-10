@@ -29,6 +29,7 @@ function isHiddenNavHref(href: string): boolean {
 const coreNav = [
   { href: "/dashboard", label: "📊 Painel" },
   { href: "/cad", label: "📐 Ambiente CAD" },
+  { href: "/taludes", label: "⛰ Estabilidade de Taludes" },
   { href: "/hidrologia/hidrogeo-brasil", label: "🗺️ HidroGeo Brasil (CPRM + ANM)" },
   { href: "/mineracao/leilao-anm", label: "⛏️ ANM · Leilão SOPLE" },
   { href: "/obras", label: "📁 Obras · mapas" },

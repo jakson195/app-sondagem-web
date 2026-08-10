@@ -440,7 +440,10 @@
         "elevationAxis": "Cota (m)",
         "exportPdf": "Exportar gráfico PDF",
         "pdfExporting": "Gerando PDF…",
-        "pdfOk": "PDF do perfil exportado."
+        "pdfOk": "PDF do perfil exportado.",
+        "sendToTaludes": "Enviar para Estabilidade de Taludes",
+        "sendToTaludesHint": "Abre o módulo de taludes com a seção deste perfil.",
+        "sendToTaludesOk": "Perfil enviado — abrindo Estabilidade de Taludes…"
       },
       "buttons": {
         "area": "Calcular área",

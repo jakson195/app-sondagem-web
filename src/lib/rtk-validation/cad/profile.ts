@@ -43,6 +43,12 @@ export function profileKindFromLayer(layerId: string): "longitudinal" | "transve
   return layerId === TRANSVERSAL_PROFILE_LAYER.id ? "transversal" : "longitudinal";
 }
 
+export function listTerrainProfiles(entities: CadEntity[]): CadPolylineEntity[] {
+  return entities.filter(
+    (e): e is CadPolylineEntity => e.type === "polyline" && isTerrainProfileLayer(e.layerId),
+  );
+}
+
 function sampleElevationAt(
   x: number,
   y: number,

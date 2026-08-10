@@ -1,9 +1,18 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import { TerrainProfileChart } from "@/components/rtk-validation/terrain-profile-chart";
-import { PROFILE_LAYER } from "@/lib/rtk-validation/cad/profile";
+import {
+  isTerrainProfileLayer,
+  listTerrainProfiles,
+  profileKindFromLayer,
+} from "@/lib/rtk-validation/cad/profile";
+import {
+  buildCadTaludesImportFromProfile,
+  saveCadTaludesImport,
+} from "@/lib/taludes/cad-profile-bridge";
 import type { CadPolylineEntity, CadProject } from "@/lib/rtk-validation/cad/types";
 
 type CadProfileViewProps = {
@@ -13,24 +22,25 @@ type CadProfileViewProps = {
 
 export function CadProfileView({ project, selectedId }: CadProfileViewProps) {
   const t = useTranslations("rtkCad.commands");
+  const router = useRouter();
   const [exporting, setExporting] = useState(false);
+  const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const selectedProfile = useMemo((): CadPolylineEntity | null => {
     if (!selectedId) return null;
     const entity = project.entities.find((e) => e.id === selectedId);
-    return entity?.type === "polyline" && entity.layerId === PROFILE_LAYER.id ? entity : null;
+    return entity?.type === "polyline" && isTerrainProfileLayer(entity.layerId) ? entity : null;
   }, [project.entities, selectedId]);
 
   const latestProfile = useMemo((): CadPolylineEntity | null => {
-    const profiles = project.entities.filter(
-      (e): e is CadPolylineEntity => e.type === "polyline" && e.layerId === PROFILE_LAYER.id,
-    );
+    const profiles = listTerrainProfiles(project.entities);
     return profiles.length > 0 ? profiles[profiles.length - 1] : null;
   }, [project.entities]);
 
   const profile = selectedProfile ?? latestProfile;
+  const profileKind = profile ? profileKindFromLayer(profile.layerId) : "longitudinal";
 
   const exportProfilePdf = async () => {
     if (!profile) return;
@@ -42,7 +52,7 @@ export function CadProfileView({ project, selectedId }: CadProfileViewProps) {
       downloadTerrainProfilePdf({
         profile,
         projectName: project.name,
-        kind: "longitudinal",
+        kind: profileKind,
       });
       setNotice(t("profileOps.pdfOk"));
     } catch (err) {
@@ -52,23 +62,61 @@ export function CadProfileView({ project, selectedId }: CadProfileViewProps) {
     }
   };
 
+  const sendToTaludes = () => {
+    if (!profile || profile.vertices.length < 2) {
+      setError(t("profileOps.needProfile"));
+      return;
+    }
+
+    setSending(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const payload = buildCadTaludesImportFromProfile(profile, project.name);
+      saveCadTaludesImport(payload);
+      setNotice(t("profileOps.sendToTaludesOk"));
+      router.push("/taludes?from=cad");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("error"));
+    } finally {
+      setSending(false);
+    }
+  };
+
   if (!profile) return null;
+
+  const chartTitle =
+    profileKind === "transversal"
+      ? t("profileOps.chartTitleTransversal")
+      : t("profileOps.chartTitle");
 
   return (
     <section className="rounded-xl border border-[#1e293b] bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold text-[#0f2848]">{t("profileOps.chartTitle")}</h3>
+          <h3 className="text-sm font-semibold text-[#0f2848]">{chartTitle}</h3>
           <p className="mt-0.5 text-[10px] text-[#6b7280]">{profile.name ?? t("profileOps.title")}</p>
         </div>
-        <button
-          type="button"
-          disabled={exporting}
-          onClick={() => void exportProfilePdf()}
-          className="rounded-lg border border-[#0f2848] px-3 py-1.5 text-xs font-semibold text-[#0f2848] hover:bg-[#f8fafc] disabled:opacity-50"
-        >
-          {exporting ? t("profileOps.pdfExporting") : t("profileOps.exportPdf")}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={sending}
+            onClick={sendToTaludes}
+            title={t("profileOps.sendToTaludesHint")}
+            className="rounded-lg bg-[#0f2848] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#1a3a5c] disabled:opacity-50"
+          >
+            {sending ? "…" : t("profileOps.sendToTaludes")}
+          </button>
+          <button
+            type="button"
+            disabled={exporting}
+            onClick={() => void exportProfilePdf()}
+            className="rounded-lg border border-[#0f2848] px-3 py-1.5 text-xs font-semibold text-[#0f2848] hover:bg-[#f8fafc] disabled:opacity-50"
+          >
+            {exporting ? t("profileOps.pdfExporting") : t("profileOps.exportPdf")}
+          </button>
+        </div>
       </div>
 
       <div className="mt-3">
