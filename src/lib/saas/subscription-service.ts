@@ -26,25 +26,35 @@ export async function provisionSubscriptionForCompany(
         ? trialEndsAtFromNow()
         : null;
 
-  return prisma.subscription.upsert({
-    where: { companyId },
-    create: {
-      companyId,
-      plan,
-      status,
-      trialEndsAt,
-      maxObras: limits.maxObras,
-      maxUsers: limits.maxUsers,
-      billingProvider: plan === "trial" ? "manual" : null,
-    },
-    update: {
-      plan,
-      status,
-      trialEndsAt,
-      maxObras: limits.maxObras,
-      maxUsers: limits.maxUsers,
-    },
-  });
+  try {
+    return await prisma.subscription.upsert({
+      where: { companyId },
+      create: {
+        companyId,
+        plan,
+        status,
+        trialEndsAt,
+        maxObras: limits.maxObras,
+        maxUsers: limits.maxUsers,
+        billingProvider: plan === "trial" ? "manual" : null,
+      },
+      update: {
+        plan,
+        status,
+        trialEndsAt,
+        maxObras: limits.maxObras,
+        maxUsers: limits.maxUsers,
+      },
+    });
+  } catch (e) {
+    if (isPrismaMissingTableError(e, "Subscription")) {
+      console.warn(
+        "[subscription] Tabela Subscription em falta; plano fica só em Company.",
+      );
+      return null;
+    }
+    throw e;
+  }
 }
 
 export async function syncCompanyPlanFields(companyId: number) {

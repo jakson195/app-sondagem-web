@@ -6,7 +6,7 @@ import { applyActiveCompanyCookie } from "@/lib/auth/active-company";
 import { authCookieName, authCookieOptions, signAuthToken } from "@/lib/server-auth";
 import { provisionSubscriptionForCompany } from "@/lib/saas/subscription-service";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { isSupabaseAuthConfigured } from "@/lib/supabase";
+import { isSupabaseAdminConfigured } from "@/lib/supabase";
 import { createSupabaseRouteHandlerClient } from "@/lib/supabase/route-handler";
 
 export const dynamic = "force-dynamic";
@@ -32,12 +32,23 @@ async function registerWithLocalJwt(input: {
     companyName: input.companyName,
     plan: input.plan,
   });
-  await provisionSubscriptionForCompany(company.id, "trial");
 
-  const token = signAuthToken({
-    userId: localUser.id,
-    systemRole: localUser.systemRole,
-  });
+  let token: string;
+  try {
+    token = signAuthToken({
+      userId: localUser.id,
+      systemRole: localUser.systemRole,
+    });
+  } catch {
+    return NextResponse.json(
+      {
+        error:
+          "Conta criada, mas JWT_SECRET não está configurado no servidor. Contacte o suporte.",
+      },
+      { status: 503 },
+    );
+  }
+
   const response = NextResponse.json({
     ok: true,
     authProvider: "local-jwt",
@@ -48,6 +59,15 @@ async function registerWithLocalJwt(input: {
   response.cookies.set(authCookieName(), token, authCookieOptions());
   applyActiveCompanyCookie(response, company.id);
   return response;
+}
+
+function registerLocalErrorResponse(e: unknown) {
+  const msg = e instanceof Error ? e.message : "Falha ao criar conta.";
+  const status = msg === "EMAIL_IN_USE" ? 409 : 400;
+  return NextResponse.json(
+    { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
+    { status },
+  );
 }
 
 export async function POST(req: Request) {
@@ -96,16 +116,11 @@ export async function POST(req: Request) {
       typeof body.companyEmail === "string" ? body.companyEmail.trim() || null : null,
   };
 
-  if (!isSupabaseAuthConfigured()) {
+  if (!isSupabaseAdminConfigured()) {
     try {
       return await registerWithLocalJwt({ name, email, password, companyName, plan });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Falha ao criar conta.";
-      const status = msg === "EMAIL_IN_USE" ? 409 : 400;
-      return NextResponse.json(
-        { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
-        { status },
-      );
+      return registerLocalErrorResponse(e);
     }
   }
 
@@ -125,12 +140,7 @@ export async function POST(req: Request) {
         try {
           return await registerWithLocalJwt({ name, email, password, companyName, plan });
         } catch (e) {
-          const msg = e instanceof Error ? e.message : "Falha ao criar conta.";
-          const status = msg === "EMAIL_IN_USE" ? 409 : 400;
-          return NextResponse.json(
-            { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
-            { status },
-          );
+          return registerLocalErrorResponse(e);
         }
       }
       return NextResponse.json(
@@ -158,12 +168,7 @@ export async function POST(req: Request) {
           }
           return await registerWithLocalJwt({ name, email, password, companyName, plan });
         } catch (e) {
-          const msg = e instanceof Error ? e.message : "Falha ao criar conta.";
-          const status = msg === "EMAIL_IN_USE" ? 409 : 400;
-          return NextResponse.json(
-            { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
-            { status },
-          );
+          return registerLocalErrorResponse(e);
         }
       }
       return NextResponse.json(
@@ -194,12 +199,7 @@ export async function POST(req: Request) {
       try {
         return await registerWithLocalJwt({ name, email, password, companyName, plan });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Falha ao criar conta.";
-        const status = msg === "EMAIL_IN_USE" ? 409 : 400;
-        return NextResponse.json(
-          { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
-          { status },
-        );
+        return registerLocalErrorResponse(err);
       }
     }
     console.error(e);

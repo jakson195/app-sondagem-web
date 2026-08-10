@@ -21,6 +21,11 @@ export function isSupabaseAuthConfigured(): boolean {
   return Boolean(getSupabaseUrl() && getSupabaseAnonKey());
 }
 
+/** Cadastro admin (createUser) exige service role além do anon key. */
+export function isSupabaseAdminConfigured(): boolean {
+  return Boolean(getSupabaseUrl() && getSupabaseServiceRoleKey());
+}
+
 export function missingSupabaseAuthEnv(): string[] {
   const missing: string[] = [];
   if (!getSupabaseUrl()) missing.push("NEXT_PUBLIC_SUPABASE_URL");
