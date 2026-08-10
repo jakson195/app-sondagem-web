@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { runQueuedInEffect } from "@/lib/react/queue-in-effect";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import { executeCadAiCommand, importKmzIntoProject } from "@/lib/rtk-validation/cad/ai-command-executor";
@@ -8,8 +9,13 @@ import { importSurveyPointsToProject } from "@/lib/rtk-validation/cad/import-sur
 import { parseSurveyUpload } from "@/lib/rtk-validation/parsers";
 import type { CadAiCommand, CadAiSideEffect } from "@/lib/rtk-validation/cad/ai-command-types";
 import { closedPolygonLabel, listClosedPolygons } from "@/lib/rtk-validation/cad/polygon-utils";
+import { resolveTerrainProfile } from "@/lib/rtk-validation/cad/profile";
 import type { CadPointEntity, CadProject } from "@/lib/rtk-validation/cad/types";
 import type { MemorialFormDefaults } from "@/lib/rtk-validation/cad/memorial-types";
+import {
+  buildCadTaludesImportFromProfile,
+  saveCadTaludesImport,
+} from "@/lib/taludes/cad-profile-bridge";
 
 
 export interface CadCommandsPanelProps {
@@ -110,10 +116,12 @@ export function CadCommandsPanel({
 }: CadCommandsPanelProps) {
   const t = useTranslations("rtkCad.commands");
   const tAi = useTranslations("rtkCad.ai");
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<CadCommandTab>("createPoint");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [sendingToTaludes, setSendingToTaludes] = useState(false);
   const [labelText, setLabelText] = useState("Lote 01");
   const [pointRef, setPointRef] = useState("");
   const [renameTo, setRenameTo] = useState("");
@@ -135,6 +143,33 @@ export function CadCommandsPanel({
     const entity = project.entities.find((e) => e.id === selectedId);
     return entity?.type === "point" ? entity : null;
   }, [project.entities, selectedId]);
+
+  const terrainProfile = useMemo(
+    () => resolveTerrainProfile(project.entities, selectedId),
+    [project.entities, selectedId],
+  );
+
+  const sendProfileToTaludes = useCallback(() => {
+    if (!terrainProfile || terrainProfile.vertices.length < 2) {
+      setError(t("profileOps.needProfile"));
+      return;
+    }
+
+    setSendingToTaludes(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const payload = buildCadTaludesImportFromProfile(terrainProfile, project.name);
+      saveCadTaludesImport(payload);
+      setNotice(t("profileOps.sendToTaludesOk"));
+      router.push("/taludes?from=cad");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("error"));
+    } finally {
+      setSendingToTaludes(false);
+    }
+  }, [terrainProfile, project.name, router, t]);
 
   const closedPolygons = useMemo(
     () => listClosedPolygons(project.entities),
@@ -546,6 +581,19 @@ export function CadCommandsPanel({
         <button type="button" onClick={cancelProfilePick} className={`mt-2 w-full ${BTN_SECONDARY}`}>
           {t("profileOps.cancelPick")}
         </button>
+      ) : null}
+
+      <button
+        type="button"
+        disabled={!terrainProfile || sendingToTaludes || busy !== null}
+        onClick={sendProfileToTaludes}
+        title={t("profileOps.sendToTaludesHint")}
+        className={`mt-3 w-full ${BTN_PRIMARY}`}
+      >
+        {sendingToTaludes ? "…" : t("profileOps.sendToTaludes")}
+      </button>
+      {!terrainProfile ? (
+        <p className="mt-1 text-[10px] text-[#6b7280]">{t("profileOps.needProfile")}</p>
       ) : null}
     </section>
   );

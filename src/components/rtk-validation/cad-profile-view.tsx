@@ -5,15 +5,14 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import { TerrainProfileChart } from "@/components/rtk-validation/terrain-profile-chart";
 import {
-  isTerrainProfileLayer,
-  listTerrainProfiles,
   profileKindFromLayer,
+  resolveTerrainProfile,
 } from "@/lib/rtk-validation/cad/profile";
 import {
   buildCadTaludesImportFromProfile,
   saveCadTaludesImport,
 } from "@/lib/taludes/cad-profile-bridge";
-import type { CadPolylineEntity, CadProject } from "@/lib/rtk-validation/cad/types";
+import type { CadProject } from "@/lib/rtk-validation/cad/types";
 
 type CadProfileViewProps = {
   project: CadProject;
@@ -28,18 +27,10 @@ export function CadProfileView({ project, selectedId }: CadProfileViewProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedProfile = useMemo((): CadPolylineEntity | null => {
-    if (!selectedId) return null;
-    const entity = project.entities.find((e) => e.id === selectedId);
-    return entity?.type === "polyline" && isTerrainProfileLayer(entity.layerId) ? entity : null;
-  }, [project.entities, selectedId]);
-
-  const latestProfile = useMemo((): CadPolylineEntity | null => {
-    const profiles = listTerrainProfiles(project.entities);
-    return profiles.length > 0 ? profiles[profiles.length - 1] : null;
-  }, [project.entities]);
-
-  const profile = selectedProfile ?? latestProfile;
+  const profile = useMemo(
+    () => resolveTerrainProfile(project.entities, selectedId),
+    [project.entities, selectedId],
+  );
   const profileKind = profile ? profileKindFromLayer(profile.layerId) : "longitudinal";
 
   const exportProfilePdf = async () => {

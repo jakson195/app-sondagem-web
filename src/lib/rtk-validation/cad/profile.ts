@@ -49,6 +49,21 @@ export function listTerrainProfiles(entities: CadEntity[]): CadPolylineEntity[] 
   );
 }
 
+/** Perfil selecionado ou o mais recente gerado no CAD. */
+export function resolveTerrainProfile(
+  entities: CadEntity[],
+  selectedId: string | null,
+): CadPolylineEntity | null {
+  if (selectedId) {
+    const entity = entities.find((e) => e.id === selectedId);
+    if (entity?.type === "polyline" && isTerrainProfileLayer(entity.layerId)) {
+      return entity;
+    }
+  }
+  const profiles = listTerrainProfiles(entities);
+  return profiles.length > 0 ? profiles[profiles.length - 1] : null;
+}
+
 function sampleElevationAt(
   x: number,
   y: number,
