@@ -5,7 +5,7 @@ import { LoginForm } from "@/components/auth/login-form";
 import { isAuthBypassEnabled } from "@/lib/auth-bypass";
 
 type Props = {
-  searchParams?: Promise<{ next?: string }>;
+  searchParams?: Promise<{ next?: string; cadastro?: string; plan?: string }>;
 };
 
 export default async function LoginPage({ searchParams }: Props) {
@@ -20,11 +20,17 @@ export default async function LoginPage({ searchParams }: Props) {
     !params.next.startsWith("//")
       ? params.next
       : "/dashboard";
+  const initialMode = params.cadastro === "1" || params.cadastro === "true" ? "signup" : "login";
+  const plan = typeof params.plan === "string" ? params.plan : "trial";
 
   return (
     <AuthShell
-      title="Entrar na plataforma"
-      subtitle="Aceda ao dashboard, às empresas e aos portais de cliente com um único login."
+      title={initialMode === "signup" ? "Criar conta" : "Entrar na plataforma"}
+      subtitle={
+        initialMode === "signup"
+          ? "Registe-se com nome, email e palavra-passe para aceder ao DataGeo Digital."
+          : "Aceda ao dashboard e às suas obras com email e palavra-passe."
+      }
       footer={
         <>
           <Link href="/" className="font-medium text-[var(--accent)] hover:underline">
@@ -38,7 +44,7 @@ export default async function LoginPage({ searchParams }: Props) {
         </>
       }
     >
-      <LoginForm next={next} />
+      <LoginForm next={next} initialMode={initialMode} plan={plan} />
     </AuthShell>
   );
 }

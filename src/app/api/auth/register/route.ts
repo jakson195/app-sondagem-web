@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClientSignupAccount, createJwtSignupAccount } from "@/lib/auth-user-sync";
+import { isSupabaseUnavailableError } from "@/lib/auth/supabase-errors";
 import { clientIpFromRequest, checkRateLimit } from "@/lib/auth/rate-limit";
-import {
-  applyActiveCompanyCookie,
-} from "@/lib/auth/active-company";
+import { applyActiveCompanyCookie } from "@/lib/auth/active-company";
 import { authCookieName, authCookieOptions, signAuthToken } from "@/lib/server-auth";
 import { provisionSubscriptionForCompany } from "@/lib/saas/subscription-service";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -11,6 +10,45 @@ import { isSupabaseAuthConfigured } from "@/lib/supabase";
 import { createSupabaseRouteHandlerClient } from "@/lib/supabase/route-handler";
 
 export const dynamic = "force-dynamic";
+
+function defaultCompanyName(name: string, email: string): string {
+  const trimmed = name.trim();
+  if (trimmed) return trimmed;
+  const local = email.split("@")[0]?.trim();
+  return local ? `Conta ${local}` : "Minha conta";
+}
+
+async function registerWithLocalJwt(input: {
+  name: string;
+  email: string;
+  password: string;
+  companyName: string;
+  plan?: unknown;
+}) {
+  const { localUser, company } = await createJwtSignupAccount({
+    name: input.name,
+    email: input.email,
+    password: input.password,
+    companyName: input.companyName,
+    plan: input.plan,
+  });
+  await provisionSubscriptionForCompany(company.id, "trial");
+
+  const token = signAuthToken({
+    userId: localUser.id,
+    systemRole: localUser.systemRole,
+  });
+  const response = NextResponse.json({
+    ok: true,
+    authProvider: "local-jwt",
+    company: { id: company.id, slug: company.slug, name: company.name, plan: company.plan },
+    user: { id: localUser.id, email: localUser.email, name: localUser.name },
+    checkoutRequired: false,
+  });
+  response.cookies.set(authCookieName(), token, authCookieOptions());
+  applyActiveCompanyCookie(response, company.id);
+  return response;
+}
 
 export async function POST(req: Request) {
   const ip = clientIpFromRequest(req);
@@ -29,19 +67,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "JSON inválido." }, { status: 400 });
   }
 
-  const companyName =
-    typeof body.companyName === "string" ? body.companyName.trim() : "";
   const name = typeof body.name === "string" ? body.name.trim() : "";
   const email =
     typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";
   const plan = body.plan;
+  const companyNameInput =
+    typeof body.companyName === "string" ? body.companyName.trim() : "";
+  const companyName = companyNameInput || defaultCompanyName(name, email);
 
-  if (!companyName || !name || !email || password.length < 8) {
+  if (!name || !email || password.length < 8) {
     return NextResponse.json(
       {
-        error:
-          "Informe empresa, nome, email e uma senha com pelo menos 8 caracteres.",
+        error: "Informe nome, email e uma senha com pelo menos 8 caracteres.",
       },
       { status: 400 },
     );
@@ -60,35 +98,9 @@ export async function POST(req: Request) {
 
   if (!isSupabaseAuthConfigured()) {
     try {
-      const { localUser, company } = await createJwtSignupAccount({
-        name,
-        email,
-        password,
-        companyName,
-        plan,
-        cnpj: common.cnpj,
-        phone: common.phone,
-        companyEmail: common.companyEmail,
-        address: common.address,
-      });
-      await provisionSubscriptionForCompany(company.id, "trial");
-
-      const token = signAuthToken({
-        userId: localUser.id,
-        systemRole: localUser.systemRole,
-      });
-      const response = NextResponse.json({
-        ok: true,
-        authProvider: "local-jwt",
-        company: { id: company.id, slug: company.slug, name: company.name, plan: company.plan },
-        user: { id: localUser.id, email: localUser.email, name: localUser.name },
-        checkoutRequired: false,
-      });
-      response.cookies.set(authCookieName(), token, authCookieOptions());
-      applyActiveCompanyCookie(response, company.id);
-      return response;
+      return await registerWithLocalJwt({ name, email, password, companyName, plan });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Falha ao criar cliente.";
+      const msg = e instanceof Error ? e.message : "Falha ao criar conta.";
       const status = msg === "EMAIL_IN_USE" ? 409 : 400;
       return NextResponse.json(
         { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
@@ -108,6 +120,19 @@ export async function POST(req: Request) {
       user_metadata: { name },
     });
     if (error || !data.user) {
+      if (isSupabaseUnavailableError(error)) {
+        console.warn("[auth/register] Supabase indisponível; a usar cadastro local JWT.");
+        try {
+          return await registerWithLocalJwt({ name, email, password, companyName, plan });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Falha ao criar conta.";
+          const status = msg === "EMAIL_IN_USE" ? 409 : 400;
+          return NextResponse.json(
+            { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
+            { status },
+          );
+        }
+      }
       return NextResponse.json(
         { error: error?.message ?? "Não foi possível criar a conta." },
         { status: 400 },
@@ -126,6 +151,21 @@ export async function POST(req: Request) {
     const { supabase, applyCookies } = await createSupabaseRouteHandlerClient();
     const signIn = await supabase.auth.signInWithPassword({ email, password });
     if (signIn.error) {
+      if (isSupabaseUnavailableError(signIn.error)) {
+        try {
+          if (createdAuthUserId) {
+            await admin.auth.admin.deleteUser(createdAuthUserId).catch(() => undefined);
+          }
+          return await registerWithLocalJwt({ name, email, password, companyName, plan });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Falha ao criar conta.";
+          const status = msg === "EMAIL_IN_USE" ? 409 : 400;
+          return NextResponse.json(
+            { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
+            { status },
+          );
+        }
+      }
       return NextResponse.json(
         { error: "Conta criada, mas o login automático falhou." },
         { status: 500 },
@@ -149,9 +189,22 @@ export async function POST(req: Request) {
         /* cleanup */
       }
     }
+    if (isSupabaseUnavailableError(e)) {
+      console.warn("[auth/register] Supabase indisponível; a usar cadastro local JWT.", e);
+      try {
+        return await registerWithLocalJwt({ name, email, password, companyName, plan });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Falha ao criar conta.";
+        const status = msg === "EMAIL_IN_USE" ? 409 : 400;
+        return NextResponse.json(
+          { error: msg === "EMAIL_IN_USE" ? "Este email já está registado." : msg },
+          { status },
+        );
+      }
+    }
     console.error(e);
     return NextResponse.json(
-      { error: "Falha ao criar cliente no sistema." },
+      { error: "Falha ao criar conta no sistema." },
       { status: 500 },
     );
   }

@@ -1,16 +1,13 @@
-import { Suspense } from "react";
-import { AuthShell } from "@/components/auth/auth-shell";
-import { SignupForm } from "@/components/auth/signup-form";
+import { redirect } from "next/navigation";
 
-export default function SignupPage() {
-  return (
-    <AuthShell
-      title="Criar empresa"
-      subtitle="Abra a sua área no DataGeo Digital, crie o primeiro utilizador ADMIN e entre imediatamente."
-    >
-      <Suspense fallback={<p className="text-sm text-[var(--muted)]">A carregar formulário…</p>}>
-        <SignupForm />
-      </Suspense>
-    </AuthShell>
-  );
+type Props = {
+  searchParams?: Promise<{ plan?: string }>;
+};
+
+export default async function SignupPage({ searchParams }: Props) {
+  const params = (await searchParams) ?? {};
+  const plan = typeof params.plan === "string" ? params.plan : undefined;
+  const query = new URLSearchParams({ cadastro: "1" });
+  if (plan) query.set("plan", plan);
+  redirect(`/login?${query.toString()}`);
 }
