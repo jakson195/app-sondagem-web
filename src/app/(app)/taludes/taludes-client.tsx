@@ -14,6 +14,8 @@ import {
   loadCadTaludesImport,
 } from "@/lib/taludes/cad-profile-bridge";
 import type { AcadSlopeCandidate, AcadSlopeImportResult } from "@/lib/taludes/acad-import-types";
+import { canvasWorldFromEvent, drawGeo5SlopeScene } from "./components/geo5-draw";
+import { Geo5NormativePanel, Geo5ResultsSummary, Geo5SliceTable } from "./components/geo5-results";
 
 // ── PALETA ────────────────────────────────────────────────────
 const SOIL_COLORS = [
@@ -32,9 +34,9 @@ const DEFAULT_PROFILE: ProfilePoint[] = [
   {x:40,y:8},{x:50,y:8},{x:60,y:8},
 ];
 
-// ── CANVAS DE TALUDE ──────────────────────────────────────────
 function SlopeCanvas({
   profile, waterTable, circle, layers, result, onProfileChange, onCircleChange, mode,
+  showSlices, showFullCircle, fsColor,
 }: {
   profile: ProfilePoint[];
   waterTable: WaterTable | null;
@@ -44,209 +46,37 @@ function SlopeCanvas({
   onProfileChange: (p: ProfilePoint[]) => void;
   onCircleChange: (c: SlipCircle) => void;
   mode: "view" | "edit-profile" | "edit-circle";
+  showSlices: boolean;
+  showFullCircle: boolean;
+  fsColor: string;
 }) {
   const cvs = useRef<HTMLCanvasElement>(null);
   const [drag, setDrag] = useState<{ type: "circle-center" | "circle-radius" | "profile-point"; idx?: number } | null>(null);
 
-  const toWorld = useCallback((ex: number, ey: number, canvas: HTMLCanvasElement) => {
-    const r = canvas.getBoundingClientRect();
-    const pad = { l: 50, r: 20, t: 20, b: 40 };
-    const W = canvas.width - pad.l - pad.r;
-    const H = canvas.height - pad.t - pad.b;
-    const xs = profile.map(p => p.x);
-    const ys = profile.map(p => p.y);
-    const xMin = Math.min(...xs) - 5, xMax = Math.max(...xs) + 5;
-    const yMin = Math.min(...ys) - 5, yMax = Math.max(...ys) + 10;
-    const px = ex - r.left - pad.l;
-    const py = ey - r.top - pad.t;
-    return {
-      x: xMin + (px / W) * (xMax - xMin),
-      y: yMax - (py / H) * (yMax - yMin),
-    };
-  }, [profile]);
-
-  const toCanvas = useCallback((wx: number, wy: number, canvas: HTMLCanvasElement) => {
-    const pad = { l: 50, r: 20, t: 20, b: 40 };
-    const W = canvas.width - pad.l - pad.r;
-    const H = canvas.height - pad.t - pad.b;
-    const xs = profile.map(p => p.x);
-    const ys = profile.map(p => p.y);
-    const xMin = Math.min(...xs) - 5, xMax = Math.max(...xs) + 5;
-    const yMin = Math.min(...ys) - 5, yMax = Math.max(...ys) + 10;
-    return {
-      cx: pad.l + ((wx - xMin) / (xMax - xMin)) * W,
-      cy: pad.t + ((yMax - wy) / (yMax - yMin)) * H,
-    };
-  }, [profile]);
-
   useEffect(() => {
     const canvas = cvs.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d")!;
-    const W = canvas.width, H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-    const pad = { l: 50, r: 20, t: 20, b: 40 };
-    const xs = profile.map(p => p.x);
-    const ys = profile.map(p => p.y);
-    const xMin = Math.min(...xs) - 5, xMax = Math.max(...xs) + 5;
-    const yMin = Math.min(...ys) - 5, yMax = Math.max(...ys) + 10;
-
-    const tc = (wx: number, wy: number) => ({
-      cx: pad.l + ((wx - xMin) / (xMax - xMin)) * (W - pad.l - pad.r),
-      cy: pad.t + ((yMax - wy) / (yMax - yMin)) * (H - pad.t - pad.b),
+    drawGeo5SlopeScene(ctx, canvas.width, canvas.height, {
+      profile,
+      layers,
+      waterTable,
+      circle,
+      result,
+      fsColor,
+      showSlices,
+      showFullCircle,
+      editPoints: mode === "edit-profile",
     });
-
-    // Grade
-    ctx.strokeStyle = "rgba(148,163,184,.12)";
-    ctx.lineWidth = 1;
-    const xSteps = Math.ceil((xMax - xMin) / 10);
-    for (let i = 0; i <= xSteps; i++) {
-      const x = xMin + i * 10;
-      const { cx } = tc(x, 0);
-      ctx.beginPath(); ctx.moveTo(cx, pad.t); ctx.lineTo(cx, H - pad.b); ctx.stroke();
-    }
-
-    // Camadas de solo
-    const layerTops = [yMax];
-    let cumDepth = yMax;
-    for (const l of layers) {
-      cumDepth -= l.thickness;
-      layerTops.push(cumDepth);
-    }
-    for (let li = 0; li < layers.length; li++) {
-      const l = layers[li];
-      const yTop = layerTops[li];
-      const yBot = layerTops[li + 1] ?? yMin;
-      const { cy: cyTop } = tc(xMin, yTop);
-      const { cy: cyBot } = tc(xMin, yBot);
-      ctx.fillStyle = l.color + "40";
-      ctx.fillRect(pad.l, cyTop, W - pad.l - pad.r, cyBot - cyTop);
-      ctx.strokeStyle = l.color + "60";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath(); ctx.moveTo(pad.l, cyBot); ctx.lineTo(W - pad.r, cyBot); ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Perfil do talude
-    ctx.beginPath();
-    for (let i = 0; i < profile.length; i++) {
-      const { cx, cy } = tc(profile[i].x, profile[i].y);
-      i === 0 ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy);
-    }
-    const { cy: cyBot } = tc(0, yMin - 2);
-    ctx.lineTo(tc(xMax, yMin - 2).cx, cyBot);
-    ctx.lineTo(tc(xMin, yMin - 2).cx, cyBot);
-    ctx.closePath();
-    ctx.fillStyle = "#92400e22";
-    ctx.fill();
-    ctx.strokeStyle = "#92400e";
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-
-    // Nível d'água
-    if (waterTable && waterTable.points.length > 1) {
-      ctx.beginPath();
-      for (let i = 0; i < waterTable.points.length; i++) {
-        const { cx, cy } = tc(waterTable.points[i].x, waterTable.points[i].y);
-        i === 0 ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy);
-      }
-      ctx.strokeStyle = "#3b82f6";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 3]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Círculo de ruptura
-    if (circle) {
-      const { cx: ccx, cy: ccy } = tc(circle.cx, circle.cy);
-      const scaleX = (W - pad.l - pad.r) / (xMax - xMin);
-      const cr = circle.r * scaleX;
-
-      // Fatias
-      if (result?.slices) {
-        for (const s of result.slices) {
-          const { cx: sx1, cy: sy1 } = tc(s.x - s.b / 2, profileY(profile, s.x - s.b / 2));
-          const { cx: sx2 } = tc(s.x + s.b / 2, 0);
-          ctx.fillStyle = "rgba(239,68,68,.08)";
-          ctx.fillRect(sx1, sy1, sx2 - sx1, H - pad.b - sy1);
-        }
-      }
-
-      // Arco
-      ctx.beginPath();
-      ctx.arc(ccx, ccy, cr, 0, Math.PI * 2);
-      const fsColor = result ? classifyFS(result.fs).color : "#ef4444";
-      ctx.strokeStyle = fsColor;
-      ctx.lineWidth = 2.5;
-      ctx.setLineDash([]);
-      ctx.stroke();
-
-      // Centro
-      ctx.beginPath();
-      ctx.arc(ccx, ccy, 5, 0, Math.PI * 2);
-      ctx.fillStyle = fsColor;
-      ctx.fill();
-
-      // FS label
-      if (result) {
-        ctx.font = "bold 14px sans-serif";
-        ctx.fillStyle = fsColor;
-        ctx.textAlign = "center";
-        ctx.fillText(`FS = ${result.fs.toFixed(2)}`, ccx, ccy - cr - 8);
-      }
-    }
-
-    // Eixos
-    ctx.fillStyle = "#64748b";
-    ctx.font = "10px sans-serif";
-    ctx.textAlign = "right";
-    const ySteps = Math.ceil((yMax - yMin) / 5);
-    for (let i = 0; i <= ySteps; i++) {
-      const y = yMin + i * 5;
-      const { cy } = tc(0, y);
-      ctx.fillText(y.toFixed(0) + "m", pad.l - 4, cy + 3);
-    }
-    ctx.textAlign = "center";
-    for (let i = 0; i <= Math.ceil((xMax - xMin) / 10); i++) {
-      const x = xMin + i * 10;
-      const { cx } = tc(x, 0);
-      ctx.fillText(x.toFixed(0), cx, H - pad.b + 14);
-    }
-
-    // Pontos editáveis
-    if (mode === "edit-profile") {
-      for (const p of profile) {
-        const { cx, cy } = tc(p.x, p.y);
-        ctx.beginPath();
-        ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-        ctx.fillStyle = "#f59e0b";
-        ctx.fill();
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-    }
-  }, [profile, waterTable, circle, layers, result, mode]);
-
-  function profileY(prof: ProfilePoint[], x: number): number {
-    for (let i = 0; i < prof.length - 1; i++) {
-      if (x >= prof[i].x && x <= prof[i + 1].x) {
-        const t = (x - prof[i].x) / (prof[i + 1].x - prof[i].x);
-        return prof[i].y + t * (prof[i + 1].y - prof[i].y);
-      }
-    }
-    return x <= prof[0].x ? prof[0].y : prof[prof.length - 1].y;
-  }
+  }, [profile, waterTable, circle, layers, result, mode, showSlices, showFullCircle, fsColor]);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!cvs.current || mode === "view") return;
-    const w = toWorld(e.clientX, e.clientY, cvs.current);
+    const w = canvasWorldFromEvent(e.clientX, e.clientY, cvs.current, profile);
 
     if (mode === "edit-profile") {
-      // Encontra ponto mais próximo
       let minD = Infinity; let idx = -1;
       profile.forEach((p, i) => {
         const d = Math.sqrt((p.x - w.x) ** 2 + (p.y - w.y) ** 2);
@@ -254,7 +84,6 @@ function SlopeCanvas({
       });
       if (idx >= 0) setDrag({ type: "profile-point", idx });
       else {
-        // Adiciona ponto
         const newP = [...profile, { x: w.x, y: w.y }];
         newP.sort((a, b) => a.x - b.x);
         onProfileChange(newP);
@@ -269,7 +98,7 @@ function SlopeCanvas({
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!drag || !cvs.current) return;
-    const w = toWorld(e.clientX, e.clientY, cvs.current);
+    const w = canvasWorldFromEvent(e.clientX, e.clientY, cvs.current, profile);
     if (drag.type === "profile-point" && drag.idx !== undefined) {
       const newP = profile.map((p, i) => i === drag.idx ? { x: p.x, y: w.y } : p);
       onProfileChange(newP);
@@ -284,9 +113,9 @@ function SlopeCanvas({
   return (
     <canvas
       ref={cvs}
-      width={900} height={420}
-      className="w-full h-full"
-      style={{ cursor: mode === "view" ? "default" : "crosshair" }}
+      width={1100} height={480}
+      className="w-full h-full block"
+      style={{ cursor: mode === "view" ? "default" : "crosshair", background: "#f3f1eb" }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={() => setDrag(null)}
@@ -309,6 +138,9 @@ export function TaludesClient() {
   const [mode, setMode] = useState<"view" | "edit-profile" | "edit-circle">("view");
   const [activeTab, setActiveTab] = useState<"layers" | "circle" | "results">("layers");
   const [searchMethod, setSearchMethod] = useState<"bishop" | "fellenius" | "janbu">("bishop");
+  const [showSlices, setShowSlices] = useState(true);
+  const [showFullCircle, setShowFullCircle] = useState(false);
+  const [resultMethod, setResultMethod] = useState<"bishop" | "fellenius" | "janbu">("bishop");
   const [cadImport, setCadImport] = useState<{
     projectName: string;
     profileName: string;
@@ -394,6 +226,7 @@ export function TaludesClient() {
     await new Promise(r => setTimeout(r, 10));
     const all = analyzeAllMethods(profile, layers, waterTable, circle);
     setResults(all);
+    setResultMethod("bishop");
     setRunning(false);
     setActiveTab("results");
   }, [profile, layers, waterTable, circle]);
@@ -419,6 +252,7 @@ export function TaludesClient() {
     const res = findCriticalCircle(profile, layers, waterTable, config, setProgress);
     setCircle(res.circle);
     setResults({ [searchMethod]: res });
+    setResultMethod(searchMethod);
     setRunning(false);
     setActiveTab("results");
   }, [profile, layers, waterTable, searchMethod]);
@@ -438,7 +272,8 @@ export function TaludesClient() {
   const removeLayer = (id: string) => setLayers(prev => prev.filter(l => l.id !== id));
 
   const bishop = results.bishop;
-  const criticalResult = Object.values(results).find(r => r.critical) ?? bishop;
+  const criticalResult = results[resultMethod] ?? Object.values(results).find(r => r.critical) ?? bishop;
+  const fsColor = criticalResult ? classifyFS(criticalResult.fs).color : "#c0392b";
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[var(--bg)]">
@@ -499,16 +334,25 @@ export function TaludesClient() {
       <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--b1)] bg-[var(--surf)] flex-shrink-0">
         <div className="flex items-center gap-3">
           <span className="text-sm font-semibold text-[var(--tx)]">⛰ Estabilidade de Taludes</span>
+          <span className="hidden sm:inline text-[10px] text-[var(--mu)] border border-[var(--b1)] rounded px-1.5 py-0.5 bg-[var(--card)]">Estilo GEO5</span>
           <div className="flex gap-1">
             {(["view","edit-profile","edit-circle"] as const).map(m => (
               <button key={m} onClick={() => setMode(m)}
                 className={`px-2 py-0.5 rounded text-[.6rem] font-semibold transition-colors ${
-                  mode === m ? "bg-[var(--bl)] text-white" : "bg-[var(--card)] text-[var(--mu)] hover:text-[var(--tx)]"
+                  mode === m ? "bg-[#2c5282] text-white" : "bg-[var(--card)] text-[var(--mu)] hover:text-[var(--tx)]"
                 }`}>
-                {m === "view" ? "👁 Ver" : m === "edit-profile" ? "✏ Perfil" : "○ Círculo"}
+                {m === "view" ? "Secção" : m === "edit-profile" ? "Perfil" : "Círculo"}
               </button>
             ))}
           </div>
+          <label className="hidden md:flex items-center gap-1 text-[10px] text-[var(--mu)] cursor-pointer">
+            <input type="checkbox" checked={showSlices} onChange={e => setShowSlices(e.target.checked)} className="rounded" />
+            Fatias
+          </label>
+          <label className="hidden md:flex items-center gap-1 text-[10px] text-[var(--mu)] cursor-pointer">
+            <input type="checkbox" checked={showFullCircle} onChange={e => setShowFullCircle(e.target.checked)} className="rounded" />
+            Círculo completo
+          </label>
         </div>
         <div className="flex gap-2 items-center">
           <input
@@ -624,78 +468,47 @@ export function TaludesClient() {
             {/* CÍRCULO */}
             {activeTab === "circle" && (
               <div className="p-2 space-y-2">
-                <div className="text-[.55rem] font-bold text-[var(--mu)] uppercase tracking-widest mb-1">Parâmetros do círculo</div>
+                <div className="text-[.55rem] font-bold text-[var(--mu)] uppercase tracking-widest mb-1">Superfície circular (GEO5)</div>
                 {[
                   { label: "Centro X (m)", key: "cx" as const },
                   { label: "Centro Y (m)", key: "cy" as const },
-                  { label: "Raio (m)", key: "r" as const },
+                  { label: "Raio R (m)", key: "r" as const },
                 ].map(({ label, key }) => (
                   <div key={key}>
                     <div className="text-[.58rem] text-[var(--mu)] mb-0.5">{label}</div>
                     <input type="number" step="0.5" value={circle[key].toFixed(1)}
                       onChange={e => setCircle(prev => ({ ...prev, [key]: parseFloat(e.target.value) || 0 }))}
-                      className="w-full text-[.7rem] bg-[var(--card)] border border-[var(--b1)] rounded px-2 py-1 text-[var(--tx)]" />
+                      className="w-full text-[.7rem] bg-[var(--card)] border border-[var(--b1)] rounded px-2 py-1 text-[var(--tx)] font-mono" />
                   </div>
                 ))}
-                <div className="text-[.58rem] text-[var(--mu)] mt-2">
-                  💡 Clique e arraste no canvas (modo ○ Círculo) para ajustar visualmente
+                <div className="rounded border border-[#c8c4bc] bg-[#f5f3ed] p-2 text-[10px] text-[#555] space-y-1">
+                  <p><strong>Círculo crítico:</strong> use o botão no topo para busca automática de centro e raio.</p>
+                  <p><strong>Modo Círculo:</strong> arraste o centro ou o raio diretamente na secção.</p>
                 </div>
               </div>
             )}
 
-            {/* RESULTADOS */}
             {activeTab === "results" && (
               <div className="p-2 space-y-2">
                 {Object.keys(results).length === 0 ? (
                   <div className="text-[.65rem] text-[var(--mu)] text-center py-4">
-                    Clique em "Calcular FS" para ver os resultados
+                    Calcule o FS ou busque o círculo crítico para ver resultados.
                   </div>
                 ) : (
                   <>
-                    {Object.entries(results).map(([key, res]) => {
-                      const cls = classifyFS(res.fs);
-                      return (
-                        <div key={key} className="bg-[var(--card)] rounded border border-[var(--b1)] p-2">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[.62rem] font-semibold text-[var(--tx)]">{res.method}</span>
-                            <span className="text-[.55rem] px-1.5 py-0.5 rounded font-bold"
-                              style={{ background: cls.color + "22", color: cls.color }}>
-                              {cls.label}
-                            </span>
-                          </div>
-                          <div className="text-2xl font-bold" style={{ color: cls.color }}>
-                            {res.fs.toFixed(3)}
-                          </div>
-                          <div className="text-[.55rem] text-[var(--mu)] mt-0.5">
-                            {res.slices.length} fatias · {res.iterations} iterações
-                            {res.converged ? " · convergiu" : " · não convergiu"}
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {/* Critérios normativos */}
-                    <div className="border-t border-[var(--b1)] pt-2 mt-1">
-                      <div className="text-[.55rem] font-bold text-[var(--mu)] uppercase tracking-widest mb-1.5">
-                        Critérios ABNT NBR 11682
-                      </div>
-                      {[
-                        { label: "Obras definitivas", min: 1.5, color: "#22c55e" },
-                        { label: "Obras temporárias", min: 1.3, color: "#eab308" },
-                        { label: "Crítico", min: 1.1, color: "#ef4444" },
-                      ].map(({ label, min, color }) => {
-                        const fs = bishop?.fs ?? 1;
-                        const ok = fs >= min;
-                        return (
-                          <div key={label} className="flex items-center justify-between py-0.5">
-                            <span className="text-[.6rem] text-[var(--mu)]">{label} (FS ≥ {min})</span>
-                            <span className="text-[.6rem] font-bold" style={{ color: ok ? "#22c55e" : "#ef4444" }}>
-                              {ok ? "✔ OK" : "✗ NÃO"}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-[var(--mu)]">Método exibido</div>
+                    <select
+                      value={resultMethod}
+                      onChange={e => setResultMethod(e.target.value as typeof resultMethod)}
+                      className="w-full text-[.65rem] bg-[var(--card)] border border-[var(--b1)] rounded px-2 py-1"
+                    >
+                      {Object.keys(results).map(k => (
+                        <option key={k} value={k}>{results[k].method}</option>
+                      ))}
+                    </select>
+                    {criticalResult ? (
+                      <Geo5NormativePanel fs={criticalResult.fs} />
+                    ) : null}
                   </>
                 )}
               </div>
@@ -703,30 +516,37 @@ export function TaludesClient() {
           </div>
         </div>
 
-        {/* Canvas */}
-        <div className="flex-1 min-w-0 bg-[var(--bg)] relative">
-          <SlopeCanvas
-            profile={profile}
-            waterTable={waterTable}
-            circle={circle}
-            layers={layers}
-            result={criticalResult ?? null}
-            onProfileChange={setProfile}
-            onCircleChange={setCircle}
-            mode={mode}
-          />
-          {/* FS badge */}
-          {criticalResult && (
-            <div className="absolute top-3 right-3 px-3 py-1.5 rounded bg-[var(--card)] border border-[var(--b1)] text-center">
-              <div className="text-[.5rem] text-[var(--mu)] uppercase tracking-widest">FS Bishop</div>
-              <div className="text-xl font-bold" style={{ color: classifyFS(criticalResult.fs).color }}>
-                {criticalResult.fs.toFixed(2)}
+        {/* Área principal estilo GEO5 */}
+        <div className="flex-1 min-w-0 flex flex-col bg-[#e8e6e0]">
+          <div className="flex-1 min-h-0 relative border-b border-[#c8c4bc]">
+            <SlopeCanvas
+              profile={profile}
+              waterTable={waterTable}
+              circle={circle}
+              layers={layers}
+              result={criticalResult ?? null}
+              onProfileChange={setProfile}
+              onCircleChange={setCircle}
+              mode={mode}
+              showSlices={showSlices}
+              showFullCircle={showFullCircle}
+              fsColor={fsColor}
+            />
+          </div>
+
+          {Object.keys(results).length > 0 ? (
+            <div className="flex-shrink-0 max-h-[42%] flex flex-col overflow-hidden">
+              <Geo5ResultsSummary
+                results={results}
+                circle={circle}
+                activeMethod={resultMethod}
+              />
+              <div className="text-[10px] font-bold uppercase tracking-wide text-[#555] px-3 py-1 bg-[#dfe6ef] border-t border-[#c8c4bc]">
+                Tabela de fatias — {criticalResult?.method ?? ""}
               </div>
-              <div className="text-[.55rem]" style={{ color: classifyFS(criticalResult.fs).color }}>
-                {classifyFS(criticalResult.fs).label}
-              </div>
+              <Geo5SliceTable result={criticalResult ?? null} />
             </div>
-          )}
+          ) : null}
         </div>
       </div>
 

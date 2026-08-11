@@ -77,6 +77,38 @@ function circleY(cx: number, cy: number, r: number, x: number): number | null {
   return cy - Math.sqrt(r * r - dx * dx);
 }
 
+/** Segmento da superfície de escorregamento (arco dentro do talude). */
+export function getSlipArcSegment(
+  profile: ProfilePoint[],
+  circle: SlipCircle,
+  step = 0.25,
+): { xEntry: number; xExit: number; arcPoints: ProfilePoint[] } | null {
+  const { cx, cy, r } = circle;
+  const xLeft = cx - r;
+  const xRight = cx + r;
+  const arcPoints: ProfilePoint[] = [];
+  let xEntry = NaN;
+  let xExit = NaN;
+
+  for (let x = xLeft; x <= xRight + step / 2; x += step) {
+    const yCircle = circleY(cx, cy, r, x);
+    if (yCircle === null) continue;
+    const ySurface = profileY(profile, x);
+    if (ySurface > yCircle + 0.01) {
+      if (Number.isNaN(xEntry)) xEntry = x;
+      xExit = x;
+      arcPoints.push({ x, y: yCircle });
+    }
+  }
+
+  if (arcPoints.length < 2 || Number.isNaN(xEntry)) return null;
+  return { xEntry, xExit, arcPoints };
+}
+
+export function exportProfileY(profile: ProfilePoint[], x: number): number {
+  return profileY(profile, x);
+}
+
 function waterTableY(wt: WaterTable | null, x: number): number {
   if (!wt || wt.points.length === 0) return -Infinity;
   return profileY(wt.points, x);
