@@ -35,6 +35,7 @@ describe("product-mode", () => {
     process.env.NEXT_PUBLIC_PRODUCT_MODE = "LOTEAMENTO";
     assert.equal(isLoteamentoProductMode(), true);
     assert.equal(isProductVisibleHref("/cad"), true);
+    assert.equal(isProductVisibleHref("/cadastro"), false);
     assert.equal(isProductVisibleHref("/cad/foo"), true);
     assert.equal(isProductVisibleHref("/geo?tab=midia"), true);
     assert.equal(isProductVisibleHref("/geo/temporal"), true);
@@ -69,6 +70,7 @@ describe("product-mode", () => {
     );
 
     assert.equal(isProductVisibleMarketingHref("/#galeria-sondagens"), false);
+    assert.equal(isProductVisibleMarketingHref("/#como-funciona"), false);
     assert.equal(isProductVisibleMarketingHref("/funcionalidades"), true);
   });
 });

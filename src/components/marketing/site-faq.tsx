@@ -1,3 +1,5 @@
+import { isLoteamentoProductMode } from "@/lib/product-mode";
+
 const faqs = [
   {
     q: "Preciso instalar algo no servidor?",
@@ -17,13 +19,27 @@ const faqs = [
   },
 ];
 
+const faqsLoteamento = [
+  faqs[0],
+  {
+    q: "O que está incluído neste produto?",
+    a: "Ambiente CAD, mapas GEO e estudo de viabilidade do loteamento — do desenho à análise de custos.",
+  },
+  faqs[2],
+  {
+    q: "Como funciona o estudo de viabilidade?",
+    a: "Gere o estudo a partir do loteamento no Ambiente CAD, com quantitativos, custos de referência e indicadores.",
+  },
+];
+
 export function SiteFaq() {
+  const items = isLoteamentoProductMode() ? faqsLoteamento : faqs;
   return (
     <section id="faq" className="scroll-mt-24 border-t border-[var(--dg-border)] py-20 sm:py-28">
       <div className="mx-auto max-w-3xl px-4 sm:px-6">
         <h2 className="text-center text-3xl font-bold">Perguntas frequentes</h2>
         <dl className="mt-12 space-y-6">
-          {faqs.map((item) => (
+          {items.map((item) => (
             <div
               key={item.q}
               className="rounded-xl border border-[var(--dg-border)] bg-[var(--dg-card)] p-6"

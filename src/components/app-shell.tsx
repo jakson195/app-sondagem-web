@@ -30,6 +30,7 @@ function isHiddenNavHref(href: string): boolean {
 const coreNav = [
   { href: "/dashboard", label: "📊 Painel" },
   { href: "/cad", label: "📐 Ambiente CAD" },
+  { href: "/geo", label: "🧭 GEO" },
   { href: "/viabilidade", label: "📊 Estudo de viabilidade" },
   { href: "/taludes", label: "⛰ Estabilidade de Taludes" },
   { href: "/hidrologia/hidrogeo-brasil", label: "🗺️ HidroGeo Brasil (CPRM + ANM)" },
@@ -270,6 +271,7 @@ export function AppShell({
       label: item.label,
     }));
     const insertAt = 1;
+    const seen = new Set<string>();
     return [
       ...coreNav.slice(0, insertAt).map((x) => ({
         href: hrefWithObra(x.href, selectedObraId),
@@ -280,12 +282,19 @@ export function AppShell({
         href: hrefWithObra(x.href, selectedObraId),
         label: x.label,
       })),
-    ].filter(
-      (item) =>
-        !isHiddenNavHref(item.href) &&
-        isProductVisibleHref(item.href) &&
-        (isPlatformAdmin || !isPlatformAdminNavHref(item.href)),
-    );
+    ].filter((item) => {
+      if (
+        isHiddenNavHref(item.href) ||
+        !isProductVisibleHref(item.href) ||
+        (!isPlatformAdmin && isPlatformAdminNavHref(item.href))
+      ) {
+        return false;
+      }
+      const path = item.href.split("?")[0] ?? item.href;
+      if (seen.has(path)) return false;
+      seen.add(path);
+      return true;
+    });
   }, [moduleNav, selectedObraId, isPlatformAdmin]);
 
   const isCadWorkspace = pathname === "/cad" || pathname.startsWith("/cad/");

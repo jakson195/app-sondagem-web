@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { isLoteamentoProductMode } from "@/lib/product-mode";
 
 export function CtaSection() {
+  const loteamento = isLoteamentoProductMode();
   return (
     <section id="contato" className="scroll-mt-24 py-20 sm:py-28">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
@@ -9,8 +11,9 @@ export function CtaSection() {
             Comece com trial grátis de 90 dias
           </h2>
           <p className="mx-auto mt-4 max-w-lg text-[var(--dg-muted)]">
-            Crie a sua conta, convide a equipa e teste SPT, mapas e relatórios.
-            Sem cartão de crédito no trial.
+            {loteamento
+              ? "Crie a sua conta, convide a equipa e teste o Ambiente CAD, o GEO e o estudo de viabilidade. Sem cartão de crédito no trial."
+              : "Crie a sua conta, convide a equipa e teste SPT, mapas e relatórios. Sem cartão de crédito no trial."}
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-4">
             <Link

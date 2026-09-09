@@ -10,6 +10,7 @@ export const metadata: Metadata = {
 };
 
 export default function FuncionalidadesPage() {
+  const loteamento = isLoteamentoProductMode();
   return (
     <>
       <section className="border-b border-[var(--dg-border)] px-4 pb-12 pt-28 sm:px-6">
@@ -19,14 +20,19 @@ export default function FuncionalidadesPage() {
           </p>
           <h1 className="mt-2 text-4xl font-bold tracking-tight">Funcionalidades</h1>
           <p className="mt-4 max-w-2xl text-[var(--dg-muted)]">
-            Catálogo completo de módulos DataGeo Digital — active por empresa o que
-            precisar.
+            {loteamento
+              ? "Ambiente CAD, GEO e estudo de viabilidade para loteamento — do desenho à análise de custos."
+              : "Catálogo completo de módulos DataGeo Digital — active por empresa o que precisar."}
           </p>
         </div>
       </section>
-      <ModulesSection showCta={false} title="Catálogo de módulos" subtitle="" />
-      {!isLoteamentoProductMode() && <SondagemGallerySection />}
-      {!isLoteamentoProductMode() && <SiteServiceGuide />}
+      <ModulesSection
+        showCta={false}
+        title={loteamento ? "Módulos do produto" : "Catálogo de módulos"}
+        subtitle=""
+      />
+      {!loteamento && <SondagemGallerySection />}
+      {!loteamento && <SiteServiceGuide />}
       <section className="px-4 py-16 sm:px-6">
         <div className="mx-auto max-w-6xl text-center">
           <Link

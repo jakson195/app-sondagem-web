@@ -1,11 +1,35 @@
 import Link from "next/link";
-import { SAAS_PLANS } from "@/lib/saas/plans";
+import { isLoteamentoProductMode } from "@/lib/product-mode";
+import { SAAS_PLANS, type SaasPlanId } from "@/lib/saas/plans";
+
+const LOTEAMENTO_PLAN_FEATURES: Record<SaasPlanId, string[]> = {
+  trial: [
+    "Ambiente CAD e loteamento",
+    "GEO e imagens",
+    "Estudo de viabilidade",
+    "Sem cartão de crédito",
+  ],
+  pro: [
+    "CAD, GEO e estudo de viabilidade",
+    "Mais projectos e utilizadores",
+    "Prioridade no suporte",
+    "Contacto comercial",
+  ],
+  enterprise: [
+    "Tudo do Pro",
+    "SSO e API dedicada",
+    "Implementação assistida",
+    "Formação e implementação",
+    "Gestor de conta dedicado",
+  ],
+};
 
 type Props = {
   compact?: boolean;
 };
 
 export function PricingSection({ compact = false }: Props) {
+  const loteamento = isLoteamentoProductMode();
   return (
     <section id="planos" className="scroll-mt-24 py-20 sm:py-28">
       <div className="mx-auto max-w-6xl px-4 text-center sm:px-6">
@@ -38,7 +62,7 @@ export function PricingSection({ compact = false }: Props) {
               </p>
               <p className="mt-3 text-sm text-[var(--dg-muted)]">{plan.description}</p>
               <ul className="mt-6 flex-1 space-y-2 text-sm">
-                {plan.features.map((f) => (
+                {(loteamento ? LOTEAMENTO_PLAN_FEATURES[plan.id] : plan.features).map((f) => (
                   <li key={f} className="flex gap-2">
                     <span className="text-[var(--dg-cyan)]">✓</span> {f}
                   </li>

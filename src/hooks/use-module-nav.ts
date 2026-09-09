@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import type { ModuloProjetoChave } from "@/lib/modulos-projeto";
-import { filterNavByProductMode } from "@/lib/product-mode";
+import { filterNavByProductMode, isLoteamentoProductMode } from "@/lib/product-mode";
 import { buildMainModuleNav } from "@/modules/registry";
 
 const MODULE_NAV_DEFS: {
@@ -30,7 +30,13 @@ export function useModuleNav(options: {
       obraId != null ? `${href}?obraId=${obraId}` : href;
 
     let items = MODULE_NAV_DEFS;
-    if (obraId != null && !modulesLoading && obraModules != null) {
+    // Em LOTEAMENTO o GEO fica sempre no menu, mesmo com obra sem o módulo.
+    if (
+      obraId != null &&
+      !modulesLoading &&
+      obraModules != null &&
+      !isLoteamentoProductMode()
+    ) {
       items = MODULE_NAV_DEFS.filter((item) => obraModules[item.module]);
     }
 

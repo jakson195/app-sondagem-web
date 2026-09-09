@@ -76,8 +76,9 @@ export function SiteIndustries() {
             </h2>
           </div>
           <p className="max-w-sm text-sm leading-relaxed text-[var(--dg-muted)]">
-            Consultorias de geotecnia, mineração e engenharia que precisam de campo,
-            relatórios e entrega num só fluxo.
+            {isLoteamentoProductMode()
+              ? "Projectos de loteamento com plantas, mapas e análise de custos no mesmo fluxo."
+              : "Consultorias de geotecnia, mineração e engenharia que precisam de campo, relatórios e entrega num só fluxo."}
           </p>
         </div>
 

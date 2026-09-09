@@ -70,7 +70,7 @@ export function SitePlatformSection() {
               href="/funcionalidades"
               className="mt-4 inline-block text-sm text-[var(--dg-cyan)] hover:underline"
             >
-              Ver catálogo completo →
+              {loteamento ? "Ver módulos →" : "Ver catálogo completo →"}
             </Link>
           </div>
         </div>

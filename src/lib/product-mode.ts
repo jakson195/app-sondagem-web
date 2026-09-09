@@ -75,6 +75,8 @@ export function filterModulesByProductMode<T extends { id: string }>(modules: T[
 export function isProductVisibleMarketingHref(href: string): boolean {
   if (getProductMode() === "FULL") return true;
   const raw = href.trim();
-  if (raw.includes("galeria-sondagens") || raw.includes("ntrip")) return false;
+  if (raw.includes("galeria-sondagens") || raw.includes("ntrip") || raw.includes("como-funciona")) {
+    return false;
+  }
   return true;
 }
