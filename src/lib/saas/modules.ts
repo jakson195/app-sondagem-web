@@ -7,6 +7,7 @@ import {
   Map,
   Mountain,
   PenTool,
+  PieChart,
 } from "lucide-react";
 
 export type MarketingModule = {
@@ -38,6 +39,14 @@ export const MARKETING_MODULES: MarketingModule[] = [
     title: "GEO & temporal",
     description: "Mapas, InSAR, Landsat e camadas de contexto para obras e áreas de estudo.",
     icon: Map,
+  },
+  {
+    id: "viabilidade",
+    title: "Estudo de viabilidade",
+    description:
+      "Custos SINAPI/SICRO, quantitativos e indicadores financeiros do loteamento.",
+    icon: PieChart,
+    tag: "Loteamento",
   },
   {
     id: "digital-twin",

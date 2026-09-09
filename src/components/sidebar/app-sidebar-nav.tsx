@@ -7,6 +7,7 @@ import {
   isDigitalTwinPath,
 } from "@/lib/digital-twin-nav";
 import { SidebarNavGroup } from "@/components/sidebar/sidebar-nav-group";
+import { isLoteamentoProductMode } from "@/lib/product-mode";
 
 export type FlatNavItem = { href: string; label: string };
 
@@ -53,14 +54,16 @@ export function AppSidebarNav({ pathname, flatItems, onNavigate }: Props) {
         );
       })}
 
-      <SidebarNavGroup
-        label="Digital Twin"
-        icon={digitalTwinGroupIcon}
-        items={dtItems}
-        pathname={pathname}
-        defaultOpen={isDigitalTwinPath(pathname)}
-        onNavigate={onNavigate}
-      />
+      {!isLoteamentoProductMode() && (
+        <SidebarNavGroup
+          label="Digital Twin"
+          icon={digitalTwinGroupIcon}
+          items={dtItems}
+          pathname={pathname}
+          defaultOpen={isDigitalTwinPath(pathname)}
+          onNavigate={onNavigate}
+        />
+      )}
     </nav>
   );
 }

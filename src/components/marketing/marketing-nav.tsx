@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
 import { BrandLogo } from "@/components/brand/brand-logo";
+import { isProductVisibleMarketingHref } from "@/lib/product-mode";
 
 const NAV = [
   { href: "/#como-funciona", label: "Como funciona" },
@@ -19,6 +20,7 @@ const NAV = [
 export function MarketingNav() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const navItems = NAV.filter((item) => isProductVisibleMarketingHref(item.href));
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-dg-border/80 bg-dg-black/80 backdrop-blur-md">
@@ -26,7 +28,7 @@ export function MarketingNav() {
         <BrandLogo href="/" height={36} />
 
         <nav className="hidden items-center gap-6 text-sm text-dg-muted md:flex" aria-label="Principal">
-          {NAV.map((item) => (
+          {navItems.map((item) => (
             <Link
               key={item.href}
               href={item.href}
@@ -62,7 +64,7 @@ export function MarketingNav() {
       {open ? (
         <div className="border-t border-dg-border bg-dg-card px-4 py-4 md:hidden">
           <nav className="flex flex-col gap-3" aria-label="Mobile">
-            {NAV.map((item) => (
+            {navItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}

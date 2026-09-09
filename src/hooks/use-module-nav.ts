@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { ModuloProjetoChave } from "@/lib/modulos-projeto";
+import { filterNavByProductMode } from "@/lib/product-mode";
 import { buildMainModuleNav } from "@/modules/registry";
 
 const MODULE_NAV_DEFS: {
@@ -33,10 +34,12 @@ export function useModuleNav(options: {
       items = MODULE_NAV_DEFS.filter((item) => obraModules[item.module]);
     }
 
-    return items.map((item) => ({
-      href: withObra(item.href),
-      label: item.label,
-    }));
+    return filterNavByProductMode(
+      items.map((item) => ({
+        href: withObra(item.href),
+        label: item.label,
+      })),
+    );
   }, [obraId, obraModules, modulesLoading]);
 }
 

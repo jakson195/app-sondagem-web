@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { isLoteamentoProductMode } from "@/lib/product-mode";
 
 type Sector = {
   id: string;
@@ -11,6 +12,15 @@ type Sector = {
 };
 
 const sectors: Sector[] = [
+  {
+    id: "loteamento",
+    title: "Loteamento",
+    headline: "CAD, GEO e viabilidade no mesmo fluxo",
+    body: "Plantas, mapas e estudo de viabilidade para loteamentos — do desenho à análise de custos.",
+    tags: ["CAD", "GEO"],
+    gradient: "from-teal-950 via-[#0a1a18] to-[var(--dg-black)]",
+    pattern: "radial-gradient(circle at 75% 25%, rgba(0,194,168,0.35), transparent 50%)",
+  },
   {
     id: "geotecnia",
     title: "Geotecnia",
@@ -49,6 +59,10 @@ function TagBadge({ label }: { label: string }) {
 }
 
 export function SiteIndustries() {
+  const visibleSectors = isLoteamentoProductMode()
+    ? sectors.filter((sector) => sector.id === "loteamento" || sector.id === "obras")
+    : sectors;
+
   return (
     <section id="setores" className="scroll-mt-24 py-20 sm:py-28">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
@@ -68,7 +82,7 @@ export function SiteIndustries() {
         </div>
 
         <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {sectors.map((sector) => (
+          {visibleSectors.map((sector) => (
             <article
               key={sector.id}
               className={`group relative min-h-[280px] overflow-hidden rounded-2xl border border-[var(--dg-border)] bg-gradient-to-br ${sector.gradient} transition hover:border-[var(--dg-cyan)]/30 hover:shadow-[0_12px_40px_rgba(0,194,168,0.12)]`}

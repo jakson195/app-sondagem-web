@@ -10,6 +10,10 @@ import { listAccessibleCompanyIdsForUser } from "@/lib/client-portal-auth";
 import { scopeWhereObrasForUser, userOwnsObra } from "@/lib/obra-access";
 import { prisma } from "@/lib/prisma";
 import { OBRA_STATUS_LABEL, OBRA_STATUS_ORDER } from "@/lib/obra-status";
+import {
+  isLoteamentoProductMode,
+  LOTEAMENTO_MODULE_CARDS,
+} from "@/lib/product-mode";
 import { getAuthUserFromCookies } from "@/lib/server-auth";
 
 export default async function DashboardPage({
@@ -97,6 +101,7 @@ export default async function DashboardPage({
   const byStatus = new Map(
     statusRows.map((r) => [r.status, r._count._all]),
   );
+  const loteamento = isLoteamentoProductMode();
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
@@ -106,28 +111,48 @@ export default async function DashboardPage({
             Painel DataGeo Digital
           </h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            {user.systemRole === "USER"
-              ? "Resumo das suas obras de campo."
-              : "Visão multiempresa: empresas contratantes e obras de campo."}
+            {loteamento
+              ? "CAD, GEO e estudo de viabilidade para loteamento."
+              : user.systemRole === "USER"
+                ? "Resumo das suas obras de campo."
+                : "Visão multiempresa: empresas contratantes e obras de campo."}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Link
-            href="/obra"
-            className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-teal-500"
-          >
-            Nova obra
-            <ArrowRight className="h-4 w-4" />
-          </Link>
-          <Link
-            href="/obras"
-            className="inline-flex items-center rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-2 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface)]"
-          >
-            Todas as obras
-          </Link>
-        </div>
+        {!loteamento && (
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/obra"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-teal-500"
+            >
+              Nova obra
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+            <Link
+              href="/obras"
+              className="inline-flex items-center rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-2 text-sm font-medium text-[var(--text)] hover:bg-[var(--surface)]"
+            >
+              Todas as obras
+            </Link>
+          </div>
+        )}
       </div>
 
+      {loteamento && (
+        <div className="grid gap-4 sm:grid-cols-3">
+          {LOTEAMENTO_MODULE_CARDS.map((card) => (
+            <Link
+              key={card.href}
+              href={card.href}
+              className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm transition hover:border-teal-500/40 hover:shadow-md"
+            >
+              <h2 className="text-base font-semibold text-[var(--text)]">{card.label}</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">{card.description}</p>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {!loteamento && (
       <div className={`grid gap-4 ${user.systemRole === "USER" ? "sm:grid-cols-1" : "sm:grid-cols-3"}`}>
         {user.systemRole !== "USER" && (
           <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm">
@@ -173,7 +198,9 @@ export default async function DashboardPage({
           </div>
         )}
       </div>
+      )}
 
+      {!loteamento && (
       <div className="grid gap-6 lg:grid-cols-2">
         {obraResumo && (
           <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-sm lg:col-span-2">
@@ -265,6 +292,7 @@ export default async function DashboardPage({
           </ul>
         </div>
       </div>
+      )}
     </div>
   );
 }

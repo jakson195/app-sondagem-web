@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { filterModulesByProductMode, isLoteamentoProductMode } from "@/lib/product-mode";
 import { MARKETING_MODULES } from "@/lib/saas/modules";
 
 export function SitePlatformSection() {
-  const preview = MARKETING_MODULES.slice(0, 6);
+  const loteamento = isLoteamentoProductMode();
+  const preview = filterModulesByProductMode(MARKETING_MODULES).slice(0, 6);
 
   return (
     <section id="plataforma" className="scroll-mt-24 py-20 sm:py-28">
@@ -13,16 +15,25 @@ export function SitePlatformSection() {
               Campo + escritório num só lugar
             </h2>
             <p className="mt-4 leading-relaxed text-[var(--dg-muted)]">
-              Sondagem SPT, mapas, relatórios PDF e portal do cliente — com dados
-              guardados por obra na cloud.
+              {loteamento
+                ? "Ambiente CAD, mapas GEO e estudo de viabilidade — com dados guardados na cloud."
+                : "Sondagem SPT, mapas, relatórios PDF e portal do cliente — com dados guardados por obra na cloud."}
             </p>
             <ul className="mt-8 space-y-3 text-sm">
-              {[
-                "Registo de furos e ensaios SPT em campo",
-                "Contas isoladas por utilizador",
-                "Relatórios PDF e portal do cliente",
-                "Deploy cloud e acesso por browser",
-              ].map((item) => (
+              {(loteamento
+                ? [
+                    "Plantas e loteamento no Ambiente CAD",
+                    "Mapas e imagens históricas no GEO",
+                    "Estudo de viabilidade com custos e indicadores",
+                    "Deploy cloud e acesso por browser",
+                  ]
+                : [
+                    "Registo de furos e ensaios SPT em campo",
+                    "Contas isoladas por utilizador",
+                    "Relatórios PDF e portal do cliente",
+                    "Deploy cloud e acesso por browser",
+                  ]
+              ).map((item) => (
                 <li key={item} className="flex gap-3">
                   <span className="mt-0.5 text-[var(--dg-cyan)]">✓</span>
                   {item}

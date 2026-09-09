@@ -1,11 +1,21 @@
-const stats = [
+import { isLoteamentoProductMode } from "@/lib/product-mode";
+
+const statsFull = [
   { value: "90 dias", label: "Trial grátis" },
   { value: "SPT", label: "Sondagem de campo" },
   { value: "Multi", label: "Empresa & obras" },
   { value: "PDF", label: "Relatórios Soilsul" },
 ];
 
+const statsLoteamento = [
+  { value: "90 dias", label: "Trial grátis" },
+  { value: "CAD", label: "Ambiente técnico" },
+  { value: "GEO", label: "Mapas e imagens" },
+  { value: "VIAB", label: "Estudo de viabilidade" },
+];
+
 export function SiteStatsBar() {
+  const stats = isLoteamentoProductMode() ? statsLoteamento : statsFull;
   return (
     <section className="border-y border-[var(--dg-border)] bg-[var(--dg-card)]/50 py-12">
       <div className="mx-auto grid max-w-6xl grid-cols-2 gap-8 px-4 sm:grid-cols-4 sm:px-6">

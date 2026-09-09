@@ -11,6 +11,7 @@ import { AppSidebarNav } from "@/components/sidebar/app-sidebar-nav";
 import { CompanySwitcher } from "@/components/saas/company-switcher";
 import { useModuleNav } from "@/hooks/use-module-nav";
 import { isPlatformAdminNavHref } from "@/lib/platform-admin-nav";
+import { isLoteamentoProductMode, isProductVisibleHref } from "@/lib/product-mode";
 
 /** Rotas ocultas no menu (módulos permanecem acessíveis por URL directa). */
 const hiddenNavPathPrefixes = [
@@ -29,6 +30,7 @@ function isHiddenNavHref(href: string): boolean {
 const coreNav = [
   { href: "/dashboard", label: "📊 Painel" },
   { href: "/cad", label: "📐 Ambiente CAD" },
+  { href: "/viabilidade", label: "📊 Estudo de viabilidade" },
   { href: "/taludes", label: "⛰ Estabilidade de Taludes" },
   { href: "/hidrologia/hidrogeo-brasil", label: "🗺️ HidroGeo Brasil (CPRM + ANM)" },
   { href: "/mineracao/leilao-anm", label: "⛏️ ANM · Leilão SOPLE" },
@@ -104,12 +106,14 @@ function GlobalQuickActions({
   pathname,
   search,
   isPlatformAdmin,
+  compact = false,
 }: {
   selectedObraId: number | null;
   setObraContext: (id: number | null) => void;
   pathname: string;
   search: string;
   isPlatformAdmin: boolean;
+  compact?: boolean;
 }) {
   const [obras, setObras] = useState<Array<{ id: number; nome: string }>>([]);
   const [loadingObras, setLoadingObras] = useState(false);
@@ -176,7 +180,7 @@ function GlobalQuickActions({
   }, [pathname, search, selectedObraId]);
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-2 print:hidden">
+    <div className={`flex flex-wrap items-center gap-2 print:hidden ${compact ? "mb-2" : "mb-4"}`}>
       <label className="flex min-w-[18rem] flex-col gap-1 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm">
         <span className="text-xs font-medium text-[var(--muted)]">Obra (projeto)</span>
         <select
@@ -279,20 +283,45 @@ export function AppShell({
     ].filter(
       (item) =>
         !isHiddenNavHref(item.href) &&
+        isProductVisibleHref(item.href) &&
         (isPlatformAdmin || !isPlatformAdminNavHref(item.href)),
     );
   }, [moduleNav, selectedObraId, isPlatformAdmin]);
 
+  const isCadWorkspace = pathname === "/cad" || pathname.startsWith("/cad/");
+
   return (
-    <div className="dg-mesh-bg flex min-h-screen bg-[var(--surface)]">
+    <div
+      className={`dg-mesh-bg flex bg-[var(--surface)] ${
+        isCadWorkspace ? "h-screen min-h-0 overflow-hidden" : "min-h-screen"
+      }`}
+    >
+      <style>{`
+        html.cad-fullscreen .cad-app-chrome { display: none !important; }
+        html.cad-fullscreen .cad-page-title { display: none !important; }
+        html.cad-fullscreen main.dg-grid-bg {
+          padding: 0 !important;
+        }
+        html.cad-fullscreen,
+        html.cad-fullscreen body {
+          height: 100%;
+          overflow: hidden;
+        }
+        .cad-workspace:fullscreen,
+        .cad-workspace:-webkit-full-screen {
+          width: 100%;
+          height: 100%;
+          box-sizing: border-box;
+        }
+      `}</style>
       {/* Desktop sidebar */}
-      <aside className="dg-sidebar hidden w-64 shrink-0 p-5 print:hidden md:flex md:flex-col">
+      <aside className="cad-app-chrome dg-sidebar hidden w-64 shrink-0 min-h-0 overflow-y-auto p-5 print:hidden md:flex md:flex-col">
         <div className="mb-6">
           <BrandLogo href="/dashboard" height={36} />
         </div>
         <CompanySwitcher isPlatformAdmin={isPlatformAdmin} />
         <AppSidebarNav pathname={pathname} flatItems={flatNavItems} />
-        {selectedObraId != null && (
+        {selectedObraId != null && !isLoteamentoProductMode() && (
           <ObraContextCard
             selectedObraId={selectedObraId}
             obraNome={obraNome}
@@ -306,14 +335,14 @@ export function AppShell({
 
       {/* Mobile overlay */}
       <div
-        className={`fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity duration-200 print:hidden md:hidden ${
+        className={`cad-app-chrome fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity duration-200 print:hidden md:hidden ${
           mobileOpen ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         aria-hidden={!mobileOpen}
         onClick={() => setMobileOpen(false)}
       />
       <aside
-        className={`dg-sidebar fixed inset-y-0 left-0 z-50 flex w-[min(100%-3rem,18rem)] flex-col p-5 shadow-xl transition-transform duration-300 ease-out print:hidden md:hidden ${
+        className={`cad-app-chrome dg-sidebar fixed inset-y-0 left-0 z-50 flex w-[min(100%-3rem,18rem)] flex-col p-5 shadow-xl transition-transform duration-300 ease-out print:hidden md:hidden ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -334,7 +363,7 @@ export function AppShell({
           flatItems={flatNavItems}
           onNavigate={() => setMobileOpen(false)}
         />
-        {selectedObraId != null && (
+        {selectedObraId != null && !isLoteamentoProductMode() && (
           <ObraContextCard
             selectedObraId={selectedObraId}
             obraNome={obraNome}
@@ -349,8 +378,12 @@ export function AppShell({
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)]/90 px-4 backdrop-blur-md print:hidden md:hidden">
+      <div
+        className={`flex min-w-0 flex-1 flex-col ${
+          isCadWorkspace ? "min-h-0 overflow-hidden" : ""
+        }`}
+      >
+        <header className="cad-app-chrome sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)]/90 px-4 backdrop-blur-md print:hidden md:hidden">
           <button
             type="button"
             onClick={() => setMobileOpen(true)}
@@ -361,14 +394,25 @@ export function AppShell({
           </button>
           <BrandLogo href="/dashboard" height={28} />
         </header>
-        <main className="dg-grid-bg flex-1 px-4 py-6 print:bg-white print:px-2 print:py-2 sm:px-6 lg:px-8">
-          <GlobalQuickActions
-            selectedObraId={selectedObraId}
-            setObraContext={setObraContext}
-            pathname={pathname}
-            search={searchParams?.toString() ?? ""}
-            isPlatformAdmin={isPlatformAdmin}
-          />
+        <main
+          className={`dg-grid-bg flex-1 print:bg-white print:px-2 print:py-2 ${
+            isCadWorkspace
+              ? "flex min-h-0 flex-col overflow-hidden px-4 py-3"
+              : "px-4 py-6 sm:px-6 lg:px-8"
+          }`}
+        >
+          {!isLoteamentoProductMode() && (
+            <div className={isCadWorkspace ? "cad-app-chrome shrink-0" : "cad-app-chrome"}>
+              <GlobalQuickActions
+                selectedObraId={selectedObraId}
+                setObraContext={setObraContext}
+                pathname={pathname}
+                search={searchParams?.toString() ?? ""}
+                isPlatformAdmin={isPlatformAdmin}
+                compact={isCadWorkspace}
+              />
+            </div>
+          )}
           {children}
         </main>
       </div>

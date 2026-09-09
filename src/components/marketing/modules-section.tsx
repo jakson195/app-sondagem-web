@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { filterModulesByProductMode } from "@/lib/product-mode";
 import { MARKETING_MODULES } from "@/lib/saas/modules";
 
 type Props = {
@@ -23,7 +24,7 @@ export function ModulesSection({
         </div>
 
         <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          {MARKETING_MODULES.map((mod) => {
+          {filterModulesByProductMode(MARKETING_MODULES).map((mod) => {
             const Icon = mod.icon;
             return (
               <article

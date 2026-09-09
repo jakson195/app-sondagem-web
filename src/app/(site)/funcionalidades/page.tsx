@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ModulesSection } from "@/components/marketing/modules-section";
 import { SondagemGallerySection } from "@/components/marketing/sondagem-gallery-section";
 import { SiteServiceGuide } from "@/components/marketing/site-service-guide";
+import { isLoteamentoProductMode } from "@/lib/product-mode";
 
 export const metadata: Metadata = {
   title: "Funcionalidades",
@@ -24,8 +25,8 @@ export default function FuncionalidadesPage() {
         </div>
       </section>
       <ModulesSection showCta={false} title="Catálogo de módulos" subtitle="" />
-      <SondagemGallerySection />
-      <SiteServiceGuide />
+      {!isLoteamentoProductMode() && <SondagemGallerySection />}
+      {!isLoteamentoProductMode() && <SiteServiceGuide />}
       <section className="px-4 py-16 sm:px-6">
         <div className="mx-auto max-w-6xl text-center">
           <Link

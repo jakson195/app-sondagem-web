@@ -15,6 +15,7 @@ import {
   Shovel,
   Waves,
 } from "lucide-react";
+import { filterNavByProductMode } from "@/lib/product-mode";
 import type { ModuleId, PlatformModuleDef } from "@/modules/types";
 
 export const DIGITAL_TWIN_BASE = "/digital-twin";
@@ -239,7 +240,7 @@ export function buildMainModuleNav(options: {
     items.push({ href: withObra("/pocos"), label: "💧 Poços Monitoramento" });
   }
 
-  return items;
+  return filterNavByProductMode(items);
 }
 
 export function getModuleById(id: ModuleId): PlatformModuleDef | undefined {

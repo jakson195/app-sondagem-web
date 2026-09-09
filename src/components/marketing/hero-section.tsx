@@ -1,14 +1,24 @@
 import Link from "next/link";
+import { isLoteamentoProductMode } from "@/lib/product-mode";
 import { HeroVideoBackground } from "./hero-video-background";
 
-const highlights = [
+const highlightsFull = [
   { value: "SPT", label: "Sondagem & relatórios" },
   { value: "CAD", label: "Ambiente técnico" },
   { value: "SaaS", label: "Multi-empresa" },
   { value: "PDF", label: "Portal do cliente" },
 ];
 
+const highlightsLoteamento = [
+  { value: "CAD", label: "Ambiente técnico" },
+  { value: "GEO", label: "Mapas e imagens" },
+  { value: "VIAB", label: "Estudo de viabilidade" },
+  { value: "SaaS", label: "Multi-empresa" },
+];
+
 export function HeroSection() {
+  const loteamento = isLoteamentoProductMode();
+  const highlights = loteamento ? highlightsLoteamento : highlightsFull;
   return (
     <section className="relative min-h-[min(88vh,860px)] overflow-hidden pt-24 sm:pt-28">
       <HeroVideoBackground />
@@ -20,11 +30,14 @@ export function HeroSection() {
           </p>
           <h1 className="mt-4 text-center text-3xl font-bold leading-tight tracking-tight sm:text-left sm:text-4xl lg:text-5xl">
             Plataforma SaaS para{" "}
-            <span className="text-gradient-brand">geotecnia e mineração</span>
+            <span className="text-gradient-brand">
+              {loteamento ? "loteamento" : "geotecnia e mineração"}
+            </span>
           </h1>
           <p className="mt-5 text-center text-base leading-relaxed text-dg-muted sm:text-left sm:text-lg">
-            SPT, mapas GEO, relatórios PDF e portal white-label — do registo no furo
-            à entrega ao cliente.
+            {loteamento
+              ? "Ambiente CAD, mapas GEO e estudo de viabilidade — do desenho do loteamento à análise de custos."
+              : "SPT, mapas GEO, relatórios PDF e portal white-label — do registo no furo à entrega ao cliente."}
           </p>
 
           <ul className="mt-8 grid grid-cols-2 gap-3 sm:gap-4">
