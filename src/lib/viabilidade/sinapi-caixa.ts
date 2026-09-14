@@ -310,7 +310,9 @@ export async function parseArquivoSinapi(
       .getEntries()
       .filter((entry) => !entry.isDirectory && preferenciaArquivoZip(entry.entryName) < 99)
       .sort((a, b) => preferenciaArquivoZip(a.entryName) - preferenciaArquivoZip(b.entryName));
-    const chosen = entries[0];
+    const chosen = entries[0] as
+      | (typeof entries)[number] & { getData: () => Buffer }
+      | undefined;
     if (!chosen) {
       throw new SinapiSyncError("O ZIP da Caixa não contém planilha SINAPI.", "ARQUIVO");
     }
