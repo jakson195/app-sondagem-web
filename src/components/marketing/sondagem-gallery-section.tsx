@@ -29,6 +29,7 @@ function GalleryCard({ item }: { item: SondagemGalleryItem }) {
           src={item.src}
           alt={item.alt}
           fill
+          unoptimized
           sizes={featured ? "(max-width: 640px) 100vw, 50vw" : "(max-width: 640px) 100vw, 33vw"}
           className="object-cover transition duration-500 group-hover:scale-[1.03]"
         />

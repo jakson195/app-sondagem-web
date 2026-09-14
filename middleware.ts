@@ -16,12 +16,12 @@ function hasLegacySession(req: NextRequest) {
   return Boolean(req.cookies.get(AUTH_TOKEN_COOKIE)?.value);
 }
 
-async function isAuthenticated(req: NextRequest): Promise<boolean> {
+async function resolveAuth(req: NextRequest): Promise<{ authed: boolean; response?: NextResponse }> {
   if (isSupabaseAuthConfigured()) {
     const result = await updateSupabaseSession(req, NextResponse.next());
-    return Boolean(result.user);
+    return { authed: Boolean(result.user), response: result.response };
   }
-  return hasLegacySession(req);
+  return { authed: hasLegacySession(req) };
 }
 
 export async function middleware(req: NextRequest) {
@@ -48,16 +48,13 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const authed = await isAuthenticated(req);
+  const { authed, response } = await resolveAuth(req);
   if (!authed) {
     const next = encodeURIComponent(`${pathname}${req.nextUrl.search || ""}`);
     return NextResponse.redirect(new URL(`/login?next=${next}`, req.url));
   }
 
-  if (isSupabaseAuthConfigured()) {
-    const result = await updateSupabaseSession(req, NextResponse.next());
-    return result.response;
-  }
+  if (response) return response;
 
   return NextResponse.next();
 }

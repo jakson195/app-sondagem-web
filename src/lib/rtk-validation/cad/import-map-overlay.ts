@@ -1,19 +1,32 @@
 import type { Bbox4326 } from "@/lib/cad-map/fetch-map-image";
 import {
   ANM_SIGMINE_LAYERS,
+  ANM_SIGMINE_LAYER_KEYS,
   type AnmSigmineLayerKey,
 } from "@/lib/cad-map/anm-sigmine-layers";
+import { SIGEF_LAYERS, SIGEF_LAYER_KEYS, type SigefLayerKey } from "@/lib/cad-map/sigef-layers";
 import { createCadGeorefContext, type CadGeorefContext } from "./georef";
 import { latLonToVertexGeoref } from "./georef";
 import type { CadEntity, CadLayer, CadPolylineEntity, CadVertex } from "./types";
 
-export type OverlayImportSource = "anm";
+export type OverlayImportSource = "anm" | "sigef";
 
 export function cadLayerForAnmKey(key: AnmSigmineLayerKey): CadLayer {
   const def = ANM_SIGMINE_LAYERS[key];
   return {
     id: def.cadLayerId,
     name: `ANM — ${def.label}`,
+    color: def.color,
+    visible: true,
+    locked: true,
+  };
+}
+
+export function cadLayerForSigefKey(key: SigefLayerKey): CadLayer {
+  const def = SIGEF_LAYERS[key];
+  return {
+    id: def.cadLayerId,
+    name: `SIGEF — ${def.label}`,
     color: def.color,
     visible: true,
     locked: true,
@@ -40,14 +53,34 @@ function lineToVertices(coords: number[][], georef: CadGeorefContext): CadVertex
   return coords.map(([lon, lat, z]) => toVertex(lon, lat, z, georef));
 }
 
+function firstStringProp(props: GeoJSON.GeoJsonProperties, keys: string[]): string | undefined {
+  if (!props) return undefined;
+  for (const key of keys) {
+    const value = props[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
 function featureLabel(feature: GeoJSON.Feature): string | undefined {
   const props = feature.properties ?? {};
-  if (typeof props.tema === "string" && props.tema.trim()) return props.tema.trim();
-  if (typeof props.PROCESSO === "string" && props.PROCESSO.trim()) return props.PROCESSO.trim();
-  if (typeof props.NOME === "string" && props.NOME.trim()) return props.NOME.trim();
-  if (typeof props.DSProcesso === "string" && props.DSProcesso.trim()) return props.DSProcesso.trim();
-  if (typeof props.name === "string" && props.name.trim()) return props.name.trim();
-  return undefined;
+  return firstStringProp(props, [
+    "tema",
+    "PROCESSO",
+    "NOME",
+    "DSProcesso",
+    "name",
+    "parcela",
+    "denominacao",
+    "denominacao_do_imovel",
+    "codigo",
+    "codigo_imovel",
+    "rt",
+    "municipio",
+    "proprietario",
+    "detentor",
+  ]);
 }
 
 function featureToEntities(
@@ -165,6 +198,83 @@ export function mergeAnmLayerImport(
 ): { layers: CadLayer[]; entities: CadEntity[] } {
   const layerDef = cadLayerForAnmKey(anmKey);
   return mergeOverlayImport(projectLayers, projectEntities, layerDef, imported);
+}
+
+export function countAnmLayerEntities(entities: CadEntity[], anmKey: AnmSigmineLayerKey): number {
+  const layerId = ANM_SIGMINE_LAYERS[anmKey].cadLayerId;
+  return entities.filter((e) => e.layerId === layerId).length;
+}
+
+export function hasAnmLayerEntities(entities: CadEntity[], anmKey: AnmSigmineLayerKey): boolean {
+  return countAnmLayerEntities(entities, anmKey) > 0;
+}
+
+export function countAllAnmEntities(entities: CadEntity[]): number {
+  const layerIds = new Set(ANM_SIGMINE_LAYER_KEYS.map((key) => ANM_SIGMINE_LAYERS[key].cadLayerId));
+  return entities.filter((e) => layerIds.has(e.layerId)).length;
+}
+
+/** Remove geometrias importadas de uma camada ANM (mantém a definição da camada). */
+export function removeAnmLayerImport(
+  projectLayers: CadLayer[],
+  projectEntities: CadEntity[],
+  anmKey: AnmSigmineLayerKey,
+): { layers: CadLayer[]; entities: CadEntity[]; removed: number } {
+  const layerId = ANM_SIGMINE_LAYERS[anmKey].cadLayerId;
+  const before = projectEntities.length;
+  const entities = projectEntities.filter((e) => e.layerId !== layerId);
+  return { layers: projectLayers, entities, removed: before - entities.length };
+}
+
+/** Remove todas as geometrias ANM/SIGMINE importadas. */
+export function removeAllAnmImports(
+  projectLayers: CadLayer[],
+  projectEntities: CadEntity[],
+): { layers: CadLayer[]; entities: CadEntity[]; removed: number } {
+  const layerIds = new Set(ANM_SIGMINE_LAYER_KEYS.map((key) => ANM_SIGMINE_LAYERS[key].cadLayerId));
+  const before = projectEntities.length;
+  const entities = projectEntities.filter((e) => !layerIds.has(e.layerId));
+  return { layers: projectLayers, entities, removed: before - entities.length };
+}
+
+export function mergeSigefLayerImport(
+  projectLayers: CadLayer[],
+  projectEntities: CadEntity[],
+  sigefKey: SigefLayerKey,
+  imported: CadEntity[],
+): { layers: CadLayer[]; entities: CadEntity[] } {
+  return mergeOverlayImport(projectLayers, projectEntities, cadLayerForSigefKey(sigefKey), imported);
+}
+
+export function countSigefLayerEntities(entities: CadEntity[], sigefKey: SigefLayerKey): number {
+  const layerId = SIGEF_LAYERS[sigefKey].cadLayerId;
+  return entities.filter((e) => e.layerId === layerId).length;
+}
+
+export function countAllSigefEntities(entities: CadEntity[]): number {
+  const layerIds = new Set(SIGEF_LAYER_KEYS.map((key) => SIGEF_LAYERS[key].cadLayerId));
+  return entities.filter((e) => layerIds.has(e.layerId)).length;
+}
+
+export function removeSigefLayerImport(
+  projectLayers: CadLayer[],
+  projectEntities: CadEntity[],
+  sigefKey: SigefLayerKey,
+): { layers: CadLayer[]; entities: CadEntity[]; removed: number } {
+  const layerId = SIGEF_LAYERS[sigefKey].cadLayerId;
+  const before = projectEntities.length;
+  const entities = projectEntities.filter((e) => e.layerId !== layerId);
+  return { layers: projectLayers, entities, removed: before - entities.length };
+}
+
+export function removeAllSigefImports(
+  projectLayers: CadLayer[],
+  projectEntities: CadEntity[],
+): { layers: CadLayer[]; entities: CadEntity[]; removed: number } {
+  const layerIds = new Set(SIGEF_LAYER_KEYS.map((key) => SIGEF_LAYERS[key].cadLayerId));
+  const before = projectEntities.length;
+  const entities = projectEntities.filter((e) => !layerIds.has(e.layerId));
+  return { layers: projectLayers, entities, removed: before - entities.length };
 }
 
 export function bboxToEnvelopeJson(bbox: Bbox4326) {

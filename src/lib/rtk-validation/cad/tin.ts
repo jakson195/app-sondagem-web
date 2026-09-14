@@ -7,6 +7,7 @@ import {
   parseContourElevation,
   pickContourLabelVertex,
 } from "./contour";
+import { INTERPOLATED_CONTOUR_LAYER, extractTerrainSamplesIncludingContours } from "./contour-interpolate";
 import type { CadEntity, CadLineEntity, CadPointEntity, CadPolylineEntity, CadProject } from "./types";
 
 export const TIN_LAYER = {
@@ -43,7 +44,8 @@ export function generateTinEntities(project: CadProject): {
   pointCount: number;
   triangleCount: number;
 } {
-  const samples = extractSurveyElevationPoints(project.entities);
+  const rtkSamples = extractSurveyElevationPoints(project.entities);
+  const samples = rtkSamples.length >= 3 ? rtkSamples : extractTerrainSamplesIncludingContours(project);
   if (samples.length < 3) {
     throw new Error("São necessários pelo menos 3 pontos com cota para triangulação.");
   }
@@ -96,8 +98,13 @@ export function buildContourElevationLabels(
   const labels: CadPointEntity[] = [];
 
   for (const entity of entities) {
-    if (entity.type !== "polyline" || entity.layerId !== CONTOUR_LAYER.id) continue;
-    if (majorOnly && !entity.contourMajor) continue;
+    if (
+      entity.type !== "polyline" ||
+      (entity.layerId !== CONTOUR_LAYER.id && entity.layerId !== INTERPOLATED_CONTOUR_LAYER.id)
+    ) {
+      continue;
+    }
+    if (majorOnly && entity.layerId === CONTOUR_LAYER.id && !entity.contourMajor) continue;
     const elev = parseContourElevation(entity);
     if (elev == null) continue;
     const pos = pickContourLabelVertex(entity.vertices);

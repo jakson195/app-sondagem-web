@@ -21,6 +21,7 @@ import {
 } from "@/components/rtk-validation/cad-print-annotations";
 import { buildCoordinateGrid } from "@/lib/rtk-validation/cad/grid";
 import { CadRasterSvgLayer } from "@/components/rtk-validation/cad-raster-overlay";
+import { CadHatchDefs } from "@/components/rtk-validation/cad-hatch-defs";
 import { PrintConventionsOverlay } from "@/components/rtk-validation/cad-print-conventions";
 import { PrintEditableSvgText } from "@/components/rtk-validation/cad-print-editable-text";
 import { CadSvgMultilineText } from "@/components/rtk-validation/cad-svg-multiline-text";
@@ -31,13 +32,49 @@ import {
 import { resolveDrawingConventions } from "@/lib/rtk-validation/cad/drawing-conventions";
 import { isCoordLabelEntity, resolveCoordLabelLayout } from "@/lib/rtk-validation/cad/label-layout";
 import {
-  getLayerFillColor,
   getLayerLineColor,
   getLayerLineWidthForPrint,
+  getLayerPolygonFill,
+  getLayerStrokeDasharray,
   getLayerTextColorForPrint,
+  getLayerTextSize,
+  normalizeCadLayers,
+  resolvePointTextStyle,
+  DEFAULT_TEXT_SIZE,
 } from "@/lib/rtk-validation/cad/layer-styles";
 import { polygonCentroid } from "@/lib/rtk-validation/cad/ai-geometry-utils";
-import { computePolygonMetrics, formatAreaBr } from "@/lib/rtk-validation/cad/polygon-utils";
+import { confrontationScreenLabels, computePolygonMetrics, formatAreaBr } from "@/lib/rtk-validation/cad/polygon-utils";
+import { CadConfrontationLabels } from "@/components/rtk-validation/cad-confrontation-labels";
+import { isStreetProfileChartLayer } from "@/lib/rtk-validation/cad/street-profile";
+import { isTerrainProfileLayer } from "@/lib/rtk-validation/cad/profile";
+import {
+  CAD_PLAN_BLUE,
+  CAD_PLAN_FONT,
+  CAD_PLAN_INK,
+  SKIP_POLYGON_CENTER_LABEL_LAYERS,
+  buildCadastralLotPlanTexts,
+  buildStreetPlanText,
+  CADASTRAL_LOT_ENTITY_TEXT_SIZE,
+  inferPlanTextRole,
+  isPlanTextOnlyPoint,
+  isStoredLotPlanAnnotation,
+  planLotTitleCircleRadius,
+  planTextFillColor,
+  planTextFontWeight,
+  planTextHaloWidth,
+  polylineLabelPose,
+} from "@/lib/rtk-validation/cad/plan-annotation-labels";
+import {
+  DEFAULT_DRAINAGE_PARAMS,
+  DRAINAGE_LAMINA_RELATIVA_MAX,
+  DRAINAGE_VELOCITY_MAX_MS,
+  DRAINAGE_VELOCITY_MIN_MS,
+  DRENAGEM_TUBOS_LAYER,
+  isDrainagePipeEntity,
+  isDrainageStructureLayer,
+} from "@/lib/rtk-validation/cad/loteamento-drainage";
+import { drainageEntityHasRedError } from "@/lib/rtk-validation/cad/loteamento-drainage-planilha";
+import { LOTEAMENTO_LOTES_LAYER_ID, LOTEAMENTO_VIAS_LAYER_ID } from "@/lib/rtk-validation/cad/reurb";
 
 export type DrawingScaleMode = "fit" | "nominal";
 
@@ -48,6 +85,7 @@ export function filterPrintEntities(
   layerVisibility?: PrintLayerVisibility,
 ): CadEntity[] {
   return project.entities.filter((e) => {
+    if (isStreetProfileChartLayer(e.layerId) || isTerrainProfileLayer(e.layerId)) return false;
     if (layerVisibility && e.layerId in layerVisibility) {
       return layerVisibility[e.layerId];
     }
@@ -65,6 +103,11 @@ const PRINT_POINT_RADIUS_RTK_MM = 2.4;
 const PRINT_POINT_RADIUS_MM = 2.1;
 const PRINT_POINT_STROKE_MM = 0.35;
 const PRINT_POINT_LABEL_MM = 3.4;
+const PRINT_POLY_LABEL_MM = 1.35;
+/** Textos cadastrais na prancha: número circundado, área em destaque, cotas. */
+const PRINT_CADASTRAL_TITLE_MM = 4.2;
+const PRINT_CADASTRAL_AREA_MM = 5.4;
+const PRINT_CADASTRAL_EDGE_MM = 3.4;
 const PRINT_POINT_LABEL_OFFSET_MM = 2.6;
 const PRINT_LABEL_STROKE_MM = 0.85;
 
@@ -73,10 +116,22 @@ export type PrintMarkerSizes = {
   pointRadius: number;
   pointStroke: number;
   pointLabelSize: number;
+  polyLabelSize: number;
   pointLabelOffsetX: number;
   pointLabelOffsetY: number;
   labelStroke: number;
 };
+
+function cadastralPrintFontSize(
+  role: "lot-title" | "lot-area" | "lot-edge",
+  unitsPerMm: number,
+  pointTextSize: number,
+): number {
+  const mm =
+    role === "lot-title" ? PRINT_CADASTRAL_TITLE_MM : role === "lot-area" ? PRINT_CADASTRAL_AREA_MM : PRINT_CADASTRAL_EDGE_MM;
+  const nominal = CADASTRAL_LOT_ENTITY_TEXT_SIZE[role];
+  return mm * Math.max(unitsPerMm, 1) * (pointTextSize / nominal);
+}
 
 export function resolvePrintMarkerSizes(unitsPerMm: number, vertexMarkerScale = 1): PrintMarkerSizes {
   const scale = Math.max(0.25, Math.min(6, vertexMarkerScale));
@@ -86,6 +141,7 @@ export function resolvePrintMarkerSizes(unitsPerMm: number, vertexMarkerScale = 
     pointRadius: PRINT_POINT_RADIUS_MM * u,
     pointStroke: PRINT_POINT_STROKE_MM * u,
     pointLabelSize: PRINT_POINT_LABEL_MM * u,
+    polyLabelSize: PRINT_POLY_LABEL_MM * u,
     pointLabelOffsetX: PRINT_POINT_LABEL_OFFSET_MM * u,
     pointLabelOffsetY: PRINT_POINT_LABEL_OFFSET_MM * u * 0.85,
     labelStroke: PRINT_LABEL_STROKE_MM * u,
@@ -250,12 +306,40 @@ function renderPrintEntity(
   const layer = layerMap.get(entity.layerId);
   const isContour = entity.layerId === CONTOUR_LAYER.id;
   const lineColor = getLayerLineColor(layer, "#111827");
-  const textColor = getLayerTextColorForPrint(layer, "#111827");
-  const fillColor = getLayerFillColor(layer, false, lineColor);
+  const layerTextColor = getLayerTextColorForPrint(layer, "#111827");
+  const fillColor = getLayerPolygonFill(layer, false, lineColor);
   const lineWidth = getLayerLineWidthForPrint(layer, unitsPerMm);
+  const strokeDash = getLayerStrokeDasharray(layer);
+  const isLotAnnotation =
+    entity.layerId.startsWith("loteamento_") ||
+    entity.layerId.startsWith("drenagem_") ||
+    entity.layerId === "reurb_anotacoes" ||
+    entity.layerId === "text";
+  const textScale = getLayerTextSize(layer) / DEFAULT_TEXT_SIZE;
+  const labelSize = (isLotAnnotation ? markers.polyLabelSize : markers.pointLabelSize) * textScale;
+  const streetPolys = entities.filter(
+    (item): item is CadPolylineEntity =>
+      item.type === "polyline" && Boolean(item.closed) && item.layerId === LOTEAMENTO_VIAS_LAYER_ID,
+  );
+  const lotIndex = entities
+    .filter(
+      (item): item is CadPolylineEntity =>
+        item.type === "polyline" && Boolean(item.closed) && item.layerId === LOTEAMENTO_LOTES_LAYER_ID,
+    )
+    .findIndex((item) => item.id === entity.id);
+  const viaIndex = entities
+    .filter(
+      (item): item is CadPolylineEntity =>
+        item.type === "polyline" && Boolean(item.closed) && item.layerId === LOTEAMENTO_VIAS_LAYER_ID,
+    )
+    .findIndex((item) => item.id === entity.id);
 
   if (entity.type === "point") {
+    if (isStoredLotPlanAnnotation(entity)) return null;
     const point = entity;
+    const { color: pointTextColor, size: pointTextSize } = resolvePointTextStyle(point, layer);
+    const pointLabelSize = (isLotAnnotation ? markers.polyLabelSize : markers.pointLabelSize) * (pointTextSize / DEFAULT_TEXT_SIZE);
+    const textColor = point.textColor ? pointTextColor : layerTextColor;
     const wts = (x: number, y: number) => worldToScreen(x, y, viewport);
     const coordLayout = resolveCoordLabelLayout(
       point,
@@ -263,24 +347,42 @@ function renderPrintEntity(
       wts,
       viewW,
       viewH,
-      markers.pointLabelSize,
+      pointLabelSize,
     );
     const isCoordLabel = isCoordLabelEntity(point);
+    const textOnly = isPlanTextOnlyPoint(point);
+    const isStructure = isDrainageStructureLayer(point.layerId);
     const { sx, sy } = wts(point.x, point.y);
-    const labelX = coordLayout?.labelSx ?? sx + markers.pointLabelOffsetX;
-    const labelY = coordLayout?.labelSy ?? sy + markers.pointLabelOffsetY;
+    const structureR = Math.max(markers.pointRadius, 1.6);
+    const labelX = coordLayout?.labelSx ?? (textOnly ? sx : isStructure ? sx + structureR + 2 : sx + markers.pointLabelOffsetX);
+    const labelY = coordLayout?.labelSy ?? (textOnly ? sy : isStructure ? sy - 1 : sy + markers.pointLabelOffsetY);
+    const planRole = inferPlanTextRole(point);
+    const planFill =
+      textOnly || isStructure ? planTextFillColor(planRole, point.textColor ?? CAD_PLAN_BLUE) : textColor;
 
     return (
       <g key={entity.id}>
-        {!isCoordLabel ? (
-          <circle
-            cx={sx}
-            cy={sy}
-            r={entity.layerId === "rtk_points" ? markers.pointRadiusRtk : markers.pointRadius}
-            fill={lineColor}
-            stroke="#111827"
-            strokeWidth={markers.pointStroke}
-          />
+        {!isCoordLabel && !textOnly ? (
+          isStructure ? (
+            <rect
+              x={sx - structureR}
+              y={sy - structureR}
+              width={structureR * 2}
+              height={structureR * 2}
+              fill={lineColor}
+              stroke="#111827"
+              strokeWidth={markers.pointStroke}
+            />
+          ) : (
+            <circle
+              cx={sx}
+              cy={sy}
+              r={entity.layerId === "rtk_points" ? markers.pointRadiusRtk : markers.pointRadius}
+              fill={lineColor}
+              stroke="#111827"
+              strokeWidth={markers.pointStroke}
+            />
+          )
         ) : null}
         {entity.label ? (
           isCoordLabel || !editTextMode ? (
@@ -288,9 +390,20 @@ function renderPrintEntity(
               x={labelX}
               y={labelY}
               label={entity.label}
-              fill={textColor}
-              fontSize={markers.pointLabelSize}
-              fontFamily="Arial, sans-serif"
+              fill={planFill}
+              fontSize={
+                planRole === "lot-title" || planRole === "lot-area" || planRole === "lot-edge"
+                  ? cadastralPrintFontSize(planRole, unitsPerMm, pointTextSize)
+                  : pointLabelSize
+              }
+              fontFamily={textOnly || isStructure ? CAD_PLAN_FONT : "Arial, sans-serif"}
+              fontWeight={planTextFontWeight(planRole, entity.label)}
+              textAnchor={textOnly ? "middle" : "start"}
+              dominantBaseline={textOnly ? "middle" : undefined}
+              rotationDeg={point.rotationDeg}
+              stroke={textOnly || isStructure ? "#fff" : undefined}
+              strokeWidth={textOnly || isStructure ? markers.labelStroke : undefined}
+              paintOrder={textOnly || isStructure ? "stroke" : undefined}
             />
           ) : (
             <PrintEditableSvgText
@@ -301,9 +414,13 @@ function renderPrintEntity(
               overrides={textOverrides}
               editMode={editTextMode}
               onChange={onTextOverride}
-              fontSize={markers.pointLabelSize}
+              fontSize={
+                planRole === "lot-title" || planRole === "lot-area" || planRole === "lot-edge"
+                  ? cadastralPrintFontSize(planRole, unitsPerMm, pointTextSize)
+                  : pointLabelSize
+              }
               strokeWidth={markers.labelStroke}
-              fill={textColor}
+              fill={planFill}
             />
           )
         ) : null}
@@ -323,7 +440,7 @@ function renderPrintEntity(
         y2={b.sy}
         stroke={lineColor}
         strokeWidth={lineWidth}
-        strokeDasharray={entity.layerId === "residuals" ? "4 3" : undefined}
+        strokeDasharray={strokeDash}
       />
     );
   }
@@ -343,12 +460,64 @@ function renderPrintEntity(
     contourElevation !== null ? formatContourElevationLabel(contourElevation) : null;
 
   const isClosedPoly = !isContour && poly.closed && poly.vertices.length >= 3;
-  const strokeColor = isContour ? contourStroke : lineColor;
+  const pipeFail =
+    isDrainagePipeEntity(poly) &&
+    drainageEntityHasRedError(poly, {
+      minSlopePct: DEFAULT_DRAINAGE_PARAMS.minSlopePct,
+      minVelocityMs: DRAINAGE_VELOCITY_MIN_MS,
+      maxVelocityMs: DRAINAGE_VELOCITY_MAX_MS,
+      laminaMax: DRAINAGE_LAMINA_RELATIVA_MAX,
+    });
+  const strokeColor = isContour ? contourStroke : pipeFail ? "#dc2626" : lineColor;
   const strokeW = isContour
     ? isMajorContour
       ? PRINT_CONTOUR_MAJOR_WIDTH * unitsPerMm * 0.24
       : PRINT_CONTOUR_MINOR_WIDTH * unitsPerMm * 0.24
-    : lineWidth;
+    : lineWidth + (pipeFail ? unitsPerMm * 0.08 : 0);
+
+  function printPlanTexts(
+    texts: { x: number; y: number; label: string; rotationDeg: number; role: string }[],
+    fill: string,
+  ) {
+    return texts.map((text, i) => {
+      const { sx, sy } = worldToScreen(text.x, text.y, viewport);
+      const role = text.role as Parameters<typeof planTextFontWeight>[0];
+      const size =
+        role === "lot-title" || role === "lot-area" || role === "lot-edge"
+          ? cadastralPrintFontSize(role, unitsPerMm, CADASTRAL_LOT_ENTITY_TEXT_SIZE[role])
+          : role === "street"
+            ? labelSize * 1.35
+            : labelSize * 0.85;
+      const textFill = planTextFillColor(role, fill);
+      const label = (
+        <CadSvgMultilineText
+          key={`print-plan-${entity.id}-${i}-${text.label}`}
+          x={sx}
+          y={sy}
+          label={text.label}
+          fill={textFill}
+          fontSize={size}
+          fontFamily={CAD_PLAN_FONT}
+          fontWeight={planTextFontWeight(role, text.label)}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          rotationDeg={role === "lot-title" ? undefined : text.rotationDeg}
+          stroke="#fff"
+          strokeWidth={planTextHaloWidth(size, role)}
+          paintOrder="stroke"
+        />
+      );
+      if (role !== "lot-title") return label;
+      const r = planLotTitleCircleRadius(size);
+      return (
+        <g key={`print-plan-${entity.id}-${i}-${text.label}`} transform={`rotate(${text.rotationDeg} ${sx} ${sy})`}>
+          <circle cx={sx} cy={sy} r={r} fill="none" stroke="#fff" strokeWidth={Math.max(markers.labelStroke, size * 0.16)} />
+          <circle cx={sx} cy={sy} r={r} fill="none" stroke={textFill} strokeWidth={Math.max(0.7, size * 0.07)} />
+          {label}
+        </g>
+      );
+    });
+  }
 
   return (
     <g key={entity.id}>
@@ -370,6 +539,7 @@ function renderPrintEntity(
           strokeLinecap="round"
           strokeLinejoin="round"
           opacity={isContour ? (isMajorContour ? 1 : 0.85) : 1}
+          strokeDasharray={isContour ? undefined : strokeDash}
         />
       )}
       {isMajorContour && labelVertex && contourLabel ? (
@@ -377,7 +547,7 @@ function renderPrintEntity(
           x={worldToScreen(labelVertex.x, labelVertex.y, viewport).sx + 3}
           y={worldToScreen(labelVertex.x, labelVertex.y, viewport).sy - 3}
           fill={contourStroke}
-          fontSize={markers.pointLabelSize}
+          fontSize={markers.pointLabelSize * textScale}
           fontWeight={800}
           fontFamily="Arial, sans-serif"
           stroke="#fff"
@@ -387,7 +557,43 @@ function renderPrintEntity(
           {contourLabel}
         </text>
       ) : null}
-      {isClosedPoly
+      {!isClosedPoly && poly.layerId === DRENAGEM_TUBOS_LAYER.id && poly.name
+        ? (() => {
+            const pose = polylineLabelPose(poly.vertices);
+            if (!pose) return null;
+            const { sx, sy } = worldToScreen(pose.x, pose.y, viewport);
+            return (
+              <CadSvgMultilineText
+                x={sx}
+                y={sy}
+                label={poly.name}
+                fill={pipeFail ? "#dc2626" : CAD_PLAN_BLUE}
+                fontSize={labelSize}
+                fontFamily={CAD_PLAN_FONT}
+                fontWeight={600}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                rotationDeg={pose.rotationDeg}
+                stroke="#fff"
+                strokeWidth={markers.labelStroke}
+                paintOrder="stroke"
+              />
+            );
+          })()
+        : null}
+      {isClosedPoly && poly.layerId === LOTEAMENTO_VIAS_LAYER_ID
+        ? (() => {
+            const street = buildStreetPlanText(poly, Math.max(0, viaIndex));
+            return street ? printPlanTexts([street], CAD_PLAN_INK) : null;
+          })()
+        : null}
+      {isClosedPoly && poly.layerId === LOTEAMENTO_LOTES_LAYER_ID
+        ? printPlanTexts(
+            buildCadastralLotPlanTexts(poly, Math.max(0, lotIndex), { streets: streetPolys }),
+            CAD_PLAN_INK,
+          )
+        : null}
+      {isClosedPoly && !SKIP_POLYGON_CENTER_LABEL_LAYERS.has(poly.layerId)
         ? (() => {
             const metrics = computePolygonMetrics(poly.vertices, true);
             const c = polygonCentroid(poly.vertices);
@@ -396,10 +602,10 @@ function renderPrintEntity(
             return (
               <CadSvgMultilineText
                 x={sx}
-                y={sy - markers.pointLabelSize * 0.55}
+                y={sy - labelSize * 0.55}
                 label={`${polyName}\n${formatAreaBr(metrics.areaM2)}`}
-                fill={textColor}
-                fontSize={markers.pointLabelSize}
+                fill={layerTextColor}
+                fontSize={labelSize}
                 fontFamily="Arial, sans-serif"
                 fontWeight={600}
                 textAnchor="middle"
@@ -453,7 +659,8 @@ export function CadPrintDrawing({
     return [...base, ...contours];
   }, [visibleEntities]);
 
-  const layerMap = useMemo(() => new Map(project.layers.map((l) => [l.id, l])), [project.layers]);
+  const styledLayers = useMemo(() => normalizeCadLayers(project.layers), [project.layers]);
+  const layerMap = useMemo(() => new Map(styledLayers.map((l) => [l.id, l])), [styledLayers]);
 
   const bounds = useMemo(
     () =>
@@ -538,6 +745,7 @@ export function CadPrintDrawing({
       style={{ display: "block", background: "#fff" }}
       aria-label={project.name}
     >
+      <CadHatchDefs layers={styledLayers} />
       <PrintUtmGrid
         viewport={viewport}
         utmZone={utmZone}
@@ -565,6 +773,29 @@ export function CadPrintDrawing({
           onTextOverride,
         ),
       )}
+      {sortedEntities.map((entity) => {
+        if (entity.type !== "polyline" || !entity.closed || entity.vertices.length < 3) {
+          return null;
+        }
+        if (entity.layerId === CONTOUR_LAYER.id) return null;
+        const labels = confrontationScreenLabels(
+          entity.vertices,
+          entity.confrontations,
+          true,
+          (x, y) => worldToScreen(x, y, viewport),
+          Math.max(8, markers.pointLabelSize * 0.7),
+        );
+        return (
+          <CadConfrontationLabels
+            key={`conf-print-${entity.id}`}
+            labels={labels}
+            fill="#111827"
+            fontSize={markers.pointLabelSize * 0.92}
+            stroke="#ffffff"
+            strokeWidth={markers.labelStroke}
+          />
+        );
+      })}
       <PrintNorthArrow
         x={northX}
         y={northY}

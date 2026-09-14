@@ -1,46 +1,57 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { runQueuedInEffect } from "@/lib/react/queue-in-effect";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import { worldToScreen, type CadViewport } from "@/lib/rtk-validation/cad/viewport";
 import {
   detectCadGeoref,
-  enToLatLonGeoref,
-  latLonToVertexGeoref,
-  vertexToEn,
-  viewportBbox4326Georef,
   viewportBbox4326GeorefSafe,
   type CadGeorefContext,
 } from "@/lib/rtk-validation/cad/georef";
 import { isBboxInBrazil } from "@/lib/rtk-validation/cad/map-bbox";
-import {
-  latLonToTileXY,
-  pickTileZoom,
-  tileLatLonBounds,
-  viewportScreenBounds,
-  type MapTileRef,
-} from "@/lib/rtk-validation/cad/map-tiles";
+import { viewportScreenBounds } from "@/lib/rtk-validation/cad/map-tiles";
 import type { CadEntity } from "@/lib/rtk-validation/cad/types";
 import {
   activeAnmMapLayerIds,
   anyAnmSigmineOverlay,
   DEFAULT_ANM_SIGMINE_OVERLAY,
+  activeSigefLayerKeys,
+  anySigefOverlay,
+  DEFAULT_SIGEF_OVERLAY,
   type AnmSigmineLayerKey,
   type AnmSigmineOverlayState,
+  type SigefLayerKey,
+  type SigefOverlayState,
 } from "@/lib/cad-map/overlay-sources";
 
-export type { AnmSigmineLayerKey, AnmSigmineOverlayState };
+const CadMapboxBasemap = dynamic(
+  () => import("./cad-mapbox-basemap").then((m) => ({ default: m.CadMapboxBasemap })),
+  { ssr: false },
+);
+
+export type { AnmSigmineLayerKey, AnmSigmineOverlayState, SigefLayerKey, SigefOverlayState };
 
 export type CadBasemapOverlays = {
   satellite: boolean;
   anmSigmine: AnmSigmineOverlayState;
+  sigef: SigefOverlayState;
 };
 
 export const DEFAULT_CAD_BASEMAP_OVERLAYS: CadBasemapOverlays = {
   satellite: false,
   anmSigmine: { ...DEFAULT_ANM_SIGMINE_OVERLAY },
+  sigef: { ...DEFAULT_SIGEF_OVERLAY },
 };
+
+export function cloneDefaultBasemapOverlays(): CadBasemapOverlays {
+  return {
+    satellite: DEFAULT_CAD_BASEMAP_OVERLAYS.satellite,
+    anmSigmine: { ...DEFAULT_CAD_BASEMAP_OVERLAYS.anmSigmine },
+    sigef: { ...DEFAULT_CAD_BASEMAP_OVERLAYS.sigef },
+  };
+}
 
 type CadBasemapLayerProps = {
   viewport: CadViewport;
@@ -51,6 +62,7 @@ type CadBasemapLayerProps = {
 };
 
 const ANM_OVERLAY = { apiPath: "/api/cad-map/anm", opacity: 0.88, zIndex: 2 };
+const SIGEF_OVERLAY = { apiPath: "/api/cad-map/sigef", opacity: 0.82, zIndex: 3 };
 
 function rectToPercent(
   rect: { x: number; y: number; width: number; height: number },
@@ -75,47 +87,9 @@ function buildMapUrl(apiPath: string, bboxStr: string, w: number, h: number, ext
   return `${apiPath}?${params.toString()}`;
 }
 
-function buildSatelliteTileUrl(tile: MapTileRef) {
-  const params = new URLSearchParams({
-    z: String(tile.z),
-    x: String(tile.x),
-    y: String(tile.y),
-    source: "esri",
-  });
-  return `/api/cad-map/tile?${params.toString()}`;
-}
-
-function listSatelliteTiles(viewport: CadViewport, georef: CadGeorefContext, zoom: number): MapTileRef[] {
-  const bbox = viewportBbox4326Georef(viewport, georef);
-  const { x: x0, y: y0 } = latLonToTileXY(bbox.maxLat, bbox.minLon, zoom);
-  const { x: x1, y: y1 } = latLonToTileXY(bbox.minLat, bbox.maxLon, zoom);
-  const tiles: MapTileRef[] = [];
-  const maxTiles = 48;
-  for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) {
-    for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) {
-      tiles.push({ x, y, z: zoom });
-      if (tiles.length >= maxTiles) return tiles;
-    }
-  }
-  return tiles;
-}
-
-function tileScreenBoundsGeoref(
-  tile: MapTileRef,
-  viewport: CadViewport,
-  georef: CadGeorefContext,
-) {
-  const bounds = tileLatLonBounds(tile.x, tile.y, tile.z);
-  const nw = latLonToVertexGeoref(bounds.latMax, bounds.lonMin, 0, georef);
-  const se = latLonToVertexGeoref(bounds.latMin, bounds.lonMax, 0, georef);
-  const tl = worldToScreen(nw.x, nw.y, viewport);
-  const br = worldToScreen(se.x, se.y, viewport);
-  const x = Math.min(tl.sx, br.sx);
-  const y = Math.min(tl.sy, br.sy);
-  const width = Math.abs(br.sx - tl.sx);
-  const height = Math.abs(br.sy - tl.sy);
-  if (width < 1 || height < 1) return null;
-  return { x, y, width, height };
+function canShowSatellite(georef: CadGeorefContext, viewport: CadViewport) {
+  if (!georef.isGeoreferenced) return false;
+  return viewportBbox4326GeorefSafe(viewport, georef) != null;
 }
 
 function WmsOverlayImage({
@@ -146,16 +120,18 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
   const t = useTranslations("rtkCad.basemap");
   const [anmFailed, setAnmFailed] = useState<"error" | "empty" | "outOfBrazil" | null>(null);
   const [anmImageUrl, setAnmImageUrl] = useState<string | null>(null);
-  const [satelliteFailed, setSatelliteFailed] = useState(false);
+  const [sigefFailed, setSigefFailed] = useState<"error" | "empty" | "outOfBrazil" | null>(null);
+  const [sigefImageUrls, setSigefImageUrls] = useState<Partial<Record<SigefLayerKey, string>>>({});
 
   const anmActive = anyAnmSigmineOverlay(overlays.anmSigmine);
+  const sigefActive = anySigefOverlay(overlays.sigef);
 
   useEffect(
     () =>
       runQueuedInEffect(() => {
-        if (!anmActive && !overlays.satellite) return;
+        if (!anmActive && !sigefActive && !overlays.satellite) return;
         if (anmActive) setAnmFailed(null);
-        if (overlays.satellite) setSatelliteFailed(false);
+        if (sigefActive) setSigefFailed(null);
       }),
     [
       overlays.anmSigmine.processos,
@@ -163,6 +139,9 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
       overlays.anmSigmine.arrendamentos,
       overlays.anmSigmine.bloqueio,
       overlays.anmSigmine.reservasGarimpeiras,
+      overlays.sigef.particular,
+      overlays.sigef.publico,
+      overlays.sigef.uf,
       overlays.satellite,
       viewport.minX,
       viewport.maxX,
@@ -175,6 +154,8 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
     () => georefProp ?? detectCadGeoref(entities, viewport, crs),
     [georefProp, entities, viewport.minX, viewport.maxX, viewport.minY, viewport.maxY, crs],
   );
+
+  const showSatellite = overlays.satellite && canShowSatellite(georef, viewport);
 
   const anmBboxIssue = useMemo(() => {
     if (!anmActive || !georef.isGeoreferenced) return null;
@@ -196,6 +177,31 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
     if (anmLayerIds.length === 0) return null;
     return buildMapUrl(ANM_OVERLAY.apiPath, bboxStr, w, h, { layers: anmLayerIds.join(",") });
   }, [overlays.anmSigmine, viewport, georef, anmActive, anmBboxIssue]);
+
+  const sigefBboxIssue = useMemo(() => {
+    if (!sigefActive || !georef.isGeoreferenced) return null;
+    const bbox = viewportBbox4326GeorefSafe(viewport, georef);
+    if (!bbox || !isBboxInBrazil(bbox)) return "outOfBrazil" as const;
+    return null;
+  }, [sigefActive, georef, viewport.minX, viewport.maxX, viewport.minY, viewport.maxY]);
+
+  const sigefMapRequests = useMemo(() => {
+    if (!georef.isGeoreferenced || !sigefActive || sigefBboxIssue) return [];
+    const bbox = viewportBbox4326GeorefSafe(viewport, georef);
+    if (!bbox) return [];
+    const w = Math.min(1600, Math.max(512, Math.round(viewport.width * 2)));
+    const h = Math.min(1600, Math.max(512, Math.round(viewport.height * 2)));
+    const bboxStr = [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat]
+      .map((n) => n.toFixed(6))
+      .join(",");
+    return activeSigefLayerKeys(overlays.sigef).map((key) => ({
+      key,
+      url: buildMapUrl(SIGEF_OVERLAY.apiPath, bboxStr, w, h, {
+        layers: key,
+        uf: overlays.sigef.uf,
+      }),
+    }));
+  }, [overlays.sigef, viewport, georef, sigefActive, sigefBboxIssue]);
 
   useEffect(
     () =>
@@ -270,32 +276,82 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
     [anmImageUrl],
   );
 
-  const satelliteTiles = useMemo(() => {
-    if (!overlays.satellite || !georef.isGeoreferenced) return [];
-    const centerVertex = {
-      x: (viewport.minX + viewport.maxX) / 2,
-      y: (viewport.minY + viewport.maxY) / 2,
-      z: 0,
-    };
-    const { e, n } = vertexToEn(centerVertex, georef);
-    const center = enToLatLonGeoref(e, n, georef);
-    const zoom = pickTileZoom(viewport, center.lat);
-    return listSatelliteTiles(viewport, georef, zoom)
-      .map((tile) => ({
-        tile,
-        bounds: tileScreenBoundsGeoref(tile, viewport, georef),
-        url: buildSatelliteTileUrl(tile),
-      }))
-      .filter((item): item is { tile: MapTileRef; bounds: { x: number; y: number; width: number; height: number }; url: string } =>
-        item.bounds != null,
-      );
-  }, [overlays.satellite, viewport, georef]);
+  useEffect(
+    () =>
+      runQueuedInEffect(() => {
+        if (sigefMapRequests.length === 0 || !sigefActive || !georef.isGeoreferenced) {
+          setSigefImageUrls((prev) => {
+            for (const url of Object.values(prev)) {
+              if (url) URL.revokeObjectURL(url);
+            }
+            return {};
+          });
+          return;
+        }
 
-  if (!anmActive && !overlays.satellite) return null;
+        let cancelled = false;
+        setSigefFailed(null);
+
+        void Promise.all(
+          sigefMapRequests.map(async ({ key, url }) => {
+            const res = await fetch(url);
+            if (res.status === 404) return { key, status: "empty" as const, objectUrl: null };
+            if (res.status === 400) return { key, status: "outOfBrazil" as const, objectUrl: null };
+            if (!res.ok) return { key, status: "error" as const, objectUrl: null };
+            const blob = await res.blob();
+            return { key, status: "ok" as const, objectUrl: URL.createObjectURL(blob) };
+          }),
+        )
+          .then((results) => {
+            if (cancelled) {
+              for (const result of results) {
+                if (result.objectUrl) URL.revokeObjectURL(result.objectUrl);
+              }
+              return;
+            }
+            const next: Partial<Record<SigefLayerKey, string>> = {};
+            let failed: "error" | "empty" | "outOfBrazil" | null = null;
+            for (const result of results) {
+              if (result.status === "ok" && result.objectUrl) {
+                next[result.key] = result.objectUrl;
+              } else if (!failed && result.status !== "ok") {
+                failed = result.status;
+              }
+            }
+            setSigefImageUrls((prev) => {
+              for (const url of Object.values(prev)) {
+                if (url) URL.revokeObjectURL(url);
+              }
+              return next;
+            });
+            setSigefFailed(Object.keys(next).length === 0 ? failed ?? "error" : null);
+          })
+          .catch(() => {
+            if (!cancelled) setSigefFailed("error");
+          });
+
+        return () => {
+          cancelled = true;
+        };
+      }),
+    [sigefMapRequests, sigefActive, georef.isGeoreferenced],
+  );
+
+  useEffect(
+    () => () => {
+      for (const url of Object.values(sigefImageUrls)) {
+        if (url) URL.revokeObjectURL(url);
+      }
+    },
+    [sigefImageUrls],
+  );
+
+  if (!anmActive && !sigefActive && !overlays.satellite) return null;
 
   const viewW = viewport.width;
   const viewH = viewport.height;
   const wmsStyle = rectToPercent(viewportScreenBounds(viewport, worldToScreen), viewW, viewH);
+  const sigefImages = Object.entries(sigefImageUrls) as Array<[SigefLayerKey, string]>;
 
   return (
     <div
@@ -303,22 +359,9 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
       style={{ background: overlays.satellite ? "#1a1a1a" : "#e8eef4" }}
       aria-hidden
     >
-      {overlays.satellite && georef.isGeoreferenced
-        ? satelliteTiles.map(({ tile, bounds, url }) => {
-            const style = rectToPercent(bounds, viewW, viewH);
-            return (
-              <WmsOverlayImage
-                key={`sat-${tile.z}-${tile.x}-${tile.y}`}
-                url={url}
-                style={{ ...style, zIndex: 0 }}
-                opacity={1}
-                onFailed={() => setSatelliteFailed(true)}
-              />
-            );
-          })
-        : null}
+      {showSatellite ? <CadMapboxBasemap viewport={viewport} georef={georef} /> : null}
 
-      {overlays.satellite && !georef.isGeoreferenced ? (
+      {overlays.satellite && !showSatellite ? (
         <div
           className="absolute left-2 top-2 z-20 rounded bg-amber-600/90 px-2 py-1 text-[10px] text-white"
           style={{ pointerEvents: "none" }}
@@ -327,16 +370,7 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
         </div>
       ) : null}
 
-      {overlays.satellite && georef.isGeoreferenced && satelliteFailed ? (
-        <div
-          className="absolute left-2 top-2 z-20 rounded bg-amber-600/90 px-2 py-1 text-[10px] text-white"
-          style={{ pointerEvents: "none" }}
-        >
-          {t("satelliteUnavailable")}
-        </div>
-      ) : null}
-
-      {anmActive && !georef.isGeoreferenced ? (
+      {(anmActive || sigefActive) && !georef.isGeoreferenced ? (
         <div
           className="absolute left-2 top-7 z-20 rounded bg-amber-600/90 px-2 py-1 text-[10px] text-white"
           style={{ pointerEvents: "none" }}
@@ -355,6 +389,18 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
         />
       ) : null}
 
+      {sigefActive && !sigefFailed && !sigefBboxIssue && georef.isGeoreferenced
+        ? sigefImages.map(([key, url]) => (
+            <WmsOverlayImage
+              key={`sigef-${key}`}
+              url={url}
+              style={{ ...wmsStyle, zIndex: SIGEF_OVERLAY.zIndex }}
+              opacity={SIGEF_OVERLAY.opacity}
+              onFailed={() => setSigefFailed("error")}
+            />
+          ))
+        : null}
+
       {anmActive && (anmFailed || anmBboxIssue) ? (
         <div
           className="absolute left-2 top-7 z-20 max-w-[240px] rounded bg-amber-600/90 px-2 py-1 text-[10px] leading-snug text-white"
@@ -367,6 +413,19 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
               : t("anmUnavailable")}
         </div>
       ) : null}
+
+      {sigefActive && (sigefFailed || sigefBboxIssue) ? (
+        <div
+          className="absolute left-2 top-12 z-20 max-w-[240px] rounded bg-amber-600/90 px-2 py-1 text-[10px] leading-snug text-white"
+          style={{ pointerEvents: "none" }}
+        >
+          {sigefBboxIssue === "outOfBrazil" || sigefFailed === "outOfBrazil"
+            ? t("sigefOutOfBrazil")
+            : sigefFailed === "empty"
+              ? t("sigefEmpty")
+              : t("sigefUnavailable")}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -376,6 +435,7 @@ export function CadBasemapAttribution({ overlays }: { overlays: CadBasemapOverla
   const labels: string[] = [];
   if (overlays.satellite) labels.push(t("satelliteCredit"));
   if (anyAnmSigmineOverlay(overlays.anmSigmine)) labels.push(t("anmCredit"));
+  if (anySigefOverlay(overlays.sigef)) labels.push(t("sigefCredit"));
   if (labels.length === 0) return null;
 
   return (

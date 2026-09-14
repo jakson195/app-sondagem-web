@@ -1,11 +1,24 @@
-import type { CadLayer } from "./types";
+import type { CadHatchPattern, CadLayer } from "./types";
+
+const LOTEAMENTO_LOTES_LAYER_ID = "loteamento_lotes";
 
 export const DEFAULT_LINE_WIDTH = 1.5;
 export const DEFAULT_TEXT_COLOR = "#e2e8f0";
+export const DEFAULT_TEXT_SIZE = 10;
 export const DEFAULT_LINE_COLOR = "#fbbf24";
 export const DEFAULT_FILL_COLOR = "#fbbf24";
 export const DEFAULT_FILL_ALPHA = 0.06;
 export const DEFAULT_FILL_ALPHA_SELECTED = 0.15;
+
+/** Plano 2D: lotes com gramado visível (não laranja/sólido). Contorno cadastral fino e preto. */
+export const LOTEAMENTO_LOTES_GRASS_FILL = "#4ade80";
+export const LOTEAMENTO_LOTES_GRASS_FILL_ALPHA = 0.52;
+export const LOTEAMENTO_LOTES_LINE = "#111827";
+/** @deprecated use LOTEAMENTO_LOTES_LINE — mantido para imports existentes. */
+export const LOTEAMENTO_LOTES_CADASTRE_BLUE = LOTEAMENTO_LOTES_LINE;
+export const LOTEAMENTO_LOTES_LINE_WIDTH = 1;
+/** Default textSize da camada de lotes (antes: 10 via DEFAULT_TEXT_SIZE). */
+export const LOTEAMENTO_LOTES_TEXT_SIZE = 22;
 
 const SYSTEM_LAYER_IDS = new Set([
   "rtk_points",
@@ -18,6 +31,15 @@ const SYSTEM_LAYER_IDS = new Set([
   "text",
   "orthophoto",
   "hypsometric",
+  "cutfill",
+  "contours_interpolated",
+  "anm_processos",
+  "anm_protecao_fonte",
+  "anm_arrendamentos",
+  "anm_bloqueio",
+  "anm_reservas_garimpeiras",
+  "sigef_particular",
+  "sigef_publico",
 ]);
 
 function newLayerId() {
@@ -45,13 +67,45 @@ export function withAlpha(color: string, alpha: number): string {
   return color;
 }
 
-export function normalizeCadLayer(layer: CadLayer): CadLayer {
+export function isLoteamentoLotesLayer(layer: Pick<CadLayer, "id"> | undefined): boolean {
+  return layer?.id === LOTEAMENTO_LOTES_LAYER_ID;
+}
+
+/** Estilo de gramado no plano 2D; traço cadastral fino e preto. */
+export function applyLoteamentoLotesGrassStyle(layer: CadLayer): CadLayer {
   return {
+    ...layer,
+    color: LOTEAMENTO_LOTES_LINE,
+    textColor: LOTEAMENTO_LOTES_LINE,
+    lineWidth:
+      layer.lineWidth != null && layer.lineWidth <= LOTEAMENTO_LOTES_LINE_WIDTH + 0.2
+        ? layer.lineWidth
+        : LOTEAMENTO_LOTES_LINE_WIDTH,
+    fillColor: LOTEAMENTO_LOTES_GRASS_FILL,
+    fillAlpha: layer.fillAlpha != null && layer.fillAlpha >= 0.35 ? layer.fillAlpha : LOTEAMENTO_LOTES_GRASS_FILL_ALPHA,
+    hatchPattern: "grass",
+    textSize: Math.max(layer.textSize ?? 0, LOTEAMENTO_LOTES_TEXT_SIZE),
+  };
+}
+
+export function resolveLayerHatchPattern(layer: CadLayer | undefined): CadHatchPattern | undefined {
+  if (!layer) return undefined;
+  if (isLoteamentoLotesLayer(layer)) return "grass";
+  if (layer.hatchPattern === "diagonal" || layer.hatchPattern === "cross" || layer.hatchPattern === "grass") {
+    return layer.hatchPattern;
+  }
+  return undefined;
+}
+
+export function normalizeCadLayer(layer: CadLayer): CadLayer {
+  const next = {
     ...layer,
     lineWidth: layer.lineWidth ?? DEFAULT_LINE_WIDTH,
     fillColor: layer.fillColor ?? layer.color,
     textColor: layer.textColor ?? DEFAULT_TEXT_COLOR,
+    textSize: layer.textSize ?? DEFAULT_TEXT_SIZE,
   };
+  return isLoteamentoLotesLayer(next) ? applyLoteamentoLotesGrassStyle(next) : next;
 }
 
 export function normalizeCadLayers(layers: CadLayer[]): CadLayer[] {
@@ -59,11 +113,28 @@ export function normalizeCadLayers(layers: CadLayer[]): CadLayer[] {
 }
 
 export function getLayerLineColor(layer: CadLayer | undefined, fallback = DEFAULT_LINE_COLOR): string {
+  if (isLoteamentoLotesLayer(layer)) return LOTEAMENTO_LOTES_LINE;
   return layer?.color ?? fallback;
 }
 
 export function getLayerTextColor(layer: CadLayer | undefined, fallback = DEFAULT_TEXT_COLOR): string {
+  if (isLoteamentoLotesLayer(layer)) return LOTEAMENTO_LOTES_LINE;
   return layer?.textColor ?? fallback;
+}
+
+export function getLayerTextSize(layer: CadLayer | undefined, fallback = DEFAULT_TEXT_SIZE): number {
+  const size = layer?.textSize ?? (isLoteamentoLotesLayer(layer) ? LOTEAMENTO_LOTES_TEXT_SIZE : fallback);
+  return Number.isFinite(size) ? Math.max(6, Math.min(48, size)) : fallback;
+}
+
+export function resolvePointTextStyle(
+  entity: { textColor?: string; textSize?: number } | undefined,
+  layer: CadLayer | undefined,
+): { color: string; size: number } {
+  return {
+    color: entity?.textColor ?? getLayerTextColor(layer),
+    size: getLayerTextSize(undefined, entity?.textSize ?? layer?.textSize ?? DEFAULT_TEXT_SIZE),
+  };
 }
 
 export function getLayerLineWidth(layer: CadLayer | undefined, selected = false): number {
@@ -76,8 +147,34 @@ export function getLayerFillColor(
   selected = false,
   fallback = DEFAULT_FILL_COLOR,
 ): string {
-  const base = layer?.fillColor ?? layer?.color ?? fallback;
-  return withAlpha(base, selected ? DEFAULT_FILL_ALPHA_SELECTED : DEFAULT_FILL_ALPHA);
+  const styled = isLoteamentoLotesLayer(layer) && layer ? applyLoteamentoLotesGrassStyle(layer) : layer;
+  const base = styled?.fillColor ?? styled?.color ?? fallback;
+  const custom = styled?.fillAlpha;
+  const idle = custom ?? DEFAULT_FILL_ALPHA;
+  const sel = custom != null ? Math.min(1, custom + 0.12) : DEFAULT_FILL_ALPHA_SELECTED;
+  return withAlpha(base, selected ? sel : idle);
+}
+
+export function cadHatchPatternId(layerId: string): string {
+  return `cad-hatch-${layerId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+/** Preenchimento SVG: hachura (url(#...)) ou sólido com alpha da camada. */
+export function getLayerPolygonFill(
+  layer: CadLayer | undefined,
+  selected = false,
+  fallback = DEFAULT_FILL_COLOR,
+): string {
+  const hatch = resolveLayerHatchPattern(layer);
+  if (hatch && layer?.id) {
+    return `url(#${cadHatchPatternId(layer.id)})`;
+  }
+  return getLayerFillColor(layer, selected, fallback);
+}
+
+export function getLayerStrokeDasharray(layer: CadLayer | undefined): string | undefined {
+  if (layer?.lineType === "dashed" || layer?.id === "residuals") return "8 5";
+  return undefined;
 }
 
 function colorLuminance(color: string): number {
@@ -111,6 +208,7 @@ export function createUserLayer(name: string, patch: Partial<CadLayer> = {}): Ca
     locked: false,
     fillColor: patch.fillColor ?? color,
     textColor: patch.textColor ?? DEFAULT_TEXT_COLOR,
+    textSize: patch.textSize ?? DEFAULT_TEXT_SIZE,
     lineWidth: patch.lineWidth ?? DEFAULT_LINE_WIDTH,
     ...patch,
   });
@@ -124,10 +222,11 @@ export function mergeLayerStyles(layer: CadLayer, patch: Partial<CadLayer>): Cad
   return normalizeCadLayer({ ...layer, ...patch });
 }
 
-export function defaultDrawLayerStyles(): Pick<CadLayer, "lineWidth" | "fillColor" | "textColor"> {
+export function defaultDrawLayerStyles(): Pick<CadLayer, "lineWidth" | "fillColor" | "textColor" | "textSize"> {
   return {
     lineWidth: DEFAULT_LINE_WIDTH,
     fillColor: DEFAULT_FILL_COLOR,
     textColor: "#fde68a",
+    textSize: DEFAULT_TEXT_SIZE,
   };
 }

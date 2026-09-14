@@ -16,8 +16,14 @@ export function CompanySwitcher({
   const load = useCallback(async () => {
     try {
       const [companiesRes, meRes] = await Promise.all([
-        fetch("/api/auth/companies", { credentials: "include" }),
-        fetch("/api/auth/me", { credentials: "include" }),
+        fetch("/api/auth/companies", {
+          credentials: "include",
+          signal: AbortSignal.timeout(4000),
+        }),
+        fetch("/api/auth/me", {
+          credentials: "include",
+          signal: AbortSignal.timeout(4000),
+        }),
       ]);
       const companiesJson = (await companiesRes.json()) as { companies?: CompanyRow[] };
       const meJson = (await meRes.json()) as {

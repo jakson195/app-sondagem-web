@@ -36,6 +36,8 @@ const FUNCAO_ALIASES: Record<string, string> = {
   gerarTin: "gerar_tin",
   gerarCurvas: "curvas_nivel",
   gerarMemorial: "memorial_descritivo",
+  gerarLoteamento: "gerar_loteamento",
+  lotear: "gerar_loteamento",
   criarPerfil: "perfil_longitudinal",
   calcularVolume: "volume_corte",
   calcularDeclividade: "mapa_declividade",
@@ -125,6 +127,38 @@ export function parseCadAiResponse(raw: string | Record<string, unknown>): CadAi
   }
 
   return [{ acao: "desconhecido", resposta: "Nenhuma ação reconhecida na resposta da IA." }];
+}
+
+export interface OpenAiToolCallLike {
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}
+
+/** Converte tool_calls da OpenAI em CadAiCommand[] (name = acao, arguments = campos). */
+export function parseOpenAiToolCalls(toolCalls: OpenAiToolCallLike[]): CadAiCommand[] {
+  if (!toolCalls.length) {
+    return [{ acao: "desconhecido", resposta: "Nenhuma ferramenta foi chamada pela IA." }];
+  }
+
+  return toolCalls.map((tc) => {
+    const name = tc.function?.name?.trim() || "desconhecido";
+    let args: Record<string, unknown> = {};
+    try {
+      const raw = tc.function?.arguments?.trim() || "{}";
+      args = JSON.parse(raw) as Record<string, unknown>;
+      if (args == null || typeof args !== "object" || Array.isArray(args)) {
+        args = {};
+      }
+    } catch {
+      return {
+        acao: "desconhecido" as CadAiCommand["acao"],
+        resposta: `Argumentos inválidos na ferramenta "${name}".`,
+      };
+    }
+    return rawToCommand({ ...args, acao: name, funcao: name });
+  });
 }
 
 /** Executa uma sequência de comandos CAD, propagando estado entre eles. */

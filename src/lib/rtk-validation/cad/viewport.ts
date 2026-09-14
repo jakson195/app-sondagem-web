@@ -46,6 +46,46 @@ export function computeViewportBounds(entities: CadEntity[], paddingRatio = 0.1)
   };
 }
 
+/** Caixa de conteúdo do SVG com preserveAspectRatio="xMidYMid meet". */
+export function svgMeetBox(cssW: number, cssH: number, viewW: number, viewH: number) {
+  const scale = Math.min(cssW / Math.max(viewW, 1e-9), cssH / Math.max(viewH, 1e-9));
+  return {
+    scale,
+    offsetX: (cssW - viewW * scale) / 2,
+    offsetY: (cssH - viewH * scale) / 2,
+  };
+}
+
+export function clientToViewBox(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  viewW: number,
+  viewH: number,
+): { sx: number; sy: number } {
+  const meet = svgMeetBox(rect.width, rect.height, viewW, viewH);
+  if (meet.scale < 1e-9) return { sx: viewW / 2, sy: viewH / 2 };
+  return {
+    sx: (clientX - rect.left - meet.offsetX) / meet.scale,
+    sy: (clientY - rect.top - meet.offsetY) / meet.scale,
+  };
+}
+
+export function viewBoxToCss(
+  sx: number,
+  sy: number,
+  cssW: number,
+  cssH: number,
+  viewW: number,
+  viewH: number,
+): { x: number; y: number } {
+  const meet = svgMeetBox(cssW, cssH, viewW, viewH);
+  return {
+    x: meet.offsetX + sx * meet.scale,
+    y: meet.offsetY + sy * meet.scale,
+  };
+}
+
 export function worldToScreen(
   x: number,
   y: number,
@@ -74,6 +114,80 @@ export function screenToWorld(
     viewport.minY +
     ((viewport.padding + innerH - sy) / innerH) * (viewport.maxY - viewport.minY);
   return { x, y };
+}
+
+/** Altura padrão de anotação genérica (ruas/drenagem/tabelas), em metros de terreno. */
+export const CAD_LOT_LABEL_HEIGHT_M = 0.8;
+
+/** Altura em metros e teto em px: número circundado / área em destaque / testada-profundidade. */
+export const CAD_CADASTRAL_TITLE_HEIGHT_M = 3.2;
+export const CAD_CADASTRAL_AREA_HEIGHT_M = 4.2;
+export const CAD_CADASTRAL_EDGE_HEIGHT_M = 2.4;
+export const CAD_CADASTRAL_TITLE_MAX_PX = 28;
+export const CAD_CADASTRAL_AREA_MAX_PX = 34;
+export const CAD_CADASTRAL_EDGE_MAX_PX = 20;
+export const CAD_CADASTRAL_TITLE_SPAN_FACTOR = 0.26;
+export const CAD_CADASTRAL_AREA_SPAN_FACTOR = 0.32;
+export const CAD_CADASTRAL_EDGE_SPAN_FACTOR = 0.18;
+
+export function worldMetersPerPixel(viewport: CadViewport): number {
+  const innerW = Math.max(1, viewport.width - viewport.padding * 2);
+  const innerH = Math.max(1, viewport.height - viewport.padding * 2);
+  const spanX = Math.max(1e-6, viewport.maxX - viewport.minX);
+  const spanY = Math.max(1e-6, viewport.maxY - viewport.minY);
+  return Math.max(spanX / innerW, spanY / innerH);
+}
+
+/**
+ * Tamanho de anotação de loteamento/REURB em px do SVG, a partir da altura em metros.
+ * `minSpanM` (lado menor do lote) limita o texto para caber na testada.
+ */
+export function annotationFontSizePx(
+  viewport: CadViewport,
+  heightM = CAD_LOT_LABEL_HEIGHT_M,
+  minSpanM?: number,
+  maxPx = 5.5,
+  spanFactor = 0.12,
+): number {
+  const mpp = worldMetersPerPixel(viewport);
+  let px = heightM / mpp;
+  if (minSpanM != null && minSpanM > 0) {
+    px = Math.min(px, (minSpanM * spanFactor) / mpp);
+  }
+  return Math.max(1.6, Math.min(maxPx, px));
+}
+
+/** Número / área / cotas de frente e lado — bem maiores que ruas e drenagem. */
+export function cadastralLotFontSizePx(
+  viewport: CadViewport,
+  role: "lot-title" | "lot-area" | "lot-edge",
+  minSpanM?: number,
+): number {
+  if (role === "lot-title") {
+    return annotationFontSizePx(
+      viewport,
+      CAD_CADASTRAL_TITLE_HEIGHT_M,
+      minSpanM,
+      CAD_CADASTRAL_TITLE_MAX_PX,
+      CAD_CADASTRAL_TITLE_SPAN_FACTOR,
+    );
+  }
+  if (role === "lot-area") {
+    return annotationFontSizePx(
+      viewport,
+      CAD_CADASTRAL_AREA_HEIGHT_M,
+      minSpanM,
+      CAD_CADASTRAL_AREA_MAX_PX,
+      CAD_CADASTRAL_AREA_SPAN_FACTOR,
+    );
+  }
+  return annotationFontSizePx(
+    viewport,
+    CAD_CADASTRAL_EDGE_HEIGHT_M,
+    minSpanM,
+    CAD_CADASTRAL_EDGE_MAX_PX,
+    CAD_CADASTRAL_EDGE_SPAN_FACTOR,
+  );
 }
 
 export function snapToPoint(

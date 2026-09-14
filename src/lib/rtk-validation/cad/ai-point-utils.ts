@@ -3,6 +3,76 @@ import type { CadEntity, CadPointEntity, CadVertex } from "./types";
 const POINT_LIST_FILLER =
   /^(do|de|ao|a|até|ate|os|as|o|pontos?|vértices?|vertices?|com|nos?|nas?)$/i;
 
+const PT_CARDINALS: Record<string, number> = {
+  um: 1,
+  uma: 1,
+  primeiro: 1,
+  primeira: 1,
+  dois: 2,
+  duas: 2,
+  segundo: 2,
+  segunda: 2,
+  tres: 3,
+  terceiro: 3,
+  terceira: 3,
+  quatro: 4,
+  quarto: 4,
+  quarta: 4,
+  cinco: 5,
+  quinto: 5,
+  quinta: 5,
+  seis: 6,
+  sexto: 6,
+  sexta: 6,
+  sete: 7,
+  setimo: 7,
+  setima: 7,
+  oito: 8,
+  oitavo: 8,
+  oitava: 8,
+  nove: 9,
+  nono: 9,
+  nona: 9,
+  dez: 10,
+  decimo: 10,
+  decima: 10,
+  onze: 11,
+  doze: 12,
+  treze: 13,
+  quatorze: 14,
+  catorze: 14,
+  quinze: 15,
+  dezesseis: 16,
+  dezasseis: 16,
+  dezessete: 17,
+  dezoito: 18,
+  dezenove: 19,
+  vinte: 20,
+};
+
+function foldPt(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+export function parsePortugueseNumberWord(raw: string): number | null {
+  const folded = foldPt(raw);
+  if (/^\d+$/.test(folded)) return Number(folded);
+  return PT_CARDINALS[folded] ?? null;
+}
+
+function stripSpokenPointNoise(token: string): string {
+  return token
+    .trim()
+    .replace(/^(o|a|os|as|ao|à|do|da|de|no|na|dos|das)\s+/i, "")
+    .replace(/^(pontos?|v[eé]rtices?|vertices?)\s*/i, "")
+    .replace(/^(o|a|os|as)\s+/i, "")
+    .trim();
+}
+
 export function normalizePointLabel(label: string): string {
   return label.trim().toUpperCase().replace(/\s+/g, "");
 }
@@ -16,12 +86,41 @@ export function parseLabeledPointToken(
   return { prefix: match[1] || "P", num: Number(match[2]) };
 }
 
+/** Interpreta "P4", "4", "o quatro", "ponto" (início de intervalo = 1). */
+export function parseSpokenPointToken(
+  token: string,
+  defaultPrefix = "P",
+  defaultNum?: number,
+): { prefix: string; num: number } | null {
+  const labeled = parseLabeledPointToken(token);
+  if (labeled) return labeled;
+
+  const cleaned = stripSpokenPointNoise(token);
+  if (!cleaned) {
+    return defaultNum != null ? { prefix: defaultPrefix, num: defaultNum } : null;
+  }
+
+  const labeledClean = parseLabeledPointToken(cleaned);
+  if (labeledClean) return labeledClean;
+
+  const spoken = parsePortugueseNumberWord(cleaned);
+  if (spoken != null) return { prefix: defaultPrefix, num: spoken };
+
+  return null;
+}
+
 /** Expande intervalos como V1–V4 → V1, V2, V3, V4. */
-export function expandPointRange(from: string, to: string): string[] {
-  const startRef = parseLabeledPointToken(from);
-  const endRef = parseLabeledPointToken(to);
+export function expandPointRange(from: string, to: string, defaultPrefix = "P"): string[] {
+  const startRef = parseSpokenPointToken(from, defaultPrefix, 1);
+  const endRef = parseSpokenPointToken(to, startRef?.prefix ?? defaultPrefix);
   if (!startRef || !endRef) return [from.trim(), to.trim()].filter(Boolean);
-  if (startRef.prefix !== endRef.prefix) return [from.trim(), to.trim()];
+  if (startRef.prefix !== endRef.prefix) {
+    const alignedEnd = parseSpokenPointToken(to, startRef.prefix);
+    if (!alignedEnd || alignedEnd.prefix !== startRef.prefix) {
+      return [from.trim(), to.trim()];
+    }
+    return expandPointRange(`${startRef.prefix}${startRef.num}`, `${alignedEnd.prefix}${alignedEnd.num}`, startRef.prefix);
+  }
 
   const start = Math.min(startRef.num, endRef.num);
   const end = Math.max(startRef.num, endRef.num);
@@ -30,8 +129,8 @@ export function expandPointRange(from: string, to: string): string[] {
   return Array.from({ length: end - start + 1 }, (_, i) => `${startRef.prefix}${start + i}`);
 }
 
-/** Interpreta listas e intervalos: "do V1 ao V4", "V1, V2, V3", "P1 P2 P3 P4". */
-export function parsePointReferenceList(text: string): string[] {
+/** Interpreta listas e intervalos: "do V1 ao V4", "do ponto até o quatro", "P1 P2 P3 P4". */
+export function parsePointReferenceList(text: string, defaultPrefix = "P"): string[] {
   let raw = text.trim();
   if (!raw) return [];
 
@@ -44,7 +143,7 @@ export function parsePointReferenceList(text: string): string[] {
   for (const pattern of rangePatterns) {
     const match = raw.match(pattern);
     if (match) {
-      return expandPointRange(match[1].trim(), match[2].trim());
+      return expandPointRange(match[1].trim(), match[2].trim(), defaultPrefix);
     }
   }
 
@@ -114,9 +213,11 @@ export function resolvePointLabels(
   labels: string[],
 ): { vertices: CadVertex[]; missing: string[] } {
   const expanded =
-    labels.length === 1 && labels[0]?.includes(" ao ")
+    labels.length === 1 && /(?:\sao\s|\sat[eé]\s)/i.test(labels[0] ?? "")
       ? parsePointReferenceList(labels[0])
-      : labels.flatMap((label) => (label.includes(" ao ") ? parsePointReferenceList(label) : [label]));
+      : labels.flatMap((label) =>
+          /(?:\sao\s|\sat[eé]\s)/i.test(label) ? parsePointReferenceList(label) : [label],
+        );
 
   const vertices: CadVertex[] = [];
   const missing: string[] = [];

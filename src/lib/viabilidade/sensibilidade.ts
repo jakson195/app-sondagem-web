@@ -1,0 +1,1 @@
+export { calcularCenarios } from "./financeiros";

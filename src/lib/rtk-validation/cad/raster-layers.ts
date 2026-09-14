@@ -16,9 +16,18 @@ export const ORTHOPHOTO_LAYER: CadLayer = {
   locked: true,
 };
 
+export const CUTFILL_LAYER: CadLayer = {
+  id: "cutfill",
+  name: "MAPA_CORTE_ATERRO",
+  color: "#dc2626",
+  visible: true,
+  locked: true,
+};
+
 const RASTER_LAYER_BY_KIND: Record<CadRasterKind, CadLayer> = {
   hypsometric: HYPSOMETRIC_LAYER,
   orthophoto: ORTHOPHOTO_LAYER,
+  cutfill: CUTFILL_LAYER,
 };
 
 export function rasterLayerId(kind: CadRasterKind): string {
@@ -71,6 +80,9 @@ export function countRasterLayerItems(
   }
   if (layerId === ORTHOPHOTO_LAYER.id) {
     return rasters.some((r) => r.kind === "orthophoto") ? 1 : 0;
+  }
+  if (layerId === CUTFILL_LAYER.id) {
+    return rasters.some((r) => r.kind === "cutfill") ? 1 : 0;
   }
   return null;
 }

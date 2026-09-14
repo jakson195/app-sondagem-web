@@ -1,4 +1,5 @@
 import type { SurveyPoint } from "../types";
+import { applyDetectedZoneToProject } from "./utm-zone";
 import type { CadEntity, CadProject } from "./types";
 
 function newId(prefix: string) {
@@ -41,9 +42,9 @@ export function importSurveyPointsToProject(
       )
     : [...project.layers, { ...IMPORT_LAYER, name: layerName }];
 
-  return {
+  return applyDetectedZoneToProject({
     ...project,
     layers,
     entities: [...project.entities, ...imported],
-  };
+  });
 }

@@ -34,6 +34,18 @@ export function hypsometricColor(z: number, zMin: number, zMax: number): [number
   return [last.r, last.g, last.b, 255];
 }
 
+/** Vermelho = corte (terreno acima), azul = aterro (terreno abaixo). */
+export function cutFillColor(dh: number, maxAbs: number): [number, number, number, number] {
+  if (!Number.isFinite(dh)) return [0, 0, 0, 0];
+  const span = maxAbs > 1e-9 ? maxAbs : 1;
+  const t = Math.max(-1, Math.min(1, dh / span));
+  if (t >= 0) {
+    return [198, 40, 40, Math.round(80 + 160 * t)];
+  }
+  const u = -t;
+  return [30, 90, 200, Math.round(80 + 160 * u)];
+}
+
 function newRasterId() {
   return `raster_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -84,6 +96,53 @@ export function generateHypsometricRaster(
     maxX: grid.maxX,
     maxY: grid.maxY,
     opacity: options.opacity ?? 0.85,
+    visible: true,
+    zMin: grid.zMin,
+    zMax: grid.zMax,
+  };
+}
+
+/** Mapa de cores corte (vermelho) / aterro (azul) a partir de ΔZ = Z terreno − Z projeto. */
+export function generateCutFillRaster(
+  samples: ElevationSample[],
+  options: HypsometricOptions = {},
+): CadRasterOverlay {
+  const grid = buildIdwElevationGrid(samples, {
+    gridCols: options.gridCols ?? 120,
+    gridRows: options.gridRows ?? 120,
+  });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = grid.cols;
+  canvas.height = grid.rows;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas não disponível.");
+
+  const maxAbs = Math.max(Math.abs(grid.zMin), Math.abs(grid.zMax), 0.01);
+  const imageData = ctx.createImageData(grid.cols, grid.rows);
+  for (let j = 0; j < grid.rows; j++) {
+    for (let i = 0; i < grid.cols; i++) {
+      const z = grid.values[i + j * grid.cols];
+      const [r, g, b, a] = cutFillColor(z, maxAbs);
+      const idx = (i + (grid.rows - 1 - j) * grid.cols) * 4;
+      imageData.data[idx] = r;
+      imageData.data[idx + 1] = g;
+      imageData.data[idx + 2] = b;
+      imageData.data[idx + 3] = a;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  return {
+    id: newRasterId(),
+    name: "Corte e aterro",
+    kind: "cutfill",
+    imageDataUrl: canvas.toDataURL("image/png"),
+    minX: grid.minX,
+    minY: grid.minY,
+    maxX: grid.maxX,
+    maxY: grid.maxY,
+    opacity: options.opacity ?? 0.75,
     visible: true,
     zMin: grid.zMin,
     zMax: grid.zMax,

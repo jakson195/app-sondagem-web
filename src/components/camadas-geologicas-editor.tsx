@@ -119,12 +119,18 @@ export function CamadasGeologicasEditor({
                         className="w-full min-w-[10rem] rounded border border-[var(--border)] bg-[var(--card)] p-1"
                       />
                     </td>
-                    <td
-                      className="h-10 w-12 min-w-[2.5rem] border border-[var(--border)] p-0"
-                      style={{ backgroundColor: row.cor }}
-                      title={row.tipo || row.cor}
-                      aria-label={row.tipo ? `Cor: ${row.tipo}` : "Sem material"}
-                    />
+                    <td className="border border-[var(--border)] p-1">
+                      <input
+                        type="color"
+                        value={/^#[0-9A-Fa-f]{6}$/.test(row.cor) ? row.cor : "#cccccc"}
+                        onChange={(e) =>
+                          onChange(atualizarCamadaGeolCampo(camadas, i, "cor", e.target.value))
+                        }
+                        className="h-9 w-full min-w-[2.5rem] cursor-pointer rounded border border-[var(--border)] bg-[var(--card)] p-0.5"
+                        title="Cor da camada no perfil"
+                        aria-label={`Cor da camada ${i + 1}`}
+                      />
+                    </td>
                     <td className="border border-[var(--border)] p-1 text-center">
                       <button
                         type="button"

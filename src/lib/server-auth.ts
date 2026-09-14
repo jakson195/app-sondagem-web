@@ -1,12 +1,19 @@
 import jwt from "jsonwebtoken";
+import { cache } from "react";
 import { cookies } from "next/headers";
 import type { SystemRole } from "@prisma/client";
 import { AUTH_TOKEN_COOKIE } from "@/lib/auth-constants";
 import { getLocalBypassAuthUser } from "@/lib/auth-bypass";
+import {
+  AUTH_REQUEST_TIMEOUT_MS,
+  hasSupabaseAuthCookie,
+  isAuthRemoteUnavailable,
+  markAuthRemoteUnavailable,
+  withAuthTimeout,
+} from "@/lib/auth-timeout";
 import { syncUserFromSupabase } from "@/lib/auth-user-sync";
 import { prisma } from "@/lib/prisma";
 import {
-  assertSupabaseAuthConfigured,
   createSupabaseClient,
   isSupabaseAuthConfigured,
 } from "@/lib/supabase";
@@ -82,27 +89,41 @@ export async function getAuthPayloadFromCookies(): Promise<JwtAuthPayload | null
 export async function getAuthUserFromRequest(req: Request) {
   const bypassUser = await getLocalBypassAuthUser();
   if (bypassUser) return bypassUser;
+  const payload = await getAuthPayloadFromRequest(req);
+  const jwtUser = await getAuthUserFromPayload(payload);
+  if (jwtUser) return jwtUser;
   const supabaseUser = await getSupabaseUserFromRequest(req);
   if (supabaseUser) {
-    return syncUserFromSupabase(supabaseUser);
+    return withAuthTimeout(
+      syncUserFromSupabase(supabaseUser),
+      "syncUserFromSupabase (request)",
+      AUTH_REQUEST_TIMEOUT_MS,
+      { tripCircuit: true },
+    );
   }
-  const payload = await getAuthPayloadFromRequest(req);
-  return getAuthUserFromPayload(payload);
+  return null;
 }
 
-export async function getAuthUserFromCookies() {
+export const getAuthUserFromCookies = cache(async function getAuthUserFromCookies() {
   const bypassUser = await getLocalBypassAuthUser();
   if (bypassUser) return bypassUser;
+  const payload = await getAuthPayloadFromCookies();
+  const jwtUser = await getAuthUserFromPayload(payload);
+  if (jwtUser) return jwtUser;
   const supabaseUser = await getSupabaseUserFromCookies();
   if (supabaseUser) {
-    return syncUserFromSupabase(supabaseUser);
+    return withAuthTimeout(
+      syncUserFromSupabase(supabaseUser),
+      "syncUserFromSupabase",
+      AUTH_REQUEST_TIMEOUT_MS,
+      { tripCircuit: true },
+    );
   }
-  const payload = await getAuthPayloadFromCookies();
-  return getAuthUserFromPayload(payload);
-}
+  return null;
+});
 
 async function getSupabaseUserFromRequest(req: Request) {
-  if (!isSupabaseAuthConfigured()) return null;
+  if (!isSupabaseAuthConfigured() || isAuthRemoteUnavailable()) return null;
 
   const auth = req.headers.get("authorization");
   if (auth?.startsWith("Bearer ")) {
@@ -110,8 +131,13 @@ async function getSupabaseUserFromRequest(req: Request) {
     if (token) {
       enableLocalSupabaseTlsWorkaround();
       const supabase = createSupabaseClient();
-      const { data, error } = await supabase.auth.getUser(token);
-      if (!error && data.user) return data.user;
+      const result = await withAuthTimeout(
+        supabase.auth.getUser(token),
+        "supabase.auth.getUser (bearer)",
+        AUTH_REQUEST_TIMEOUT_MS,
+        { tripCircuit: true },
+      );
+      if (result && !result.error && result.data.user) return result.data.user;
     }
   }
 
@@ -119,31 +145,86 @@ async function getSupabaseUserFromRequest(req: Request) {
 }
 
 async function getSupabaseUserFromCookies() {
-  if (!isSupabaseAuthConfigured()) return null;
+  if (!isSupabaseAuthConfigured() || isAuthRemoteUnavailable()) return null;
   try {
+    const jar = await cookies();
+    if (!hasSupabaseAuthCookie(jar.getAll())) return null;
     const supabase = await createSupabaseServerClient();
-    const { data, error } = await supabase.auth.getUser();
-    if (error) return null;
+    const result = await withAuthTimeout(
+      supabase.auth.getUser(),
+      "supabase.auth.getUser (cookies)",
+      AUTH_REQUEST_TIMEOUT_MS,
+      { tripCircuit: true },
+    );
+    if (!result) return null;
+    const { data, error } = result;
+    if (error) {
+      if (isUnreachableAuthError(error)) {
+        markAuthRemoteUnavailable(error.message ?? "supabase getUser error");
+      }
+      return null;
+    }
     return data.user ?? null;
-  } catch {
+  } catch (error) {
+    if (isUnreachableAuthError(error)) {
+      markAuthRemoteUnavailable(error instanceof Error ? error.message : "supabase getUser");
+    }
     return null;
   }
 }
 
+function isUnreachableAuthError(error: unknown): boolean {
+  const text =
+    error instanceof Error
+      ? `${error.name} ${error.message}`
+      : typeof error === "object" && error && "message" in error
+        ? String((error as { message?: unknown }).message)
+        : String(error);
+  return /ENOTFOUND|ECONNREFUSED|ETIMEDOUT|fetch failed|AuthRetryableFetchError|P1001|P2024|kind: Closed|Can't reach database|Timed out fetching/i.test(
+    text,
+  );
+}
+
+function userFromJwtPayload(payload: JwtAuthPayload) {
+  return {
+    id: payload.userId,
+    email: `jwt-${payload.userId}@local`,
+    name: null as string | null,
+    systemRole: payload.systemRole,
+  };
+}
+
 async function getAuthUserFromPayload(payload: JwtAuthPayload | null) {
   if (!payload) return null;
-  const user = await prisma.user.findUnique({
-    where: { id: payload.userId },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      systemRole: true,
-    },
-  });
-  if (!user) return null;
-  if (user.systemRole !== payload.systemRole) return null;
-  return user;
+  if (isAuthRemoteUnavailable()) return userFromJwtPayload(payload);
+  try {
+    const user = await withAuthTimeout(
+      prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          systemRole: true,
+        },
+      }),
+      "prisma.user.findUnique (jwt)",
+      AUTH_REQUEST_TIMEOUT_MS,
+      { tripCircuit: true },
+    );
+    if (user) {
+      if (user.systemRole !== payload.systemRole) return null;
+      return user;
+    }
+    if (isAuthRemoteUnavailable()) return userFromJwtPayload(payload);
+    return null;
+  } catch (error) {
+    if (isUnreachableAuthError(error)) {
+      markAuthRemoteUnavailable(error instanceof Error ? error.message : "prisma jwt user");
+      return userFromJwtPayload(payload);
+    }
+    throw error;
+  }
 }
 
 export function authCookieName(): typeof AUTH_TOKEN_COOKIE {

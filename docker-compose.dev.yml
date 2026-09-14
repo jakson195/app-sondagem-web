@@ -1,0 +1,18 @@
+# Dev parcial: Postgres + API geo (+ gateway opcional)
+# docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres-core postgres-geo api-geospatial
+
+name: soilsul
+
+services:
+  app-web:
+    profiles: ["production-stack"]
+
+  digital-twin-viewer:
+    profiles: ["production-stack"]
+
+  api-geospatial:
+    ports:
+      - "${GEO_API_PORT:-8000}:8000"
+    volumes:
+      - ./api-geospatial/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

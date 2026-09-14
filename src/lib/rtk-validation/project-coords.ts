@@ -143,9 +143,21 @@ export function detectSirgasUtmFromSamples(samples: { x: number; y: number }[]):
   eastingAxis: "x" | "y";
   northingAxis: "x" | "y";
   epsg: string;
+  /** Votos do fuso vencedor / amostras analisadas (0–1). */
+  confidence: number;
+  votes: number;
+  sampleCount: number;
 } {
   if (samples.length === 0) {
-    return { zone: 23, eastingAxis: "x", northingAxis: "y", epsg: sirgasUtmEpsgCode(23) };
+    return {
+      zone: 23,
+      eastingAxis: "x",
+      northingAxis: "y",
+      epsg: sirgasUtmEpsgCode(23),
+      confidence: 0,
+      votes: 0,
+      sampleCount: 0,
+    };
   }
 
   const zoneVotes = new Map<number, number>();
@@ -176,6 +188,9 @@ export function detectSirgasUtmFromSamples(samples: { x: number; y: number }[]):
     eastingAxis: swapped ? "y" : "x",
     northingAxis: swapped ? "x" : "y",
     epsg: sirgasUtmEpsgCode(zone),
+    confidence: total > 0 ? bestVotes / total : 0,
+    votes: bestVotes,
+    sampleCount: total,
   };
 }
 

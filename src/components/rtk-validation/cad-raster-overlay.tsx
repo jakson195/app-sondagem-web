@@ -44,7 +44,10 @@ export function CadRasterSvgLayer({ rasters, viewport }: CadRasterLayerProps) {
 function HypsometricLegend({ raster }: { raster: CadRasterOverlay }) {
   if (raster.zMin == null || raster.zMax == null) return null;
 
-  const gradient = HYPSOMETRIC_STOPS.map((s) => `rgb(${s.r},${s.g},${s.b}) ${s.t * 100}%`).join(", ");
+  const cutfill = raster.kind === "cutfill";
+  const gradient = cutfill
+    ? "rgb(30,90,200) 0%, rgb(255,255,255) 50%, rgb(198,40,40) 100%"
+    : HYPSOMETRIC_STOPS.map((s) => `rgb(${s.r},${s.g},${s.b}) ${s.t * 100}%`).join(", ");
 
   return (
     <div className="pointer-events-none absolute bottom-14 right-3 z-20 rounded-lg border border-white/20 bg-black/70 px-2 py-2 text-[10px] text-white shadow-lg">
@@ -55,9 +58,9 @@ function HypsometricLegend({ raster }: { raster: CadRasterOverlay }) {
           style={{ background: `linear-gradient(to top, ${gradient})` }}
         />
         <div className="flex flex-col justify-between font-mono text-[9px] text-[#e2e8f0]">
-          <span>{raster.zMax.toFixed(1)} m</span>
-          <span>{((raster.zMax + raster.zMin) / 2).toFixed(1)} m</span>
-          <span>{raster.zMin.toFixed(1)} m</span>
+          <span>{cutfill ? `Corte ${raster.zMax.toFixed(1)} m` : `${raster.zMax.toFixed(1)} m`}</span>
+          <span>{cutfill ? "0" : ((raster.zMax + raster.zMin) / 2).toFixed(1) + " m"}</span>
+          <span>{cutfill ? `Aterro ${Math.abs(raster.zMin).toFixed(1)} m` : `${raster.zMin.toFixed(1)} m`}</span>
         </div>
       </div>
     </div>
@@ -67,9 +70,11 @@ function HypsometricLegend({ raster }: { raster: CadRasterOverlay }) {
 /** Legenda HTML sobreposta ao canvas. */
 export function CadRasterLegend({ rasters, showHypsometricLegend = true }: Pick<CadRasterLayerProps, "rasters" | "showHypsometricLegend">) {
   if (!showHypsometricLegend) return null;
-  const hypsometric = rasters.find((r) => r.visible && r.kind === "hypsometric");
-  if (!hypsometric) return null;
-  return <HypsometricLegend raster={hypsometric} />;
+  const overlay =
+    rasters.find((r) => r.visible && r.kind === "cutfill") ??
+    rasters.find((r) => r.visible && r.kind === "hypsometric");
+  if (!overlay) return null;
+  return <HypsometricLegend raster={overlay} />;
 }
 
 /** @deprecated Use CadRasterSvgLayer + CadRasterLegend */

@@ -5,6 +5,7 @@ import { ObraModulosProvider } from "@/components/obra-context";
 import { isAuthBypassEnabled } from "@/lib/auth-bypass";
 import { getActiveCompanyContext } from "@/lib/auth/active-company";
 import { isPlatformSuperAdmin } from "@/lib/platform-admin";
+import { AUTH_REQUEST_TIMEOUT_MS, withAuthTimeout } from "@/lib/auth-timeout";
 import { assertSubscriptionAllowsAccess } from "@/lib/saas/subscription-service";
 import { getAuthUserFromCookies } from "@/lib/server-auth";
 
@@ -13,29 +14,49 @@ export default async function AppGroupLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const user = await getAuthUserFromCookies();
+  let user: Awaited<ReturnType<typeof getAuthUserFromCookies>> = null;
+  try {
+    user = await withAuthTimeout(
+      getAuthUserFromCookies(),
+      "app-layout getAuthUserFromCookies",
+      AUTH_REQUEST_TIMEOUT_MS + 800,
+      { tripCircuit: true },
+    );
+  } catch (e) {
+    console.error("[app-layout] auth failed; redirecting to login", e);
+  }
   if (!user) {
     redirect("/login");
   }
 
-  const company = await getActiveCompanyContext(user);
   const isPlatformAdmin = isPlatformSuperAdmin(user.systemRole);
-  const access =
-    isAuthBypassEnabled() || company == null
-      ? { ok: true as const }
-      : await assertSubscriptionAllowsAccess(company.companyId);
+  let access: Awaited<ReturnType<typeof assertSubscriptionAllowsAccess>> = {
+    ok: true,
+  };
+  try {
+    const company = await withAuthTimeout(
+      getActiveCompanyContext(user),
+      "getActiveCompanyContext",
+    );
+    access =
+      isAuthBypassEnabled() || company == null
+        ? { ok: true as const }
+        : await assertSubscriptionAllowsAccess(company.companyId);
+  } catch (e) {
+    console.error("[app-layout] company/subscription check failed; loading app anyway", e);
+  }
 
   return (
     <ObraModulosProvider>
       {!access.ok && isPlatformAdmin ? (
-        <div className="border-b border-amber-400/50 bg-amber-50 px-4 py-3 text-center text-sm text-amber-950 dark:bg-amber-950/50 dark:text-amber-100">
+        <div className="cad-app-chrome border-b border-amber-400/50 bg-amber-50 px-4 py-3 text-center text-sm text-amber-950 dark:bg-amber-950/50 dark:text-amber-100">
           {access.message}{" "}
           <Link href="/assinatura" className="font-semibold underline">
             Gerir assinatura
           </Link>
         </div>
       ) : !access.ok ? (
-        <div className="border-b border-amber-400/50 bg-amber-50 px-4 py-3 text-center text-sm text-amber-950 dark:bg-amber-950/50 dark:text-amber-100">
+        <div className="cad-app-chrome border-b border-amber-400/50 bg-amber-50 px-4 py-3 text-center text-sm text-amber-950 dark:bg-amber-950/50 dark:text-amber-100">
           Acesso limitado. Contacte o suporte DataGeo para activar a sua conta.
         </div>
       ) : null}

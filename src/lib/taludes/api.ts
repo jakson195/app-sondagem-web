@@ -11,9 +11,33 @@ function taludesUrl(path: string): string {
   return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+const TALUDES_API_HINT =
+  "API Taludes indisponível. Noutro terminal execute: cd app-web && npm run taludes:api";
+
+async function taludesFetch(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.toLowerCase().includes("failed to fetch") || msg.toLowerCase().includes("network")) {
+      throw new Error(TALUDES_API_HINT);
+    }
+    throw err;
+  }
+}
+
+async function parseTaludesError(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = (await res.json()) as { error?: string; detail?: string };
+    return data.error ?? data.detail ?? fallback;
+  } catch {
+    return res.status === 502 ? TALUDES_API_HINT : fallback;
+  }
+}
+
 export async function listSurveys(projectId = "default"): Promise<SurveyRecord[]> {
-  const res = await fetch(taludesUrl(`/surveys?project_id=${projectId}`));
-  if (!res.ok) throw new Error("Falha ao listar levantamentos");
+  const res = await taludesFetch(taludesUrl(`/surveys?project_id=${projectId}`));
+  if (!res.ok) throw new Error(await parseTaludesError(res, "Falha ao listar levantamentos"));
   const data = (await res.json()) as { surveys: SurveyRecord[] };
   return data.surveys ?? [];
 }
@@ -33,10 +57,9 @@ export async function uploadSurvey(
   fd.append("project_id", opts.projectId ?? "default");
   fd.append("captured_at", opts.capturedAt ?? new Date().toISOString());
   fd.append("kind", opts.kind ?? "ortho");
-  const res = await fetch(taludesUrl("/surveys/upload"), { method: "POST", body: fd });
+  const res = await taludesFetch(taludesUrl("/surveys/upload"), { method: "POST", body: fd });
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(err.detail ?? "Upload falhou");
+    throw new Error(await parseTaludesError(res, "Upload falhou"));
   }
   return res.json() as Promise<SurveyRecord>;
 }
@@ -52,22 +75,21 @@ export async function runCompare(body: {
   enable_dsm_diff?: boolean;
   enable_segmentation?: boolean;
 }): Promise<AnalysisResult> {
-  const res = await fetch(taludesUrl("/analysis/compare"), {
+  const res = await taludesFetch(taludesUrl("/analysis/compare"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { detail?: string };
-    throw new Error(err.detail ?? "Análise falhou");
+    throw new Error(await parseTaludesError(res, "Análise falhou"));
   }
   const raw = await res.json();
   return normalizeAnalysis(raw);
 }
 
 export async function getJob(jobId: string): Promise<AnalysisResult> {
-  const res = await fetch(taludesUrl(`/analysis/jobs/${jobId}`));
-  if (!res.ok) throw new Error("Job não encontrado");
+  const res = await taludesFetch(taludesUrl(`/analysis/jobs/${jobId}`));
+  if (!res.ok) throw new Error(await parseTaludesError(res, "Job não encontrado"));
   return normalizeAnalysis(await res.json());
 }
 

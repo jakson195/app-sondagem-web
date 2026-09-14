@@ -57,6 +57,7 @@ function collectPoints(
   obraPosition: { lat: number; lng: number } | null,
   furos: FieldFuroPin[],
   userPosition: { lat: number; lng: number } | null,
+  includeUserInBounds = false,
 ): Array<{ lat: number; lng: number }> {
   const pts: Array<{ lat: number; lng: number }> = [];
   if (obraPosition) pts.push(obraPosition);
@@ -70,7 +71,7 @@ function collectPoints(
       pts.push({ lat: f.latitude, lng: f.longitude });
     }
   }
-  if (userPosition) pts.push(userPosition);
+  if (includeUserInBounds && userPosition) pts.push(userPosition);
   return pts;
 }
 
@@ -154,23 +155,26 @@ export function FieldCampaignMap({
   const applyBounds = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
-    const pts = collectPoints(obraPosition, furos, userPosition);
+    const pts = collectPoints(obraPosition, furos, userPosition, false);
     if (pts.length === 0) {
-      map.setView([DEFAULT_CENTER.lat, DEFAULT_CENTER.lng], 4);
+      map.setView([DEFAULT_CENTER.lat, DEFAULT_CENTER.lng], 5, { animate: false });
       return;
     }
     if (pts.length === 1) {
-      map.setView([pts[0]!.lat, pts[0]!.lng], 17);
+      map.setView([pts[0]!.lat, pts[0]!.lng], 17, { animate: false });
       return;
     }
     const bounds = L.latLngBounds(pts.map((p) => [p.lat, p.lng] as L.LatLngTuple));
-    map.fitBounds(bounds, { padding: [PAD, PAD] });
+    map.fitBounds(bounds, { padding: [PAD, PAD], maxZoom: 17, animate: false });
+    if (map.getZoom() < 10) {
+      map.setZoom(10, { animate: false });
+    }
   }, [obraPosition, furos, userPosition]);
 
   useEffect(() => {
     if (!mapRef.current) return;
     if (!initialFitDone.current) {
-      const pts = collectPoints(obraPosition, furos, userPosition);
+      const pts = collectPoints(obraPosition, furos, userPosition, false);
       if (pts.length > 0) {
         initialFitDone.current = true;
         applyBounds();
@@ -411,6 +415,9 @@ export function FieldCampaignMap({
           id={fullViewport ? "map" : undefined}
           center={[center.lat, center.lng]}
           zoom={16}
+          minZoom={5}
+          maxZoom={19}
+          worldCopyJump={false}
           scrollWheelZoom
           style={{ height: "100%", width: "100%" }}
           className="z-0"

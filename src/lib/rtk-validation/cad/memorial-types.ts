@@ -23,6 +23,7 @@ export interface MemorialDocInput {
   technicalCrea: string;
   vertices: CadVertex[];
   vertexLabels?: string[];
+  confrontations?: string[];
 }
 
 export const DEFAULT_MEMORIAL_FOOTER = {

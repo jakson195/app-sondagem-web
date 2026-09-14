@@ -114,7 +114,7 @@ export function CadPointObservations({
   onUpdatePoint,
 }: CadPointObservationsProps) {
   const t = useTranslations("rtkCad.observations");
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   const points = useMemo(
     () =>
@@ -128,7 +128,7 @@ export function CadPointObservations({
   if (points.length === 0) return null;
 
   return (
-    <section className="rounded-xl border border-[#e5e7eb] bg-white shadow-sm">
+    <section className="shrink-0 rounded-xl border border-[#e5e7eb] bg-white shadow-sm">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

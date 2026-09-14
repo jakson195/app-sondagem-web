@@ -59,6 +59,7 @@ export async function generateMemorialDocx(input: MemorialDocInput): Promise<Blo
     crsLabel: input.crsLabel,
     projectionNote: input.projectionNote,
     appNote: input.appNote,
+    confrontations: input.confrontations,
   });
 
   const kindTitle = memorialKindTitle(input.memorialKind, input.memorialKindCustom);
@@ -130,6 +131,10 @@ export function downloadBlob(blob: Blob, filename: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

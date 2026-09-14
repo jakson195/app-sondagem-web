@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack -p 3000",
+    "dev:fast": "next dev --webpack -p 3000",
     "dev:3002": "next dev --webpack -p 3002",
     "dev:3003": "next dev --webpack -p 3003",
     "dev:prisma": "prisma generate && next dev",
@@ -13,6 +14,8 @@
     "postinstall": "prisma generate",
     "start": "next start",
     "lint": "eslint",
+    "test:cad-ai": "tsx --test src/lib/rtk-validation/cad/ai-interpreter.test.ts src/lib/rtk-validation/cad/lot-subdivision.test.ts src/lib/rtk-validation/cad/lot-corner-classification.test.ts src/lib/rtk-validation/cad/reurb.test.ts src/lib/rtk-validation/cad/project-file.test.ts src/lib/rtk-validation/cad/loteamento-tools.test.ts src/lib/rtk-validation/cad/loteamento-maquete.test.ts src/lib/rtk-validation/cad/loteamento-drainage.test.ts src/lib/rtk-validation/cad/loteamento-drainage-planilha.test.ts src/lib/rtk-validation/cad/loteamento-drainage-3d.test.ts src/lib/rtk-validation/cad/plan-annotation-labels.test.ts src/lib/rtk-validation/cad/street-profile.test.ts src/lib/rtk-validation/cad/profile.test.ts src/lib/rtk-validation/cad/import-dxf.test.ts src/lib/rtk-validation/cad/import-kml-kmz.test.ts src/lib/rtk-validation/cad/contour-interpolate.test.ts src/lib/rtk-validation/cad/earthwork.test.ts",
+    "test:viabilidade": "tsx --test src/lib/viabilidade/viabilidade.test.ts src/lib/viabilidade/sinapi-sync.test.ts",
     "db:up": "docker compose up -d",
     "db:push": "dotenv -e .env.local -e .env -- prisma db push",
     "db:studio": "dotenv -e .env.local -e .env -- prisma studio",
@@ -39,6 +42,7 @@
     "hidrogeo:build": "cd ../hidrogeo-brasil/frontend && npm run build && cd ../../app-web && npm run hidrogeo:static",
     "hidrogeo:infra": "cd ../hidrogeo-brasil/infra && docker compose up -d postgis pg_tileserv",
     "hidrogeo:api": "cd ../hidrogeo-brasil/backend && uvicorn app.main:app --reload --host 127.0.0.1 --port 8010",
+    "taludes:api": "cd ../api-taludes && (if exist .venv\\Scripts\\python.exe (.venv\\Scripts\\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8010) else (python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8010))",
     "hidrogeo:vite": "cd ../hidrogeo-brasil/frontend && npm run dev",
     "predev": "node scripts/sync-hidrogeo-static.mjs",
     "cad:copy": "node scripts/copy-cad-from-ntrip.mjs"
@@ -106,7 +110,8 @@
     "tailwindcss": "^3.4.17",
     "three": "^0.184.0",
     "utm": "^1.1.1",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",

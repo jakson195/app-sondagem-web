@@ -4,6 +4,11 @@ import { listPointEntities } from "./viewport";
 import type { CadEntity, CadProject } from "./types";
 import type { CadAiProjectContext } from "./ai-command-types";
 
+export interface CadAiSelectionDetail {
+  selectedVertexIndex?: number | null;
+  selectedSegmentIndex?: number | null;
+}
+
 function describeCrs(crs: string): string {
   const upper = crs.toUpperCase();
   if (upper.includes("4674") || upper.includes("SIRGAS")) return "SIRGAS 2000 / UTM";
@@ -77,6 +82,7 @@ export function buildCadAiContext(
   project: CadProject,
   selectedId: string | null,
   pendingProfileStart?: string | null,
+  selectionDetail?: CadAiSelectionDetail,
 ): CadAiProjectContext {
   const pointEntities = listPointEntities(project.entities);
   const points = pointEntities.map((p) => ({
@@ -124,6 +130,17 @@ export function buildCadAiContext(
 
   const pontosSelecionados = resolveSelectionPoints(project, selectedId);
   const extensao = computeBounds(project.entities);
+  const vertexIndex =
+    selectedEntity?.type === "polyline" ? (selectionDetail?.selectedVertexIndex ?? null) : null;
+  const segmentIndex =
+    selectedEntity?.type === "polyline" ? (selectionDetail?.selectedSegmentIndex ?? null) : null;
+
+  if (selectedEntitySummary && selectedEntity?.type === "polyline") {
+    const extras: string[] = [];
+    if (vertexIndex != null) extras.push(`vértice índice ${vertexIndex}`);
+    if (segmentIndex != null) extras.push(`aresta índice ${segmentIndex}`);
+    if (extras.length) selectedEntitySummary = `${selectedEntitySummary}; ${extras.join(", ")}`;
+  }
 
   return {
     projectName: project.name,
@@ -136,6 +153,8 @@ export function buildCadAiContext(
     },
     selectedEntityId: selectedId,
     selectedEntitySummary,
+    selectedVertexIndex: vertexIndex,
+    selectedSegmentIndex: segmentIndex,
     pontos: points.map((p) => p.label),
     points,
     camadas: layers.filter((l) => l.visible).map((l) => l.name),
@@ -150,6 +169,8 @@ export function buildCadAiContext(
       tipo: selectedType,
       resumo: selectedEntitySummary,
       pontos: pontosSelecionados,
+      verticeIndex: vertexIndex,
+      arestaIndex: segmentIndex,
     },
     terreno: {
       tin: {

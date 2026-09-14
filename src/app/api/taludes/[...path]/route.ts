@@ -36,9 +36,11 @@ async function proxy(req: NextRequest, pathSegs: string[]) {
     return NextResponse.json(
       {
         error:
+          "API Taludes indisponível. Inicie noutro terminal: cd app-web && npm run taludes:api",
+        detail:
           e instanceof Error
             ? e.message
-            : "API Taludes indisponível. Inicie: uvicorn app.main:app --port 8010",
+            : "upstream unreachable",
       },
       { status: 502 },
     );

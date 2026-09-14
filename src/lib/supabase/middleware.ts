@@ -1,10 +1,21 @@
 import type { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { assertSupabaseAuthConfigured, isSupabaseAuthConfigured } from "@/lib/supabase";
+import {
+  AUTH_REQUEST_TIMEOUT_MS,
+  hasSupabaseAuthCookie,
+  isAuthRemoteUnavailable,
+  withAuthTimeout,
+} from "@/lib/auth-timeout";
 import { enableLocalSupabaseTlsWorkaround } from "@/lib/supabase/server-runtime";
 
 export async function updateSupabaseSession(req: NextRequest, res: NextResponse) {
-  if (!isSupabaseAuthConfigured()) return { response: res, user: null };
+  if (!isSupabaseAuthConfigured() || isAuthRemoteUnavailable()) {
+    return { response: res, user: null };
+  }
+  if (!hasSupabaseAuthCookie(req.cookies.getAll())) {
+    return { response: res, user: null };
+  }
 
   enableLocalSupabaseTlsWorkaround();
   const { url, anonKey } = assertSupabaseAuthConfigured();
@@ -22,6 +33,14 @@ export async function updateSupabaseSession(req: NextRequest, res: NextResponse)
     },
   });
 
-  const { data } = await supabase.auth.getUser();
+  const result = await withAuthTimeout(
+    supabase.auth.getUser(),
+    "supabase.auth.getUser (middleware)",
+    AUTH_REQUEST_TIMEOUT_MS,
+    { tripCircuit: true },
+  );
+  if (!result) return { response: res, user: null };
+
+  const { data } = result;
   return { response: res, user: data.user ?? null };
 }

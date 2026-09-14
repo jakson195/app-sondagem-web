@@ -117,6 +117,95 @@ export interface MemorialNarrativeInput {
   crsLabel: string;
   projectionNote: string;
   appNote: string;
+  confrontations?: string[];
+}
+
+export function normalizeConfrontations(count: number, existing?: string[]): string[] {
+  return Array.from({ length: Math.max(0, count) }, (_, i) => existing?.[i] ?? "");
+}
+
+export interface ConfrontationScreenLabel {
+  text: string;
+  sx: number;
+  sy: number;
+  angleDeg: number;
+}
+
+/** Posições de tela do nome do confrontante, fora de cada lado do polígono. */
+export function confrontationScreenLabels(
+  vertices: CadVertex[],
+  confrontations: string[] | undefined,
+  closed: boolean,
+  worldToScreenFn: (x: number, y: number) => { sx: number; sy: number },
+  offsetPx = 12,
+): ConfrontationScreenLabel[] {
+  if (!closed || vertices.length < 3) return [];
+  const n = vertices.length;
+  const names = normalizeConfrontations(n, confrontations);
+  const screen = vertices.map((v) => worldToScreenFn(v.x, v.y));
+  let cx = 0;
+  let cy = 0;
+  for (const p of screen) {
+    cx += p.sx;
+    cy += p.sy;
+  }
+  cx /= n;
+  cy /= n;
+
+  const out: ConfrontationScreenLabel[] = [];
+  for (let i = 0; i < n; i++) {
+    const text = names[i]?.trim();
+    if (!text) continue;
+    const a = screen[i];
+    const b = screen[(i + 1) % n];
+    if (!a || !b) continue;
+    const mx = (a.sx + b.sx) / 2;
+    const my = (a.sy + b.sy) / 2;
+    const dx = b.sx - a.sx;
+    const dy = b.sy - a.sy;
+    const len = Math.hypot(dx, dy) || 1;
+    let nx = -dy / len;
+    let ny = dx / len;
+    if (nx * (cx - mx) + ny * (cy - my) > 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    let angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    if (angleDeg > 90 || angleDeg < -90) angleDeg += angleDeg > 0 ? -180 : 180;
+    out.push({
+      text,
+      sx: mx + nx * offsetPx,
+      sy: my + ny * offsetPx,
+      angleDeg,
+    });
+  }
+  return out;
+}
+
+/** Ao inserir vértice após `afterIndex`, duplica o confrontante nas duas arestas novas. */
+export function insertConfrontationAt(
+  existing: string[] | undefined,
+  afterIndex: number,
+  vertexCountAfter: number,
+): string[] {
+  const prevCount = Math.max(0, vertexCountAfter - 1);
+  const arr = normalizeConfrontations(prevCount, existing);
+  const copied = arr[afterIndex] ?? "";
+  const insertAt = Math.min(Math.max(afterIndex + 1, 0), arr.length);
+  arr.splice(insertAt, 0, copied);
+  return arr;
+}
+
+/** Ao apagar o vértice `vertexIndex`, remove o lado que saía dele. */
+export function removeConfrontationAt(
+  existing: string[] | undefined,
+  vertexIndex: number,
+  vertexCountBefore: number,
+): string[] {
+  const arr = normalizeConfrontations(vertexCountBefore, existing);
+  if (vertexIndex < 0 || vertexIndex >= arr.length) return arr;
+  arr.splice(vertexIndex, 1);
+  return arr;
 }
 
 function pushNarrativePart(parts: MemorialNarrativePart[], text: string, bold = false) {
@@ -151,7 +240,14 @@ export function buildMemorialNarrative(input: MemorialNarrativeInput): MemorialN
 
   for (const seg of metrics.segments) {
     const dest = input.vertices[seg.to];
-    pushNarrativePart(parts, " deste, segue com azimute de ");
+    const confrontante = input.confrontations?.[seg.from]?.trim();
+    if (confrontante) {
+      pushNarrativePart(parts, " deste, segue confrontando com ");
+      pushNarrativePart(parts, confrontante, true);
+      pushNarrativePart(parts, ", com azimute de ");
+    } else {
+      pushNarrativePart(parts, " deste, segue com azimute de ");
+    }
     pushNarrativePart(parts, formatAzimuthDmsInt(seg.azimuthDeg), true);
     pushNarrativePart(parts, " e distância de ");
     pushNarrativePart(parts, formatDistanceBr(seg.distance), true);
@@ -176,6 +272,21 @@ export function buildMemorialNarrative(input: MemorialNarrativeInput): MemorialN
 
 export function listClosedPolygons(entities: CadEntity[]): CadPolylineEntity[] {
   return entities.filter((e): e is CadPolylineEntity => e.type === "polyline" && Boolean(e.closed));
+}
+
+/** Ray-cast em coordenadas de mundo (E/N ou xy do CAD). */
+export function pointInPolygon(x: number, y: number, vertices: CadVertex[]): boolean {
+  if (vertices.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+    const xi = vertices[i].x;
+    const yi = vertices[i].y;
+    const xj = vertices[j].x;
+    const yj = vertices[j].y;
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi + 1e-15) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
 
 export function closedPolygonLabel(polygon: CadPolylineEntity, index: number): string {
@@ -262,6 +373,49 @@ export function distancePointToSegment(
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
+/** Índice da aresta mais próxima do clique (em coordenadas de tela). */
+export function hitTestPolylineSegmentIndex(
+  sx: number,
+  sy: number,
+  vertices: CadVertex[],
+  closed: boolean,
+  worldToScreenFn: (x: number, y: number) => { sx: number; sy: number },
+  thresholdPx = 10,
+): number | null {
+  const count = closed ? vertices.length : vertices.length - 1;
+  let best: number | null = null;
+  let bestDist = thresholdPx;
+  for (let i = 0; i < count; i++) {
+    const j = (i + 1) % vertices.length;
+    const a = worldToScreenFn(vertices[i].x, vertices[i].y);
+    const b = worldToScreenFn(vertices[j].x, vertices[j].y);
+    const dist = distancePointToSegment(sx, sy, a.sx, a.sy, b.sx, b.sy);
+    if (dist <= bestDist) {
+      bestDist = dist;
+      best = i;
+    }
+  }
+  return best;
+}
+
+function pointInScreenRing(
+  sx: number,
+  sy: number,
+  ring: Array<{ sx: number; sy: number }>,
+): boolean {
+  if (ring.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const yi = ring[i].sy;
+    const yj = ring[j].sy;
+    const xi = ring[i].sx;
+    const xj = ring[j].sx;
+    const intersect = yi > sy !== yj > sy && sx < ((xj - xi) * (sy - yi)) / (yj - yi + 1e-15) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
 export function hitTestPolyline(
   sx: number,
   sy: number,
@@ -276,6 +430,10 @@ export function hitTestPolyline(
     const a = worldToScreenFn(vertices[i].x, vertices[i].y);
     const b = worldToScreenFn(vertices[j].x, vertices[j].y);
     if (distancePointToSegment(sx, sy, a.sx, a.sy, b.sx, b.sy) <= thresholdPx) return true;
+  }
+  if (closed && vertices.length >= 3) {
+    const ring = vertices.map((v) => worldToScreenFn(v.x, v.y));
+    if (pointInScreenRing(sx, sy, ring)) return true;
   }
   return false;
 }

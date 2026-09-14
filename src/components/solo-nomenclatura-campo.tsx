@@ -133,8 +133,22 @@ export function SoloNomenclaturaCampo({
         onClick={() => setAberto((v) => !v)}
         className="text-[10px] font-semibold text-teal-700 underline-offset-2 hover:underline dark:text-teal-400"
       >
-        {aberto ? "Ocultar nomenclatura" : "Nomenclatura geológica (complementos)"}
+        {aberto ? "Ocultar nomenclatura" : "Mais opções (granulometria, inclusões…)"}
       </button>
+
+      {compact && !aberto && (
+        <label className="block text-[10px] text-[var(--muted)]">
+          Detalhe específico
+          <input
+            type="text"
+            value={comp.observacao ?? ""}
+            onChange={(e) => patch({ observacao: e.target.value })}
+            placeholder="Ex.: presença de resíduos de carvão, odor, água…"
+            className="mt-0.5 w-full rounded border border-[var(--border)] bg-[var(--card)] p-1 text-xs"
+            autoComplete="off"
+          />
+        </label>
+      )}
 
       {aberto && (
         <div

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { getActiveCompanyContext } from "@/lib/auth/active-company";
+import { withAuthTimeout } from "@/lib/auth-timeout";
 import { requireAuth } from "@/lib/auth/require-auth";
-import { prisma } from "@/lib/prisma";
+import { isPrismaTableKnownMissing } from "@/lib/prisma-schema-circuit";
 import {
   assertSubscriptionAllowsAccess,
   getOrProvisionSubscription,
@@ -13,9 +13,13 @@ export async function GET(req: Request) {
   const { user, company, response } = await requireAuth(req);
   if (response) return response;
 
-  const subscription = company
-    ? await getOrProvisionSubscription(company.companyId)
-    : null;
+  const subscription =
+    company && !isPrismaTableKnownMissing("Subscription")
+      ? await withAuthTimeout(
+          getOrProvisionSubscription(company.companyId),
+          "auth.me.subscription",
+        )
+      : null;
 
   const access = company
     ? await assertSubscriptionAllowsAccess(company.companyId)

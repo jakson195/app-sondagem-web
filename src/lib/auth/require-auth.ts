@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withAuthTimeout } from "@/lib/auth-timeout";
 import { getAuthUserFromRequest } from "@/lib/server-auth";
 import { getActiveCompanyContext } from "@/lib/auth/active-company";
 import { assertSubscriptionAllowsAccess } from "@/lib/saas/subscription-service";
@@ -12,7 +13,10 @@ export async function requireAuth(req: Request) {
       response: NextResponse.json({ error: "Não autenticado." }, { status: 401 }),
     };
   }
-  const company = await getActiveCompanyContext(user);
+  const company = await withAuthTimeout(
+    getActiveCompanyContext(user),
+    "requireAuth.getActiveCompanyContext",
+  );
   return { user, company, response: null as null };
 }
 

@@ -93,8 +93,8 @@ const MANIFEST_XML = `<?xml version="1.0" encoding="UTF-8"?>
   <manifest:file-entry manifest:media-type="text/xml" manifest:full-path="META-INF/manifest.xml"/>
 </manifest:manifest>`;
 
-export function buildOdsBlob(sheets: OdsSheet[], title = "Planilha"): Blob {
-  const zipData = zipSync(
+export function buildOdsBytes(sheets: OdsSheet[], title = "Planilha"): Uint8Array {
+  return zipSync(
     {
       mimetype: [strToU8("application/vnd.oasis.opendocument.spreadsheet"), { level: 0 }],
       "content.xml": strToU8(contentXml(sheets)),
@@ -104,7 +104,10 @@ export function buildOdsBlob(sheets: OdsSheet[], title = "Planilha"): Blob {
     },
     { level: 6 },
   );
-  return new Blob([zipData], {
+}
+
+export function buildOdsBlob(sheets: OdsSheet[], title = "Planilha"): Blob {
+  return new Blob([buildOdsBytes(sheets, title) as BlobPart], {
     type: "application/vnd.oasis.opendocument.spreadsheet",
   });
 }

@@ -1,6 +1,7 @@
-import { buildCadAiSystemPrompt } from "./ai-command-catalog";
-import { parseCadAiResponse } from "./ai-interpreter";
+import { cadAiTools, buildCadAiSystemPrompt } from "./ai-command-catalog";
+import { parseCadAiResponse, parseOpenAiToolCalls } from "./ai-interpreter";
 import { parseLocalCadCommand, parseLocalCadCommandChain } from "./local-command-parser";
+import { validateCadAiCommands } from "./ai-command-validator";
 import type { CadAiCommand, CadAiHistoryMessage, CadAiProjectContext } from "./ai-command-types";
 
 export interface AssistenteIaRequest {
@@ -35,6 +36,34 @@ function extractResposta(commands: CadAiCommand[]): string | undefined {
   return commands.find((c) => c.resposta?.trim())?.resposta;
 }
 
+interface OpenAiChatMessage {
+  role?: string;
+  content?: string | null;
+  tool_calls?: Array<{
+    id?: string;
+    type?: string;
+    function?: { name?: string; arguments?: string };
+  }>;
+}
+
+function finalizeOpenAiCommands(
+  commands: CadAiCommand[],
+  fileContent: string,
+  fileName: string | undefined,
+  fallbackResposta?: string,
+): AssistenteIaResponse {
+  const withAttachment = withFile(commands, fileContent, fileName);
+  const validated = validateCadAiCommands(withAttachment);
+  if (!validated.ok) {
+    return { commands: [], source: "openai", resposta: validated.message };
+  }
+  return {
+    commands: validated.commands,
+    source: "openai",
+    resposta: extractResposta(validated.commands) ?? fallbackResposta,
+  };
+}
+
 export async function interpretAssistenteIaCommand(body: AssistenteIaRequest): Promise<AssistenteIaResponse> {
   const command = body.command?.trim();
   if (!command) {
@@ -58,7 +87,7 @@ export async function interpretAssistenteIaCommand(body: AssistenteIaRequest): P
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     throw new Error(
-      'Comando não reconhecido localmente. Configure OPENAI_API_KEY em .env.local para linguagem natural livre.',
+      "Comando não reconhecido localmente. Configure OPENAI_API_KEY em .env.local para linguagem natural livre.",
     );
   }
 
@@ -82,7 +111,8 @@ export async function interpretAssistenteIaCommand(body: AssistenteIaRequest): P
     body: JSON.stringify({
       model: process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini",
       temperature: 0.1,
-      response_format: { type: "json_object" },
+      tools: cadAiTools,
+      tool_choice: "auto",
       messages: [
         { role: "system", content: buildCadAiSystemPrompt() },
         ...historyMessages,
@@ -98,21 +128,23 @@ export async function interpretAssistenteIaCommand(body: AssistenteIaRequest): P
   }
 
   const data = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
+    choices?: Array<{ message?: OpenAiChatMessage }>;
   };
-  const content = data.choices?.[0]?.message?.content ?? "";
-  const commands = withFile(parseCadAiResponse(content), fileContent, body.fileName);
+  const message = data.choices?.[0]?.message;
+  const content = typeof message?.content === "string" ? message.content.trim() : "";
+  const toolCalls = message?.tool_calls?.filter((tc) => tc.function?.name) ?? [];
 
-  let parsedRoot: Record<string, unknown> = {};
-  try {
-    parsedRoot = JSON.parse(content.match(/\{[\s\S]*\}/)?.[0] ?? "{}") as Record<string, unknown>;
-  } catch {
-    /* ignore */
+  if (toolCalls.length) {
+    return finalizeOpenAiCommands(parseOpenAiToolCalls(toolCalls), fileContent, body.fileName, content || undefined);
   }
 
-  return {
-    commands,
-    source: "openai",
-    resposta: typeof parsedRoot.resposta === "string" ? parsedRoot.resposta : extractResposta(commands),
-  };
+  if (content) {
+    const looksLikeJson = /[{[]/.test(content);
+    if (looksLikeJson) {
+      return finalizeOpenAiCommands(parseCadAiResponse(content), fileContent, body.fileName, content);
+    }
+    return { commands: [], source: "openai", resposta: content };
+  }
+
+  throw new Error("A IA não retornou ferramenta nem texto.");
 }

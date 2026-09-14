@@ -46,6 +46,12 @@ export type CadAiAction =
   // Importação / exportação
   | "importar"
   | "exportar"
+  | "exportar_sigef"
+  | "gerar_loteamento"
+  | "alterar_eixo"
+  | "gerar_reurb"
+  | "exportar_reurb_tabular"
+  | "gerar_plantas_reurb"
   // Memorial
   | "memorial_descritivo"
   // Georreferenciamento
@@ -60,6 +66,13 @@ export type CadAiAction =
   | "secoes"
   | "volume_corte"
   | "volume_aterro"
+  // Ferramentas / camadas (registro de comandos)
+  | "ativar_ferramenta"
+  | "trocar_camada"
+  // Loteamento pontual
+  | "subdividir_quadra"
+  | "criar_rua_existente"
+  | "reservar_area"
   // Geotecnia
   | "inserir_sondagem"
   | "perfil_geologico"
@@ -102,6 +115,62 @@ export interface CadAiCommand {
   usarSelecao?: boolean;
   /** Posição do texto: "centro" coloca no centróide do polígono selecionado. */
   posicao?: "centro" | string;
+  /** Largura das vias internas (m) — gerar_loteamento. */
+  largura_via_m?: number;
+  /** Profundidade do lote / meia quadra (m) — gerar_loteamento. */
+  profundidade_quadra_m?: number;
+  /** Testada mínima por lote (m) — gerar_loteamento. */
+  testada_minima_m?: number;
+  /** Ignorado no loteamento — lotes dimensionam pela testada/profundidade. */
+  area_minima_m2?: number;
+  /** Área alvo de cada quadra (m²). Ex.: 2000. 0 / omitido = não divide por área. */
+  area_minima_quadra_m2?: number;
+  /** Alias de area_minima_quadra_m2 — área alvo da quadra (m²). */
+  area_quadra_m2?: number;
+  /** Largura da quadra (m) — gerar_loteamento no modo medidas. */
+  largura_quadra_m?: number;
+  /** Profundidade/distância da quadra (m) — gerar_loteamento no modo medidas. */
+  distancia_quadra_m?: number;
+  /** Azimute das vias (graus). Se ausente, usa o lado mais longo da gleba. */
+  orientacao?: number;
+  /** Prefixo das quadras (ex.: "Q" ou "Quadra"). */
+  prefixo_quadra?: string;
+  /** Largura da calçada em cada lado (m), interna ao corredor da via. 0 = sem calçada. */
+  largura_calcada_m?: number;
+  /** Desenha o eixo tracejado no centro de cada via. Padrão: true. */
+  eixo_rua?: boolean;
+  /** Raio nas esquinas dos lotes voltadas para a via (m). 0 = cantos vivos. */
+  raio_esquina_m?: number;
+  /** Não gera rua nova na borda da gleba (via pública já existente). */
+  vias_existentes_extremidades?: boolean;
+  /** Índices das arestas da gleba com via já existente (0 = primeiro lado). */
+  lados_aresta?: number[];
+  /** Ferramenta do canvas — ativar_ferramenta. */
+  ferramenta?: string;
+  /** Nome ou id da camada — trocar_camada. */
+  camada?: string;
+  /** Visibilidade da camada (padrão true). */
+  visivel?: boolean;
+  /** Testada desejada (m) — subdividir_quadra. Alias de testada_minima_m. */
+  testada_m?: number;
+  /** Lado da gleba/quadra: norte|sul|leste|oeste|frente|fundo|esquerda|direita|selecionado_no_mapa. */
+  lado?: string;
+  /** Percentual (0–100) — reservar_area. */
+  percentual?: number;
+  /** Percentual de área útil (0–100) — gerar_loteamento. Padrão 15. */
+  percentual_area_util?: number;
+  /** Acréscimo % da área mínima do lote de esquina. Padrão 20. Não altera INTERNO. */
+  percentual_esquina?: number;
+  /** Canto da área útil na reserva legal — gerar_loteamento. */
+  canto_area_util?: string;
+  /** Tipo de reserva: institucional | reserva_legal. */
+  tipo?: string;
+  /** Nome da via — criar_rua_existente. */
+  nome?: string;
+  /** Equidistância em metros (alias de intervalo). */
+  equidistancia_m?: number;
+  /** Cota de referência da volumetria (alias de z). */
+  cota_referencia_m?: number;
 }
 
 export interface CadAiHistoryMessage {
@@ -134,11 +203,17 @@ export interface CadAiProjectContext {
   totalEntidades: number;
   /** 1 se há seleção, senão 0. */
   objetosSelecionados: number;
+  /** Índice do vértice em edição na polilinha selecionada (null se nenhum). */
+  selectedVertexIndex: number | null;
+  /** Índice da aresta destacada (confrontação) na polilinha selecionada (null se nenhuma). */
+  selectedSegmentIndex: number | null;
   selecao: {
     entidadeId: string | null;
     tipo: "point" | "line" | "polyline" | null;
     resumo: string | null;
     pontos: string[];
+    verticeIndex: number | null;
+    arestaIndex: number | null;
   };
   terreno: {
     tin: { ativo: boolean; arestas: number; pontos: number };
@@ -166,7 +241,11 @@ export type CadAiSideEffect =
   | { type: "download_binary"; filename: string; bytes: Uint8Array; mime?: string }
   | { type: "print_pdf" }
   | { type: "add_raster"; raster: import("./types").CadRasterOverlay }
-  | { type: "remove_rasters"; kind?: import("./types").CadRasterKind };
+  | { type: "remove_rasters"; kind?: import("./types").CadRasterKind }
+  | { type: "generate_reurb_plantas"; project: import("./types").CadProject }
+  | { type: "set_tool"; tool: import("./types").CadTool }
+  | { type: "start_alterar_eixo" }
+  | { type: "enable_satellite" };
 
 export interface CadCommandExecutionResult {
   ok?: boolean;
@@ -184,4 +263,6 @@ export interface CadCommandExecutorOptions {
   selectedId?: string | null;
   memorialForm?: import("./memorial-types").MemorialFormDefaults;
   pendingProfileStart?: string | null;
+  /** Aresta destacada (confrontação) — subdividir_quadra com lado=selecionado_no_mapa. */
+  selectedSegmentIndex?: number | null;
 }

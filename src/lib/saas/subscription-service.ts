@@ -1,6 +1,7 @@
 import type { SaasPlanSlug, SubscriptionStatus } from "@prisma/client";
-import { isAuthBypassEnabled } from "@/lib/auth-bypass";
+import { withAuthTimeout } from "@/lib/auth-timeout";
 import { isPrismaMissingTableError } from "@/lib/pg-error-utils";
+import { isPrismaTableKnownMissing, rememberIfMissingTable } from "@/lib/prisma-schema-circuit";
 import { prisma } from "@/lib/prisma";
 import { PLAN_LIMITS } from "@/lib/saas/plan-limits";
 
@@ -26,6 +27,7 @@ export async function provisionSubscriptionForCompany(
         ? trialEndsAtFromNow()
         : null;
 
+  if (isPrismaTableKnownMissing("Subscription")) return null;
   try {
     return await prisma.subscription.upsert({
       where: { companyId },
@@ -47,7 +49,7 @@ export async function provisionSubscriptionForCompany(
       },
     });
   } catch (e) {
-    if (isPrismaMissingTableError(e, "Subscription")) {
+    if (rememberIfMissingTable(e, "Subscription") || isPrismaMissingTableError(e, "Subscription")) {
       console.warn(
         "[subscription] Tabela Subscription em falta; plano fica só em Company.",
       );
@@ -87,33 +89,14 @@ async function companySubscriptionFallback(companyId: number) {
   });
 }
 
-function evaluateCompanyStatusAccess(
-  status: SubscriptionStatus,
-): SubscriptionAccessResult {
-  if (status === "SUSPENDED") {
-    return {
-      ok: false,
-      code: "SUSPENDED",
-      message: "Assinatura suspensa. Regularize o pagamento em Assinatura.",
-    };
-  }
-  if (status === "CANCELLED") {
-    return {
-      ok: false,
-      code: "CANCELLED",
-      message: "Assinatura cancelada. Renove o plano para continuar.",
-    };
-  }
-  return { ok: true };
-}
-
 /** Obtém assinatura; cria a partir de `Company` se a linha ainda não existir. */
 export async function getOrProvisionSubscription(companyId: number): Promise<SubscriptionRow> {
+  if (isPrismaTableKnownMissing("Subscription")) return null;
   try {
     const existing = await prisma.subscription.findUnique({ where: { companyId } });
     if (existing) return existing;
   } catch (e) {
-    if (isPrismaMissingTableError(e, "Subscription")) {
+    if (rememberIfMissingTable(e, "Subscription") || isPrismaMissingTableError(e, "Subscription")) {
       console.warn(
         "[subscription] Tabela Subscription em falta — execute scripts/sql/neon-subscription-table.sql na Neon.",
       );
@@ -131,7 +114,7 @@ export async function getOrProvisionSubscription(companyId: number): Promise<Sub
       status: company.status,
     });
   } catch (e) {
-    if (isPrismaMissingTableError(e, "Subscription")) {
+    if (rememberIfMissingTable(e, "Subscription") || isPrismaMissingTableError(e, "Subscription")) {
       return null;
     }
     console.error("[subscription] provision failed", e);
@@ -184,23 +167,19 @@ function evaluateSubscriptionAccess(sub: NonNullable<SubscriptionRow>): Subscrip
 export async function assertSubscriptionAllowsAccess(
   companyId: number,
 ): Promise<SubscriptionAccessResult> {
-  const sub = await getOrProvisionSubscription(companyId);
-  if (!sub) {
-    if (isAuthBypassEnabled()) {
+  try {
+    const sub = await withAuthTimeout(
+      getOrProvisionSubscription(companyId),
+      "subscription.getOrProvision",
+    );
+    if (!sub) {
       return { ok: true };
     }
-    const company = await companySubscriptionFallback(companyId);
-    if (company) {
-      return evaluateCompanyStatusAccess(company.status);
-    }
-    return {
-      ok: false,
-      code: "MISSING",
-      message:
-        "Assinatura não configurada. Execute na Neon: scripts/sql/neon-subscription-table.sql (ou npm run db:push).",
-    };
+    return evaluateSubscriptionAccess(sub);
+  } catch (e) {
+    console.error("[subscription] access check failed", e);
+    return { ok: true };
   }
-  return evaluateSubscriptionAccess(sub);
 }
 
 export async function activatePaidSubscription(input: {

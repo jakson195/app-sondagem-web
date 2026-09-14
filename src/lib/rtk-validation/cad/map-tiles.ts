@@ -1,3 +1,4 @@
+import { mapboxSatelliteTileUrl } from "@/lib/mapbox-config";
 import { enToLatLon, latLonToEn } from "@/lib/rtk-validation/project-coords";
 import type { CadViewport } from "./viewport";
 import { viewportBbox4326 } from "./map-bbox";
@@ -31,8 +32,14 @@ export function tileLatLonBounds(x: number, y: number, zoom: number) {
   return { lonMin, lonMax, latMin, latMax };
 }
 
-export function satelliteTileUrl(z: number, x: number, y: number) {
+/** Esri World Imagery — fallback quando Mapbox não está configurado. */
+export function esriSatelliteTileUrl(z: number, x: number, y: number) {
   return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+}
+
+/** Tile de satélite: Mapbox satellite-streets-v12 (taludes drone) ou Esri como fallback. */
+export function satelliteTileUrl(z: number, x: number, y: number) {
+  return mapboxSatelliteTileUrl(z, x, y) ?? esriSatelliteTileUrl(z, x, y);
 }
 
 export function viewportCenterLatLon(

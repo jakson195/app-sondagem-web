@@ -5,6 +5,13 @@ import { runQueuedInEffect } from "@/lib/react/queue-in-effect";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import type { MemorialFormDefaults } from "@/lib/rtk-validation/cad";
 import type { CadPolylineEntity, CadProject, CadRasterOverlay } from "@/lib/rtk-validation/cad/types";
+import type { SecaoTipoParams, StreetProfileDraft } from "@/lib/rtk-validation/cad/street-profile";
+import { isStreetProfileChartLayer, streetDraftFromTerrainProfile } from "@/lib/rtk-validation/cad/street-profile";
+import {
+  isTerrainProfileLayer,
+  listLongitudinalTerrainProfiles,
+  listTerrainCrossSections,
+} from "@/lib/rtk-validation/cad/profile";
 import { countRasterLayerItems, rastersWithPrintLayerVisibility } from "@/lib/rtk-validation/cad/raster-layers";
 import { AbntLegendBlock } from "@/components/rtk-validation/cad-print-abnt-legend";
 import { CadPrintSupplementaryPanel } from "@/components/rtk-validation/cad-print-supplementary-panel";
@@ -30,6 +37,11 @@ import {
   type PrintLayerVisibility,
 } from "@/components/rtk-validation/cad-print-drawing";
 import { waitUntil, type LocationMapLoadStatus } from "@/hooks/use-location-map-image";
+import {
+  CadPrintStreetSheet,
+  type PrintSheetContent,
+} from "@/components/rtk-validation/cad-print-street-sheets";
+import { CadPrintTerrainProfiles } from "@/components/rtk-validation/cad-print-terrain-profiles";
 
 const LOGO_ACCEPT = ".png,.jpg,.jpeg,.svg,image/png,image/jpeg,image/svg+xml";
 
@@ -38,14 +50,28 @@ type CadPrintLayoutProps = {
   memorialForm: MemorialFormDefaults;
   selectedPolyline?: CadPolylineEntity | null;
   rasters?: CadRasterOverlay[];
+  streetProfiles?: StreetProfileDraft[];
+  secaoTipo?: SecaoTipoParams | null;
+  initialSheetContent?: PrintSheetContent;
+  activeStreetProfileId?: string;
 };
 
 function buildPrintLayerVisibility(layers: CadProject["layers"]): PrintLayerVisibility {
   return Object.fromEntries(layers.map((l) => [l.id, l.visible !== false]));
 }
 
-export function CadPrintLayout({ project, memorialForm, selectedPolyline, rasters = [] }: CadPrintLayoutProps) {
+export function CadPrintLayout({
+  project,
+  memorialForm,
+  selectedPolyline,
+  rasters = [],
+  streetProfiles = [],
+  secaoTipo = null,
+  initialSheetContent = "planta",
+  activeStreetProfileId = "",
+}: CadPrintLayoutProps) {
   const t = useTranslations("rtkCad.printLayout");
+  const tPerfil = useTranslations("rtkCad.loteamento.perfil");
   const fileRef = useRef<HTMLInputElement>(null);
   const previewHostRef = useRef<HTMLDivElement>(null);
   const locationMapStatusRef = useRef<LocationMapLoadStatus>("idle");
@@ -61,6 +87,10 @@ export function CadPrintLayout({ project, memorialForm, selectedPolyline, raster
   const [editTextMode, setEditTextMode] = useState(false);
   const [printLayerVisibility, setPrintLayerVisibility] = useState<PrintLayerVisibility>(() =>
     buildPrintLayerVisibility(project.layers),
+  );
+  const [sheetContent, setSheetContent] = useState<PrintSheetContent>(initialSheetContent);
+  const [printStreetId, setPrintStreetId] = useState(
+    activeStreetProfileId || streetProfiles[0]?.streetId || "",
   );
 
   useEffect(
@@ -85,6 +115,65 @@ export function CadPrintLayout({ project, memorialForm, selectedPolyline, raster
   const patchLayout = useCallback((patch: Partial<LayoutState>) => {
     setLayout((prev) => ({ ...prev, ...patch }));
   }, []);
+
+  const planLayers = useMemo(
+    () =>
+      project.layers.filter(
+        (layer) => !isStreetProfileChartLayer(layer.id) && !isTerrainProfileLayer(layer.id),
+      ),
+    [project.layers],
+  );
+
+  const terrainDrafts = useMemo(
+    () =>
+      listLongitudinalTerrainProfiles(project.entities).map((p) =>
+        streetDraftFromTerrainProfile(p, p.name ?? t("sheetPerfilTitle")),
+      ),
+    [project.entities, t],
+  );
+  const terrainSections = useMemo(
+    () => listTerrainCrossSections(project.entities),
+    [project.entities],
+  );
+  const printProfiles = streetProfiles.length > 0 ? streetProfiles : terrainDrafts;
+  const printStreet =
+    printProfiles.find((p) => p.streetId === printStreetId) ?? printProfiles[0] ?? null;
+  const printTerrainSection = terrainSections[0] ?? null;
+  const printSecaoParams = secaoTipo;
+
+  const applySheetContent = useCallback(
+    (next: PrintSheetContent) => {
+      setSheetContent(next);
+      if (next === "secao-tipo") {
+        patchLayout({ titulo: t("sheetSecaoTitle"), escala: "S/ESC" });
+      } else if (next === "perfil") {
+        patchLayout({ titulo: t("sheetPerfilTitle"), escala: "S/ESC" });
+      }
+    },
+    [patchLayout, t],
+  );
+
+  useEffect(
+    () =>
+      runQueuedInEffect(() => {
+        setSheetContent(initialSheetContent);
+        if (initialSheetContent === "secao-tipo") {
+          setLayout((prev) => ({ ...prev, titulo: t("sheetSecaoTitle"), escala: "S/ESC" }));
+        } else if (initialSheetContent === "perfil") {
+          setLayout((prev) => ({ ...prev, titulo: t("sheetPerfilTitle"), escala: "S/ESC" }));
+        }
+      }),
+    [initialSheetContent, t],
+  );
+
+  useEffect(
+    () =>
+      runQueuedInEffect(() => {
+        if (activeStreetProfileId) setPrintStreetId(activeStreetProfileId);
+        else if (streetProfiles[0] && !printStreetId) setPrintStreetId(streetProfiles[0].streetId);
+      }),
+    [activeStreetProfileId, streetProfiles, printStreetId],
+  );
 
   useEffect(
     () =>
@@ -341,6 +430,50 @@ export function CadPrintLayout({ project, memorialForm, selectedPolyline, raster
               </button>
             </div>
           </div>
+          <div>
+            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[#6b7280]">{t("sheetContent")}</p>
+            <div className="flex flex-wrap gap-1">
+              {(
+                [
+                  ["planta", t("sheetPlanta")],
+                  ["secao-tipo", t("sheetSecaoTipo")],
+                  ["perfil", t("sheetPerfil")],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={sheetContent === id ? toolbarBtnActive : toolbarBtn}
+                  onClick={() => applySheetContent(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-[#6b7280]">
+              {sheetContent === "secao-tipo"
+                ? t("sheetSecaoHint")
+                : sheetContent === "perfil"
+                  ? t("sheetPerfilHint")
+                  : null}
+            </p>
+            {sheetContent !== "planta" && printProfiles.length > 0 ? (
+              <label className="mt-2 block text-xs text-[#6b7280]">
+                {t("sheetStreet")}
+                <select
+                  className="mt-1 w-full max-w-xs rounded-lg border border-[#d1d5db] bg-white px-2 py-1.5 text-xs text-[#0f2848]"
+                  value={printStreet?.streetId ?? ""}
+                  onChange={(e) => setPrintStreetId(e.target.value)}
+                >
+                  {printProfiles.map((p) => (
+                    <option key={p.streetId} value={p.streetId}>
+                      {p.streetName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
           <div className="flex items-end">
             <p className="text-xs text-[#6b7280]">
               {t("sheetSize", { w: sheet.w, h: sheet.h, format: layout.formato })}
@@ -504,7 +637,7 @@ export function CadPrintLayout({ project, memorialForm, selectedPolyline, raster
           </div>
           <p className="mt-1 text-xs text-[#6b7280]">{t("printLayersHint")}</p>
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2">
-            {project.layers.map((layer) => {
+            {planLayers.map((layer) => {
               const count =
                 countRasterLayerItems(layer.id, rasters) ??
                 project.entities.filter((e) => e.layerId === layer.id).length;
@@ -624,23 +757,44 @@ export function CadPrintLayout({ project, memorialForm, selectedPolyline, raster
                   flexShrink: 0,
                 }}
               >
-                <CadPrintDrawing
-                  project={project}
-                  widthMm={drawW}
-                  heightMm={drawH}
-                  drawingZoom={drawingZoom}
-                  scaleMode={effectiveScaleMode}
-                  scaleDenominator={effectiveScaleDenominator}
-                  emptyLabel={t("noDrawing")}
-                  showConventions={layout.showConventions}
-                  conventionsTitle={t("legendTitle")}
-                  layerVisibility={printLayerVisibility}
-                  rasters={printRasters}
-                  vertexMarkerScale={vertexMarkerScale / 100}
-                  editTextMode={editTextMode}
-                  textOverrides={layout.textOverrides}
-                  onTextOverride={patchTextOverride}
-                />
+                {sheetContent === "planta" ? (
+                  <CadPrintDrawing
+                    project={project}
+                    widthMm={drawW}
+                    heightMm={drawH}
+                    drawingZoom={drawingZoom}
+                    scaleMode={effectiveScaleMode}
+                    scaleDenominator={effectiveScaleDenominator}
+                    emptyLabel={t("noDrawing")}
+                    showConventions={layout.showConventions}
+                    conventionsTitle={t("legendTitle")}
+                    layerVisibility={printLayerVisibility}
+                    rasters={printRasters}
+                    vertexMarkerScale={vertexMarkerScale / 100}
+                    editTextMode={editTextMode}
+                    textOverrides={layout.textOverrides}
+                    onTextOverride={patchTextOverride}
+                  />
+                ) : (
+                  <CadPrintStreetSheet
+                    kind={sheetContent}
+                    params={printSecaoParams}
+                    profile={printStreet}
+                    terrainSection={printTerrainSection}
+                    emptyLabel={sheetContent === "secao-tipo" ? t("sheetSecaoEmpty") : t("sheetPerfilEmpty")}
+                    pistaLabel={tPerfil("previewPista")}
+                    calcadaLabel={tPerfil("previewCalcada")}
+                    corteLabel={tPerfil("previewCorte")}
+                    aterroLabel={tPerfil("previewAterro")}
+                    axisLabel={tPerfil("axis")}
+                    secaoTitle={t("sheetSecaoTitle")}
+                    perfilTitle={
+                      printStreet
+                        ? `${t("sheetPerfilTitle")} — ${printStreet.streetName}`
+                        : t("sheetPerfilTitle")
+                    }
+                  />
+                )}
               </div>
 
               <div
@@ -685,6 +839,7 @@ export function CadPrintLayout({ project, memorialForm, selectedPolyline, raster
       </div>
 
       <p className="cad-interface text-xs text-[#6b7280]">{t("editHint")}</p>
+      <CadPrintTerrainProfiles project={project} />
 
       <style>{`
         @media screen {

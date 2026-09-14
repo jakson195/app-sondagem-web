@@ -375,10 +375,11 @@ export function drawGeo5SlopeScene(
     fsColor: string;
     showSlices: boolean;
     showFullCircle: boolean;
-    editPoints: boolean;
+    editProfilePoints: boolean;
+    editWaterPoints: boolean;
   },
 ) {
-  const { profile, layers, waterTable, circle, result, fsColor, showSlices, showFullCircle, editPoints } = opts;
+  const { profile, layers, waterTable, circle, result, fsColor, showSlices, showFullCircle, editProfilePoints, editWaterPoints } = opts;
   ctx.clearRect(0, 0, width, height);
   const vp = buildViewport(profile, width, height);
   const W = width;
@@ -398,12 +399,25 @@ export function drawGeo5SlopeScene(
     drawSlipSurface(ctx, vp, profile, circle, fsColor, result?.fs);
   }
 
-  if (editPoints) {
+  if (editProfilePoints) {
     for (const p of profile) {
       const { cx, cy } = worldToCanvas(p.x, p.y, vp);
       ctx.beginPath();
       ctx.arc(cx, cy, 5, 0, Math.PI * 2);
       ctx.fillStyle = "#e67e22";
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+
+  if (editWaterPoints && waterTable) {
+    for (const p of waterTable.points) {
+      const { cx, cy } = worldToCanvas(p.x, p.y, vp);
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+      ctx.fillStyle = "#2563eb";
       ctx.fill();
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1.5;
@@ -427,4 +441,32 @@ export function canvasWorldFromEvent(
   const wx = vp.xMin + ((px - vp.pad.l) / vp.plotW) * (vp.xMax - vp.xMin);
   const wy = vp.yMax - ((py - vp.pad.t) / vp.plotH) * (vp.yMax - vp.yMin);
   return { x: wx, y: wy };
+}
+
+/** Raio de captura em coordenadas do mundo (~px na tela). */
+export function canvasHitRadiusWorld(
+  canvas: HTMLCanvasElement,
+  profile: ProfilePoint[],
+  px = 10,
+): number {
+  const vp = buildViewport(profile, canvas.width, canvas.height);
+  return (px / vp.plotW) * (vp.xMax - vp.xMin);
+}
+
+export function findNearestPointIndex(
+  points: ProfilePoint[],
+  wx: number,
+  wy: number,
+  hitRadius: number,
+): number {
+  let minD = Infinity;
+  let idx = -1;
+  points.forEach((p, i) => {
+    const d = Math.hypot(p.x - wx, p.y - wy);
+    if (d < hitRadius && d < minD) {
+      minD = d;
+      idx = i;
+    }
+  });
+  return idx;
 }

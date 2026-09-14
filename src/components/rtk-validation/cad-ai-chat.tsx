@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import { buildCadAiContext } from "@/lib/rtk-validation/cad/ai-context";
 import { resolveCadAiCommands } from "@/lib/rtk-validation/cad/ai-command-resolver";
+import { validateCadAiCommands } from "@/lib/rtk-validation/cad/ai-command-validator";
 import { parseLocalCadCommand, parseLocalCadCommandChain } from "@/lib/rtk-validation/cad/local-command-parser";
 import { importKmzIntoProject } from "@/lib/rtk-validation/cad/ai-command-executor";
 import { executeCadAiCommandChain } from "@/lib/rtk-validation/cad/ai-interpreter";
@@ -21,6 +22,8 @@ import { useCadSpeech } from "@/hooks/use-cad-speech";
 export interface CadAiChatProps {
   project: CadProject;
   selectedId: string | null;
+  selectedVertexIndex?: number | null;
+  selectedSegmentIndex?: number | null;
   memorialForm: MemorialFormDefaults;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -72,6 +75,8 @@ function saveHistory(project: CadProject, history: CadAiHistoryMessage[]) {
 export function CadAiChat({
   project,
   selectedId,
+  selectedVertexIndex = null,
+  selectedSegmentIndex = null,
   memorialForm,
   open,
   onOpenChange,
@@ -129,6 +134,15 @@ export function CadAiChat({
     [project],
   );
 
+  const makeContext = useCallback(
+    () =>
+      buildCadAiContext(project, selectedId, pendingProfileStart, {
+        selectedVertexIndex,
+        selectedSegmentIndex,
+      }),
+    [project, selectedId, pendingProfileStart, selectedVertexIndex, selectedSegmentIndex],
+  );
+
   const applyResult = useCallback(
     (
       result: CadCommandExecutionResult & { meta?: { pendingProfileStart?: string | null } },
@@ -173,7 +187,7 @@ export function CadAiChat({
       if (label) pushMessage("user", label);
       setProcessing(true);
       try {
-        const context = buildCadAiContext(project, selectedId, pendingProfileStart);
+        const context = makeContext();
         executeResolved(commands, context, label);
       } catch (err) {
         const text = err instanceof Error ? err.message : t("interpretError");
@@ -183,7 +197,7 @@ export function CadAiChat({
         setInput("");
       }
     },
-    [project, selectedId, pendingProfileStart, executeResolved, pushMessage, t],
+    [makeContext, executeResolved, pushMessage, t],
   );
 
   const runDirect = useCallback(
@@ -208,7 +222,7 @@ export function CadAiChat({
           return;
         }
 
-        const context = buildCadAiContext(project, selectedId, pendingProfileStart);
+        const context = makeContext();
 
         const localChain = parseLocalCadCommandChain(trimmed, context);
         if (localChain?.length) {
@@ -257,11 +271,26 @@ export function CadAiChat({
           resposta?: string;
         };
 
-        if (!res.ok || !data.commands?.length) {
+        if (!res.ok) {
           throw new Error(data.error || t("interpretError"));
         }
 
-        executeResolved(data.commands, context, trimmed);
+        if (!data.commands?.length) {
+          const text = data.resposta?.trim() || t("interpretError");
+          pushMessage(data.resposta?.trim() ? "assistant" : "error", text);
+          speak(text, ttsEnabled);
+          if (data.resposta?.trim()) appendHistory(trimmed, data.resposta.trim());
+          return;
+        }
+
+        const validated = validateCadAiCommands(data.commands);
+        if (!validated.ok) {
+          pushMessage("error", t("validationError", { details: validated.message }));
+          speak(validated.message, ttsEnabled);
+          return;
+        }
+
+        executeResolved(validated.commands, context, trimmed);
       } catch (err) {
         const text = err instanceof Error ? err.message : t("interpretError");
         pushMessage("error", text);
@@ -275,6 +304,8 @@ export function CadAiChat({
     [
       project,
       selectedId,
+      selectedVertexIndex,
+      selectedSegmentIndex,
       memorialForm,
       pendingProfileStart,
       conversationHistory,
@@ -283,6 +314,8 @@ export function CadAiChat({
       fileBinary,
       applyResult,
       executeResolved,
+      makeContext,
+      appendHistory,
       pushMessage,
       speak,
       ttsEnabled,

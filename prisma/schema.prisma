@@ -482,6 +482,9 @@ model CadUserProject {
   userId    Int      @map("user_id")
   name      String
   data      Json
+  /** DWG exportado (sem rasters). Null se o cliente ainda não enviou o arquivo. */
+  dwg       Bytes?   @map("dwg")
+  dwgName   String?  @map("dwg_name")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -490,4 +493,191 @@ model CadUserProject {
   @@index([userId])
   @@index([updatedAt])
   @@map("cad_user_projects")
+}
+
+/** Estudo de viabilidade preliminar de loteamento (não é orçamento executivo). */
+model Viabilidade {
+  id String @id @default(cuid())
+
+  projetoId String
+  versao    Int    @default(1)
+
+  uf                String
+  municipio         String?
+  competenciaSinapi String?
+
+  areaTotal         Decimal?
+  areaLotes         Decimal?
+  areaVias          Decimal?
+  areaVerde         Decimal?
+  areaInstitucional Decimal?
+  areaApp           Decimal?
+
+  quantidadeLotes Int?
+
+  valorTerreno    Decimal?
+  receitaEstimada Decimal?
+
+  custoTerraplenagem  Decimal @default(0)
+  custoPavimentacao   Decimal @default(0)
+  custoDrenagem       Decimal @default(0)
+  custoCalcadas       Decimal @default(0)
+  custoAgua           Decimal @default(0)
+  custoEsgoto         Decimal @default(0)
+  custoEnergia        Decimal @default(0)
+  custoIluminacao     Decimal @default(0)
+  custoArborizacao    Decimal @default(0)
+  custoSinalizacao    Decimal @default(0)
+
+  custoProjetos       Decimal @default(0)
+  custoLicenciamento  Decimal @default(0)
+  custoRegistro       Decimal @default(0)
+  custoAdministrativo Decimal @default(0)
+  custoComercial      Decimal @default(0)
+
+  custoContingencia Decimal @default(0)
+
+  custoInfraestrutura Decimal @default(0)
+  custoTotal          Decimal @default(0)
+
+  lucroEstimado    Decimal @default(0)
+  margemPercentual Decimal @default(0)
+  roiPercentual    Decimal @default(0)
+  custoPorLote     Decimal @default(0)
+  receitaPorLote   Decimal @default(0)
+
+  /** Premissas editáveis (modalidade de receita, percentuais, volumes manuais). */
+  premissas Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  itens         ViabilidadeItem[]
+  quantitativos ViabilidadeQuantitativo[]
+  validacoes    ViabilidadeValidacao[]
+
+  @@index([projetoId])
+  @@unique([projetoId, versao])
+}
+
+model ViabilidadeItem {
+  id String @id @default(cuid())
+
+  viabilidadeId String
+
+  categoria String
+  descricao String
+
+  quantidade Decimal
+  unidade    String
+
+  codigoReferencia String?
+  fonte            String?
+  competencia      String?
+  uf               String?
+
+  custoUnitario Decimal
+  custoTotal    Decimal
+
+  origemValor String
+  observacao  String?
+
+  viabilidade Viabilidade @relation(fields: [viabilidadeId], references: [id], onDelete: Cascade)
+
+  @@index([viabilidadeId])
+}
+
+model ViabilidadeQuantitativo {
+  id String @id @default(cuid())
+
+  viabilidadeId String
+
+  categoria  String
+  descricao  String
+  quantidade Decimal
+  unidade    String
+  origem     String
+  confianca  String?
+  observacao String?
+
+  viabilidade Viabilidade @relation(fields: [viabilidadeId], references: [id], onDelete: Cascade)
+
+  @@index([viabilidadeId])
+}
+
+model SinapiComposicao {
+  id String @id @default(cuid())
+
+  codigo     String
+  descricao  String
+  unidade    String
+  uf         String
+  competencia String
+
+  custoDesonerado    Decimal?
+  custoNaoDesonerado Decimal?
+
+  tipo  String?
+  fonte String  @default("SINAPI")
+  ativo Boolean @default(true)
+
+  @@index([codigo])
+  @@index([uf, competencia])
+  @@unique([codigo, uf, competencia])
+}
+
+model SicroComposicao {
+  id String @id @default(cuid())
+
+  codigo      String
+  descricao   String
+  unidade     String
+  uf          String
+  competencia String
+  custo       Decimal?
+  fonte       String  @default("SICRO")
+  ativo       Boolean @default(true)
+
+  @@index([codigo])
+  @@index([uf, competencia])
+  @@unique([codigo, uf, competencia])
+}
+
+model ViabilidadeParametro {
+  id String @id @default(cuid())
+
+  categoria String
+  codigo    String?
+  descricao String
+  unidade   String
+
+  valorUnitario Decimal?
+  percentual    Decimal?
+
+  fonte            String?
+  codigoReferencia String?
+  uf               String?
+  competencia      String?
+  ativo            Boolean @default(true)
+
+  @@index([categoria])
+}
+
+model ViabilidadeValidacao {
+  id String @id @default(cuid())
+
+  viabilidadeId String
+
+  categoria    String
+  parametro    String
+  valorProjeto Decimal?
+  valorMinimo  Decimal?
+  valorMaximo  Decimal?
+  unidade      String?
+  status       String
+  mensagem     String?
+
+  viabilidade Viabilidade @relation(fields: [viabilidadeId], references: [id], onDelete: Cascade)
+
+  @@index([viabilidadeId])
 }

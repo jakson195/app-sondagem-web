@@ -18,3 +18,26 @@ export {
   type AnmSigmineLayerKey,
   type AnmSigmineOverlayState,
 } from "./anm-sigmine-layers";
+
+export {
+  DEFAULT_SIGEF_OVERLAY,
+  SIGEF_CONSULTA,
+  SIGEF_EXTENSAO_OXT,
+  SIGEF_I3GEO_OGC,
+  SIGEF_LAYER_KEYS,
+  SIGEF_LAYERS,
+  SIGEF_MODELO_ODS,
+  SIGEF_PORTAL,
+  SIGEF_UFS,
+  activeSigefLayerKeys,
+  anySigefOverlay,
+  isSigefLayerKey,
+  isSigefUf,
+  normalizeSigefUf,
+  parseSigefMapLayerKeys,
+  sigefTema,
+  type SigefLayerDef,
+  type SigefLayerKey,
+  type SigefOverlayState,
+  type SigefUf,
+} from "./sigef-layers";

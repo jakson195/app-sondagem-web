@@ -41,6 +41,7 @@ import {
   formatarProfSptPt,
   round2ProfSpt,
   rowSpanGrupoAmostraSpt,
+  rowSpanCamadaSpt,
   somasGolpes30cm,
   temGolpesParaColuna30cm,
 } from "@/lib/spt-profundidade-tabela";
@@ -1065,6 +1066,41 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
     setDados((prev) => [...prev, nova1, nova2]);
   }
 
+  async function removerLinha(index: number) {
+    const linha = dados[index];
+    if (!linha) return;
+    if (
+      !window.confirm(
+        `Remover a profundidade ${formatarProfSptPt(linha.prof)} m e os golpes associados?`,
+      )
+    ) {
+      return;
+    }
+
+    if (linha.id != null && furoId !== undefined && Number.isFinite(furoId)) {
+      try {
+        const r = await fetch(apiUrl(`/api/spt/${linha.id}`), { method: "DELETE" });
+        if (!r.ok) {
+          const err = (await r.json().catch(() => ({}))) as { error?: string };
+          setLoadError(
+            typeof err.error === "string" ? err.error : "Erro ao remover linha SPT",
+          );
+          return;
+        }
+      } catch (e) {
+        setLoadError(e instanceof Error ? e.message : "Falha de rede ao remover");
+        return;
+      }
+    }
+
+    setDados((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      setSptMetrosClicks(inferNumeroCliquesSptDeContagemLinhas(next.length));
+      return next;
+    });
+    setLoadError(null);
+  }
+
   function atualizar<K extends keyof Linha>(
     index: number,
     campo: K,
@@ -1395,10 +1431,10 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
         <button
           type="button"
           onClick={() => void adicionar()}
-          title="1.º clique: 0,00 e 0,05 m. Seguintes: 1,00/1,45; 2,00/2,45; …"
+          title="Cada clique adiciona o par padrão: 0,00 + 0,05 m (1.º) ou n,00 + n,45 m"
           className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
         >
-          + Adicionar profundidades
+          + Adicionar par SPT (2 linhas)
         </button>
         <button
           type="button"
@@ -1406,9 +1442,14 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
           onClick={() => void guardarProjeto()}
           className="rounded border-2 border-teal-600 bg-[var(--card)] px-4 py-2 text-sm font-semibold text-teal-700 shadow-sm hover:bg-teal-50 disabled:opacity-50 dark:border-teal-500 dark:text-teal-300 dark:hover:bg-teal-950/40"
         >
-          {projetoSaving ? "A guardar…" : "Guardar projeto"}
+          {projetoSaving ? "A guardar…" : "Guardar boletim"}
         </button>
       </div>
+      <p className="mb-4 text-xs text-[var(--muted)]">
+        <strong className="text-[var(--text)]">Automático:</strong> linhas SPT (ao adicionar) e
+        posição GPS. <strong className="text-[var(--text)]">Guardar boletim:</strong> camadas
+        geológicas, fotos, datas e nome da sondagem.
+      </p>
       {projetoMsg && (
         <p
           className={`mb-4 text-sm ${
@@ -1518,6 +1559,13 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
               >
                 Observações
               </th>
+              <th
+                className="w-10 border border-[var(--border)] p-2 font-semibold"
+                rowSpan={2}
+                title="Remover linha de profundidade"
+              >
+                ✕
+              </th>
             </tr>
             <tr className="text-[var(--text)]">
               <th className="border border-[var(--border)] p-1 text-xs font-semibold">
@@ -1535,6 +1583,7 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
               const avEfetivo =
                 (l.avanco ?? "").trim() || avancoPadraoParaProfSpt(l.prof);
               const amostraSpan = rowSpanGrupoAmostraSpt(i, profundidadesTabela);
+              const camadaSpan = rowSpanCamadaSpt(i, dados);
               const golpesSoma = golpesParaSomas30cmNaLinha(dados, i);
               const { s12, s23 } = somasGolpes30cm(
                 golpesSoma.g1,
@@ -1742,27 +1791,38 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
                   )}
                 </td>
 
-                <td className="border border-[var(--border)] p-0 text-left align-top">
-                  <div className="flex min-h-full gap-0">
-                    <div
-                      className="w-2 shrink-0 self-stretch border-r border-[var(--border)]"
-                      style={{ backgroundColor: l.cor }}
-                      title="Cor do material no PDF"
-                      aria-hidden
-                    />
-                    <div className="min-w-0 flex-1 p-2">
-                      <SoloNomenclaturaCampo
-                        compact
-                        tipoPrincipal={l.solo}
-                        detalhe={l.soloDetalhe}
-                        onTipoChange={(tipo) => atualizar(i, "solo", tipo)}
-                        onDetalheChange={(d) =>
-                          atualizar(i, "soloDetalhe", d)
-                        }
+                {camadaSpan.exibir ? (
+                  <td
+                    rowSpan={camadaSpan.span}
+                    className="border border-[var(--border)] p-0 text-left align-top"
+                  >
+                    <div className="flex min-h-full gap-0">
+                      <div
+                        className="w-2 shrink-0 self-stretch border-r border-[var(--border)]"
+                        style={{ backgroundColor: l.cor }}
+                        title="Cor do material no PDF"
+                        aria-hidden
                       />
+                      <div className="min-w-0 flex-1 p-2">
+                        <SoloNomenclaturaCampo
+                          compact
+                          tipoPrincipal={l.solo}
+                          detalhe={l.soloDetalhe}
+                          onTipoChange={(tipo) => atualizar(i, "solo", tipo)}
+                          onDetalheChange={(d) =>
+                            atualizar(i, "soloDetalhe", d)
+                          }
+                        />
+                        {camadaSpan.span > 1 ? (
+                          <p className="mt-1 text-[10px] text-[var(--muted)]">
+                            Descrição fundida em {camadaSpan.span} linhas — altere o
+                            tipo ou detalhe para separar.
+                          </p>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                </td>
+                  </td>
+                ) : null}
 
                 <td className="border border-[var(--border)] p-2">
                   <input
@@ -1772,6 +1832,17 @@ export function SptRegistroCampo({ furoId }: SptRegistroCampoProps) {
                     placeholder="NA, recusa, etc"
                     className="w-full rounded border border-[var(--border)] bg-[var(--surface)] p-1 text-left"
                   />
+                </td>
+                <td className="border border-[var(--border)] p-1 text-center align-middle">
+                  <button
+                    type="button"
+                    onClick={() => void removerLinha(i)}
+                    className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                    title={`Remover ${formatarProfSptPt(l.prof)} m`}
+                    aria-label={`Remover profundidade ${formatarProfSptPt(l.prof)} m`}
+                  >
+                    ✕
+                  </button>
                 </td>
               </tr>
             );

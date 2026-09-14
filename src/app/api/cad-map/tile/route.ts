@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { satelliteTileUrl } from "@/lib/rtk-validation/cad/map-tiles";
+import { mapboxSatelliteTileUrl } from "@/lib/mapbox-config";
+import { esriSatelliteTileUrl } from "@/lib/rtk-validation/cad/map-tiles";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const z = Number(searchParams.get("z"));
   const x = Number(searchParams.get("x"));
   const y = Number(searchParams.get("y"));
-  const source = searchParams.get("source") ?? "esri";
+  const source = searchParams.get("source") ?? "mapbox";
 
   if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y) || z < 0 || z > 22) {
     return NextResponse.json({ error: "Parâmetros z/x/y inválidos." }, { status: 400 });
@@ -19,8 +20,17 @@ export async function GET(request: NextRequest) {
 
   const upstreamUrl =
     source === "esri"
-      ? satelliteTileUrl(z, x, y)
-      : `https://mt1.google.com/vt/lyrs=s&hl=pt-BR&x=${x}&y=${y}&z=${z}`;
+      ? esriSatelliteTileUrl(z, x, y)
+      : source === "google"
+        ? `https://mt1.google.com/vt/lyrs=s&hl=pt-BR&x=${x}&y=${y}&z=${z}`
+        : mapboxSatelliteTileUrl(z, x, y);
+
+  if (!upstreamUrl) {
+    return NextResponse.json(
+      { error: "NEXT_PUBLIC_MAPBOX_TOKEN não configurado." },
+      { status: 503 },
+    );
+  }
 
   try {
     const upstream = await fetch(upstreamUrl, {
@@ -32,8 +42,8 @@ export async function GET(request: NextRequest) {
     });
 
     if (!upstream.ok) {
-      if (source !== "esri") {
-        const fallback = await fetch(satelliteTileUrl(z, x, y), { next: { revalidate: 86400 } });
+      if (source === "mapbox") {
+        const fallback = await fetch(esriSatelliteTileUrl(z, x, y), { next: { revalidate: 86400 } });
         if (fallback.ok) {
           const body = await fallback.arrayBuffer();
           return new NextResponse(body, {

@@ -18,6 +18,7 @@ import {
   runCompare,
   uploadSurvey,
 } from "@/lib/taludes/api";
+import { isSupportedRasterFile, RASTER_FILE_ACCEPT, RASTER_FORMAT_HINT } from "@/lib/taludes/raster-formats";
 import { riskBgClass, riskLabel } from "@/lib/taludes/risk";
 import type { AnalysisResult, SurveyRecord, TemporalDashboardPoint } from "@/lib/taludes/types";
 
@@ -85,8 +86,13 @@ export function TaludeMonitoringApp() {
   const dsmSurveys = useMemo(() => surveys.filter((s) => s.kind === "dsm"), [surveys]);
 
   const onUpload = async (file: File, kind: "ortho" | "dsm") => {
+    if (!isSupportedRasterFile(file)) {
+      setMsg(`Formato não suportado. Use ${RASTER_FORMAT_HINT}.`);
+      return;
+    }
+    const isEcw = file.name.toLowerCase().endsWith(".ecw");
     setLoading(true);
-    setMsg(null);
+    setMsg(isEcw ? "A processar ECW (pode demorar vários minutos)…" : null);
     try {
       await uploadSurvey(file, { kind, label: file.name });
       await refresh();
@@ -104,7 +110,7 @@ export function TaludeMonitoringApp() {
       return;
     }
     setLoading(true);
-    setMsg("A processar: alinhamento, optical flow, segmentação IA…");
+    setMsg("A processar análise (ECW grande pode demorar na 1.ª vez)…");
     try {
       const res = await runCompare({
         survey_t0_id: t0Id,
@@ -173,14 +179,17 @@ export function TaludeMonitoringApp() {
           <section className="rounded-xl border border-slate-700/80 bg-slate-900/60 p-4">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-amber-400">
               <Upload className="h-4 w-4" />
-              Upload GeoTIFF
+              Upload raster (TIFF / ECW)
             </h2>
+            <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+              GeoTIFF (.tif) ou ECW (.ecw). ECW é processado automaticamente no servidor (sem driver GDAL).
+            </p>
             <div className="mt-3 grid gap-2">
               <label className="cursor-pointer rounded-lg border border-dashed border-amber-500/40 bg-amber-500/5 px-3 py-3 text-center text-xs hover:bg-amber-500/10">
-                Ortofoto (.tif)
+                Ortofoto ({RASTER_FORMAT_HINT})
                 <input
                   type="file"
-                  accept=".tif,.tiff"
+                  accept={RASTER_FILE_ACCEPT}
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
@@ -190,10 +199,10 @@ export function TaludeMonitoringApp() {
                 />
               </label>
               <label className="cursor-pointer rounded-lg border border-dashed border-sky-500/40 bg-sky-500/5 px-3 py-3 text-center text-xs hover:bg-sky-500/10">
-                DSM (.tif) — opcional
+                DSM ({RASTER_FORMAT_HINT}) — opcional
                 <input
                   type="file"
-                  accept=".tif,.tiff"
+                  accept={RASTER_FILE_ACCEPT}
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];

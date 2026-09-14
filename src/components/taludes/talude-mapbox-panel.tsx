@@ -4,6 +4,7 @@ import type { MapLayerMouseEvent } from "mapbox-gl";
 import { useCallback, useMemo, useState } from "react";
 import Map, { Layer, Popup, Source } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
+import { getMapboxAccessToken, MAPBOX_STYLE_SATELLITE_STREETS } from "@/lib/mapbox-config";
 import { riskColor, riskLabel } from "@/lib/taludes/risk";
 import type {
   ChangePointsGeoJSON,
@@ -42,7 +43,7 @@ export function TaludeMapboxPanel({
   showVectors = true,
   showPolygons = true,
 }: Props) {
-  const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  const token = getMapboxAccessToken();
   const [popup, setPopup] = useState<{
     lng: number;
     lat: number;
@@ -88,7 +89,7 @@ export function TaludeMapboxPanel({
       <Map
         mapboxAccessToken={token}
         initialViewState={{ ...viewState, bearing: 0, pitch: 0 }}
-        mapStyle="mapbox://styles/mapbox/satellite-streets-v12"
+        mapStyle={MAPBOX_STYLE_SATELLITE_STREETS}
         style={{ width: "100%", height: "100%" }}
         interactiveLayerIds={["talude-points"]}
         onClick={onClick}

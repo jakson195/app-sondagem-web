@@ -4,12 +4,18 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiUrl } from "@/lib/api-url";
+import {
+  defaultModulosProjetoTodosAtivos,
+  modulosProjetoFromUnknown,
+  type ModuloProjetoChave,
+} from "@/lib/modulos-projeto";
 
 type ObraListItem = {
   id: number;
   nome: string;
   cliente: string;
   local: string;
+  modules?: Partial<Record<ModuloProjetoChave, boolean>>;
 };
 
 type FuroRow = { id: number; codigo: string };
@@ -42,6 +48,16 @@ export function SptHubClient() {
   const [novoCodigo, setNovoCodigo] = useState("");
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [filtroModuloSpt, setFiltroModuloSpt] = useState(true);
+
+  const obrasFiltradas = useMemo(() => {
+    if (!filtroModuloSpt) return obras;
+    return obras.filter((o) => {
+      const mods =
+        modulosProjetoFromUnknown(o.modules) ?? defaultModulosProjetoTodosAtivos();
+      return mods.spt !== false;
+    });
+  }, [obras, filtroModuloSpt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,6 +143,28 @@ export function SptHubClient() {
     }
   }
 
+  async function excluirFuro(id: number, codigo: string) {
+    if (
+      !window.confirm(
+        `Excluir o registo «${codigo}» e todas as profundidades SPT? Esta ação não pode ser desfeita.`,
+      )
+    ) {
+      return;
+    }
+    setErro(null);
+    try {
+      const r = await fetch(apiUrl(`/api/furo/${id}`), { method: "DELETE" });
+      if (!r.ok) {
+        const data = (await r.json().catch(() => ({}))) as { error?: string };
+        setErro(typeof data.error === "string" ? data.error : "Erro ao excluir furo");
+        return;
+      }
+      if (obraId != null) await carregarFuros(obraId);
+    } catch {
+      setErro("Falha de rede ao excluir");
+    }
+  }
+
   const obraNome = useMemo(
     () => obras.find((o) => o.id === obraId)?.nome,
     [obras, obraId],
@@ -148,6 +186,14 @@ export function SptHubClient() {
         <label className="block text-sm font-medium" htmlFor="spt-hub-obra">
           Obra (projeto)
         </label>
+        <label className="mt-3 flex items-center gap-2 text-xs text-[var(--muted)]">
+          <input
+            type="checkbox"
+            checked={filtroModuloSpt}
+            onChange={(e) => setFiltroModuloSpt(e.target.checked)}
+          />
+          Mostrar só obras com módulo <strong className="text-[var(--text)]">SPT</strong> activo
+        </label>
         <select
           id="spt-hub-obra"
           value={obraId ?? ""}
@@ -158,7 +204,7 @@ export function SptHubClient() {
           className="mt-2 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-sm"
         >
           <option value="">— Escolher obra —</option>
-          {obras.map((o) => (
+          {obrasFiltradas.map((o) => (
             <option key={o.id} value={o.id}>
               {o.nome} — {o.cliente}
             </option>
@@ -193,12 +239,21 @@ export function SptHubClient() {
                   className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3"
                 >
                   <span className="font-medium">{f.codigo}</span>
-                  <Link
-                    href={`/spt/${f.id}`}
-                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700"
-                  >
-                    Abrir / editar
-                  </Link>
+                  <div className="flex flex-wrap gap-2">
+                    <Link
+                      href={`/spt/${f.id}`}
+                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700"
+                    >
+                      Abrir / editar
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void excluirFuro(f.id, f.codigo)}
+                      className="rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/40"
+                    >
+                      Excluir
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -243,6 +298,15 @@ export function SptHubClient() {
         </Link>
         — ensaio rápido; os metros não são guardados no servidor até criar um furo
         numa obra.
+        {" · "}
+        <Link
+          href={obraId != null ? `/pocos?obraId=${obraId}` : "/pocos"}
+          className="font-medium text-sky-600 hover:underline dark:text-sky-400"
+        >
+          Poços de monitoramento
+        </Link>
+        — active o módulo <strong className="text-[var(--text)]">Poços</strong> na
+        obra se não aparecer no menu.
       </p>
     </div>
   );

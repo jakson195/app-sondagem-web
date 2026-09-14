@@ -3,6 +3,8 @@ export {
   listSavedCadProjects,
   loadCadProject,
   saveCadProject,
+  saveCadDwgToCloud,
+  downloadCadProjectDwg,
   deleteCadProject,
   formatSavedDate,
   getLastOpenedCadProjectId,

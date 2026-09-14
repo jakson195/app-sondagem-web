@@ -17,6 +17,10 @@ export interface ContourGenerationOptions {
   idwPower?: number;
   paddingRatio?: number;
   maxSearchRadius?: number;
+  /** Passes de blur 3×3 na grelha antes das iso-linhas. Padrão: 1. */
+  gridSmoothPasses?: number;
+  /** Iterações Chaikin nas polilinhas. Padrão: 2. Use 0 para desligar. */
+  lineSmoothIterations?: number;
 }
 
 export interface ContourGenerationResult {
@@ -97,12 +101,142 @@ function gridToWorld(
   };
 }
 
+/** Interpola posição UTM a partir de nós georreferenciados da grelha (DEM / WGS84). */
+function gridToWorldFromNodes(
+  gx: number,
+  gy: number,
+  cols: number,
+  rows: number,
+  nodeX: Float64Array,
+  nodeY: Float64Array,
+): CadVertex {
+  const fx = Math.max(0, Math.min(cols - 1, gx));
+  const fy = Math.max(0, Math.min(rows - 1, gy));
+  const i0 = Math.floor(fx);
+  const j0 = Math.floor(fy);
+  const i1 = Math.min(cols - 1, i0 + 1);
+  const j1 = Math.min(rows - 1, j0 + 1);
+  const tx = fx - i0;
+  const ty = fy - j0;
+
+  const idx = (i: number, j: number) => i + j * cols;
+  const x00 = nodeX[idx(i0, j0)]!;
+  const x10 = nodeX[idx(i1, j0)]!;
+  const x01 = nodeX[idx(i0, j1)]!;
+  const x11 = nodeX[idx(i1, j1)]!;
+  const y00 = nodeY[idx(i0, j0)]!;
+  const y10 = nodeY[idx(i1, j0)]!;
+  const y01 = nodeY[idx(i0, j1)]!;
+  const y11 = nodeY[idx(i1, j1)]!;
+
+  const x =
+    (1 - tx) * (1 - ty) * x00 + tx * (1 - ty) * x10 + (1 - tx) * ty * x01 + tx * ty * x11;
+  const y =
+    (1 - tx) * (1 - ty) * y00 + tx * (1 - ty) * y10 + (1 - tx) * ty * y01 + tx * ty * y11;
+
+  return { x, y, z: 0 };
+}
+
 function isMajorContourLevel(z: number, interval: number, majorInterval: number): boolean {
   if (majorInterval <= interval) return true;
   const step = Math.round(majorInterval / interval);
   if (step <= 1) return true;
   const index = Math.round(z / interval);
   return index % step === 0;
+}
+
+/** Blur 3×3 na grelha de cotas — reduz zigue-zague das iso-linhas. */
+function smoothElevationGrid(
+  values: Float64Array,
+  cols: number,
+  rows: number,
+  passes: number,
+): Float64Array {
+  if (passes <= 0) return values;
+
+  let src = values;
+  for (let pass = 0; pass < passes; pass++) {
+    const dst = new Float64Array(cols * rows);
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        let sum = 0;
+        let count = 0;
+        for (let dj = -1; dj <= 1; dj++) {
+          for (let di = -1; di <= 1; di++) {
+            const ni = i + di;
+            const nj = j + dj;
+            if (ni < 0 || ni >= cols || nj < 0 || nj >= rows) continue;
+            const v = src[ni + nj * cols];
+            if (!Number.isFinite(v)) continue;
+            sum += v;
+            count += 1;
+          }
+        }
+        const cur = src[i + j * cols];
+        dst[i + j * cols] = count > 0 ? sum / count : cur;
+      }
+    }
+    src = dst;
+  }
+  return src;
+}
+
+/** Chaikin corner-cutting — suaviza polilinhas mantendo a cota Z. */
+export function smoothContourVertices(
+  vertices: CadVertex[],
+  closed: boolean,
+  iterations = 2,
+): CadVertex[] {
+  if (vertices.length < 3 || iterations <= 0) return vertices;
+
+  let pts = vertices.map((v) => ({ ...v }));
+  for (let iter = 0; iter < iterations; iter++) {
+    const next: CadVertex[] = [];
+    const n = pts.length;
+    const segCount = closed ? n : n - 1;
+    if (segCount < 1) break;
+
+    for (let i = 0; i < segCount; i++) {
+      const a = pts[i]!;
+      const b = pts[(i + 1) % n]!;
+      const z = a.z ?? b.z;
+      next.push({
+        x: a.x * 0.75 + b.x * 0.25,
+        y: a.y * 0.75 + b.y * 0.25,
+        z,
+      });
+      next.push({
+        x: a.x * 0.25 + b.x * 0.75,
+        y: a.y * 0.25 + b.y * 0.75,
+        z,
+      });
+    }
+    pts = next;
+  }
+  return pts;
+}
+
+function decimateVertices(vertices: CadVertex[], closed: boolean, minDistM: number): CadVertex[] {
+  if (vertices.length <= 2 || minDistM <= 0) return vertices;
+
+  const out: CadVertex[] = [vertices[0]!];
+  for (let i = 1; i < vertices.length; i++) {
+    const prev = out[out.length - 1]!;
+    const cur = vertices[i]!;
+    if (Math.hypot(cur.x - prev.x, cur.y - prev.y) >= minDistM) {
+      out.push(cur);
+    }
+  }
+
+  if (closed && out.length >= 3) {
+    const first = out[0]!;
+    const last = out[out.length - 1]!;
+    if (Math.hypot(first.x - last.x, first.y - last.y) < minDistM) {
+      out.pop();
+    }
+  }
+
+  return out.length >= 2 ? out : vertices;
 }
 
 export function generateContoursFromPoints(
@@ -117,8 +251,6 @@ export function generateContoursFromPoints(
   if (!Number.isFinite(interval) || interval <= 0) {
     throw new Error("Intervalo de curvas deve ser maior que zero.");
   }
-
-  const majorInterval = options.majorInterval ?? interval * 5;
 
   const power = options.idwPower ?? 2;
   const padding = options.paddingRatio ?? 0.08;
@@ -162,13 +294,81 @@ export function generateContoursFromPoints(
     }
   }
 
+  return generateContoursFromGrid(values, cols, rows, minX, maxX, minY, maxY, interval, {
+    majorInterval: options.majorInterval,
+    zMin,
+    zMax,
+    pointCount: samples.length,
+    gridSmoothPasses: options.gridSmoothPasses,
+    lineSmoothIterations: options.lineSmoothIterations,
+  });
+}
+
+/** Gera curvas a partir de uma grelha de cotas (ex.: DEM SRTM). */
+export function generateContoursFromGrid(
+  values: Float64Array,
+  cols: number,
+  rows: number,
+  minX: number,
+  maxX: number,
+  minY: number,
+  maxY: number,
+  interval: number,
+  options?: {
+    majorInterval?: number;
+    zMin?: number;
+    zMax?: number;
+    pointCount?: number;
+    gridSmoothPasses?: number;
+    lineSmoothIterations?: number;
+    /** Nós UTM por célula — alinha curvas DEM com Mapbox/georef. */
+    nodeX?: Float64Array;
+    nodeY?: Float64Array;
+  },
+): ContourGenerationResult {
+  if (!Number.isFinite(interval) || interval <= 0) {
+    throw new Error("Intervalo de curvas deve ser maior que zero.");
+  }
+
+  const majorInterval = options?.majorInterval ?? interval * 5;
+  const gridSmoothPasses = options?.gridSmoothPasses ?? 1;
+  const lineSmoothIterations = options?.lineSmoothIterations ?? 2;
+  const nodeX = options?.nodeX;
+  const nodeY = options?.nodeY;
+  const useGeorefNodes =
+    nodeX != null &&
+    nodeY != null &&
+    nodeX.length === cols * rows &&
+    nodeY.length === cols * rows;
+
+  let zMin = options?.zMin ?? Infinity;
+  let zMax = options?.zMax ?? -Infinity;
+  if (options?.zMin == null || options?.zMax == null) {
+    for (let i = 0; i < values.length; i++) {
+      const z = values[i];
+      if (!Number.isFinite(z)) continue;
+      zMin = Math.min(zMin, z);
+      zMax = Math.max(zMax, z);
+    }
+  }
+
+  if (!Number.isFinite(zMin) || !Number.isFinite(zMax) || zMin >= zMax) {
+    throw new Error("Grelha de cotas inválida — poucos dados de elevação na área.");
+  }
+
+  const spanX = Math.abs(maxX - minX);
+  const spanY = Math.abs(maxY - minY);
+  const minVertexSpacing = Math.max(spanX, spanY) / 400;
+
+  const smoothedValues = smoothElevationGrid(values, cols, rows, gridSmoothPasses);
+
   const levels = buildThresholds(zMin, zMax, interval);
   if (levels.length === 0) {
-    throw new Error("Intervalo de curvas muito grande para a variação de cotas dos pontos.");
+    throw new Error("Intervalo de curvas muito grande para a variação de cotas da área.");
   }
 
   const generator = d3Contours().size([cols, rows]).thresholds(levels);
-  const polygons = generator(values);
+  const polygons = generator(smoothedValues);
 
   const polylines: CadPolylineEntity[] = [];
 
@@ -177,16 +377,22 @@ export function generateContoursFromPoints(
     for (const polygon of poly.coordinates) {
       for (const ring of polygon) {
         if (ring.length < 2) continue;
-        const vertices = ring.map(([gx, gy]) => {
-          const w = gridToWorld(gx, gy, cols, rows, minX, maxX, minY, maxY);
+        let vertices = ring.map(([gx, gy]) => {
+          const w = useGeorefNodes
+            ? gridToWorldFromNodes(gx, gy, cols, rows, nodeX, nodeY)
+            : gridToWorld(gx, gy, cols, rows, minX, maxX, minY, maxY);
           return { ...w, z: elevation };
         });
+        const closed = ring.length > 3;
+        vertices = smoothContourVertices(vertices, closed, lineSmoothIterations);
+        vertices = decimateVertices(vertices, closed, minVertexSpacing);
+        if (vertices.length < 2) continue;
         polylines.push({
           id: newId("cn"),
           type: "polyline",
           layerId: "contours",
           vertices,
-          closed: ring.length > 3,
+          closed,
           name: `CN ${elevation.toFixed(2)} m`,
           contourMajor: isMajorContourLevel(elevation, interval, majorInterval),
         });
@@ -199,7 +405,7 @@ export function generateContoursFromPoints(
     zMin,
     zMax,
     levels,
-    pointCount: samples.length,
+    pointCount: options?.pointCount ?? values.length,
   };
 }
 

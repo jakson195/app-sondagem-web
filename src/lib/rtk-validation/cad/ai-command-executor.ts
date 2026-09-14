@@ -3,9 +3,11 @@ import { normalizeCadAiCommand } from "./ai-command-catalog";
 import {
   exportCadProjectKml,
   exportCadProjectKmz,
-  parseKml,
   parseKmzBuffer,
 } from "./kml-io";
+import { mergeImportedDrawing } from "./import-cad-drawing";
+import { parseAsciiDxf } from "./import-dxf";
+import { parseKmlToCadGeoms, resolveKmlImportGeoref } from "./import-kml-kmz";
 import {
   azimuthToRumo,
   entitiesToSurveyCsv,
@@ -31,11 +33,13 @@ import {
   formatCoordBr,
   formatDistanceBr,
   formatVertexCoordLabel,
+  polygonAreaM2,
   segmentDistance,
   vertexLabelsPn,
 } from "./polygon-utils";
 import {
   generateLongitudinalProfile,
+  generateTypicalCrossSections,
   generateTransversalProfile,
   generateTransversalProfileAtStation,
   PROFILE_LAYER,
@@ -56,7 +60,54 @@ import {
 } from "./polygon-labels";
 import { generateHypsometricRaster } from "./hypsometric";
 import { detectCadGeorefFromProject } from "./georef";
-import { importSurveyPointsToProject, surveyPointsToCadEntities } from "./import-survey-points";
+import { importSurveyPointsToProject } from "./import-survey-points";
+import { buildSigefOdsBytes, sigefOdsFilename } from "./export-sigef-ods";
+import { defaultMemorialForm } from "./memorial-types";
+import {
+  generateLoteamento,
+  LoteamentoError,
+  parseReservaCanto,
+  polygonAreaPlanarM2,
+  reservarFaixaDeArea,
+  reservarRetanguloNoCanto,
+  subdivideQuadraEmLotes,
+  type ReservaAreaLado,
+} from "./lot-subdivision";
+import {
+  applyLoteamentoLotClassification,
+  DEFAULT_PERCENTUAL_ESQUINA,
+  resolveAreaMinimaInterno,
+} from "./lot-corner-classification";
+import {
+  applyLoteamentoTables,
+  applyReservaLegalToProject,
+  AREA_RESERVA_LEGAL_LAYER,
+  AREA_UTIL_LAYER,
+  appendAreaUtilToProject,
+  collectAppRings,
+  collectLoteamentoExclusionRings,
+  collectReservaLegalRings,
+  EIXO_NEED_LOTEAMENTO,
+  isLoteamentoEixoPolyline,
+  stripPreviousAreaUtil,
+} from "./loteamento-tools";
+import {
+  applyReurbLotLabels,
+  buildReurbTabularMemorialBytes,
+  listReurbLots,
+  reurbTabularFilename,
+} from "./reurb";
+import { formatStreetPlanName } from "./plan-annotation-labels";
+import {
+  computeEarthworkVolume,
+  findAlignmentPolyline,
+  formatVolumeM3,
+  meanElevation,
+  planeFromHorizontalZ,
+  volumeOdsFilename,
+  volumeSummarySheets,
+} from "./earthwork";
+import { buildOdsBytes } from "../ods-writer";
 import type {
   CadAiCommand,
   CadAiSideEffect,
@@ -64,10 +115,197 @@ import type {
   CadCommandExecutorMeta,
   CadCommandExecutorOptions,
 } from "./ai-command-types";
-import type { CadEntity, CadPolylineEntity, CadProject, CadVertex } from "./types";
+import type { CadEntity, CadPolylineEntity, CadProject, CadTool, CadVertex } from "./types";
 
 const TEXT_LAYER = CAD_TEXT_LAYER;
 const DIMENSION_LAYER = { id: "dimensions", name: "COTAS", color: "#a855f7", visible: true, locked: false } as const;
+const LOTEAMENTO_VIAS_LAYER = {
+  id: "loteamento_vias",
+  name: "LOTEAMENTO_VIAS",
+  color: "#64748b",
+  textColor: "#0000FF",
+  visible: true,
+  locked: false,
+} as const;
+const LOTEAMENTO_LOTES_LAYER = {
+  id: "loteamento_lotes",
+  name: "LOTEAMENTO_LOTES",
+  color: "#111827",
+  textColor: "#111827",
+  textSize: 22,
+  lineWidth: 1,
+  fillColor: "#4ade80",
+  fillAlpha: 0.52,
+  hatchPattern: "grass" as const,
+  visible: true,
+  locked: false,
+} as const;
+const LOTEAMENTO_CALCADAS_LAYER = {
+  id: "loteamento_calcadas",
+  name: "LOTEAMENTO_CALCADAS",
+  color: "#94a3b8",
+  fillColor: "#cbd5e1",
+  hatchPattern: "diagonal" as const,
+  visible: true,
+  locked: false,
+};
+const LOTEAMENTO_EIXOS_LAYER = {
+  id: "loteamento_eixos",
+  name: "LOTEAMENTO_EIXO_VIA",
+  color: "#334155",
+  lineType: "dashed" as const,
+  lineWidth: 1.25,
+  visible: true,
+  locked: false,
+};
+const LOTEAMENTO_QUADRAS_LAYER = {
+  id: "loteamento_quadras",
+  name: "LOTEAMENTO_QUADRAS",
+  color: "#b45309",
+  fillColor: "#fde68a",
+  visible: true,
+  locked: false,
+};
+const LOTEAMENTO_LAYER_IDS = new Set([
+  LOTEAMENTO_VIAS_LAYER.id,
+  LOTEAMENTO_LOTES_LAYER.id,
+  LOTEAMENTO_CALCADAS_LAYER.id,
+  LOTEAMENTO_EIXOS_LAYER.id,
+  LOTEAMENTO_QUADRAS_LAYER.id,
+]);
+const VIA_EXISTENTE_LAYER = {
+  id: "via_existente",
+  name: "VIA_EXISTENTE",
+  color: "#0f766e",
+  lineType: "dashed" as const,
+  lineWidth: 1.5,
+  visible: true,
+  locked: false,
+};
+const AREA_INSTITUCIONAL_LAYER = {
+  id: "area_institucional",
+  name: "AREA_INSTITUCIONAL",
+  color: "#7c3aed",
+  fillColor: "#c4b5fd",
+  visible: true,
+  locked: false,
+};
+
+const FERRAMENTA_TO_TOOL: Record<string, CadTool> = {
+  selecionar: "select",
+  select: "select",
+  pan: "pan",
+  linha: "line",
+  line: "line",
+  polilinha: "polyline",
+  polyline: "polyline",
+  editar_poligono: "editPolygon",
+  editpolygon: "editPolygon",
+  confrontacao: "confrontacao",
+  confrontação: "confrontacao",
+  inserir_coordenadas: "select",
+  excluir_ponto: "deletePoint",
+  alterar_cota: "editElevation",
+};
+
+const LAYER_ID_ALIASES: Record<string, string> = {
+  curvasdenivel: "contours",
+  curvasnivel: "contours",
+  isolinhas: "contours",
+  curvasinterpoladas: "contours_interpolated",
+  curvasinterpoladasnivel: "contours_interpolated",
+  tin: "tin",
+  triangulacao: "tin",
+  triangulacaotin: "tin",
+  hipsometrico: "hypsometric",
+  mapahipsometrico: "hypsometric",
+  loteamentovias: "loteamento_vias",
+  loteamentolotes: "loteamento_lotes",
+  loteamentoeixovia: "loteamento_eixos",
+  eixovia: "loteamento_eixos",
+  viaexistente: "via_existente",
+  ruaexistente: "via_existente",
+};
+
+function foldKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function findProjectLayer(project: CadProject, raw: string) {
+  const key = foldKey(raw);
+  const direct = project.layers.find((l) => foldKey(l.id) === key || foldKey(l.name) === key);
+  if (direct) return direct;
+  const aliasId = LAYER_ID_ALIASES[key];
+  if (aliasId) {
+    const aliased = project.layers.find((l) => l.id === aliasId || foldKey(l.id) === foldKey(aliasId));
+    if (aliased) return aliased;
+  }
+  return project.layers.find((l) => {
+    const id = foldKey(l.id);
+    const name = foldKey(l.name);
+    return (key.length >= 4 && (name.includes(key) || id.includes(key))) || name.includes(key);
+  }) ?? null;
+}
+
+function pickFrontAzimuth(
+  vertices: CadVertex[],
+  lado?: string,
+  segmentIndex?: number | null,
+): number {
+  const n = vertices.length;
+  if (n < 2) return 90;
+  if (lado === "selecionado_no_mapa" && segmentIndex != null && segmentIndex >= 0 && segmentIndex < n) {
+    return azimuthFromNorth(vertices[segmentIndex], vertices[(segmentIndex + 1) % n]);
+  }
+  let bestI = 0;
+  let bestScore = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const a = vertices[i];
+    const b = vertices[(i + 1) % n];
+    const midX = (a.x + b.x) / 2;
+    const midY = (a.y + b.y) / 2;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    let score = len;
+    if (lado === "norte") score = midY;
+    else if (lado === "sul") score = -midY;
+    else if (lado === "leste") score = midX;
+    else if (lado === "oeste") score = -midX;
+    if (score > bestScore) {
+      bestScore = score;
+      bestI = i;
+    }
+  }
+  return azimuthFromNorth(vertices[bestI], vertices[(bestI + 1) % n]);
+}
+
+function coordsToPolyline(
+  ring: number[][],
+  layerId: string,
+  name: string,
+  idPrefix: string,
+  z0: number,
+  closed = true,
+): CadPolylineEntity {
+  const raw = ring.map(([x, y]) => ({ x, y, z: z0 }));
+  const first = raw[0];
+  const last = raw[raw.length - 1];
+  const vertices =
+    closed && first && last && first.x === last.x && first.y === last.y && first.z === last.z
+      ? raw.slice(0, -1)
+      : raw;
+  return {
+    id: newId(idPrefix),
+    type: "polyline",
+    layerId,
+    vertices,
+    closed,
+    name,
+  };
+}
 
 function newId(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -75,9 +313,38 @@ function newId(prefix: string) {
 
 function ensureLayer(
   project: CadProject,
-  layer: { id: string; name: string; color: string; visible: boolean; locked: boolean },
+  layer: {
+    id: string;
+    name: string;
+    color: string;
+    visible: boolean;
+    locked: boolean;
+    fillColor?: string;
+    fillAlpha?: number;
+    textColor?: string;
+    lineType?: "solid" | "dashed";
+    lineWidth?: number;
+    hatchPattern?: "diagonal" | "cross" | "grass";
+  },
 ) {
-  return project.layers.some((l) => l.id === layer.id) ? project.layers : [...project.layers, { ...layer }];
+  const idx = project.layers.findIndex((l) => l.id === layer.id);
+  if (idx < 0) return [...project.layers, { ...layer }];
+  if (layer.id !== "loteamento_lotes") return project.layers;
+  return project.layers.map((existing, i) =>
+    i === idx
+      ? {
+          ...existing,
+          ...layer,
+          visible: existing.visible,
+          color: "#111827",
+          textColor: "#111827",
+          lineWidth: 1,
+          fillColor: "#4ade80",
+          fillAlpha: 0.52,
+          hatchPattern: "grass" as const,
+        }
+      : existing,
+  );
 }
 
 function findClosedPolygon(project: CadProject, entityId?: string, selectedId?: string | null) {
@@ -108,12 +375,6 @@ function findPolyline(project: CadProject, entityId?: string, selectedId?: strin
     if (e?.type === "polyline") return e;
   }
   return project.entities.find((e): e is CadPolylineEntity => e.type === "polyline") ?? null;
-}
-
-function surveyPointsToEntities(
-  points: Array<{ id: string; e: number; n: number; z: number; name?: string; code?: string }>,
-): CadEntity[] {
-  return surveyPointsToCadEntities(points);
 }
 
 function stub(feature: string) {
@@ -680,7 +941,8 @@ export function executeCadAiCommand(
     }
 
     case "gerar_tin":
-    case "triangulacao": {
+    case "triangulacao":
+    case "gerar_mdt": {
       try {
         const result = generateTinEntities(nextProject);
         const layers = ensureLayer(nextProject, { ...TIN_LAYER });
@@ -692,7 +954,9 @@ export function executeCadAiCommand(
         sideEffects.push({ type: "fit_view", entities: nextProject.entities });
         message =
           message ||
-          `Triangulação TIN: ${result.triangleCount} triângulos, ${result.lines.length} arestas (${result.pointCount} pontos).`;
+          (command.acao === "gerar_mdt"
+            ? `MDT gerado: ${result.triangleCount} triângulos, ${result.lines.length} arestas (${result.pointCount} pontos).`
+            : `Triangulação TIN: ${result.triangleCount} triângulos, ${result.lines.length} arestas (${result.pointCount} pontos).`);
       } catch (err) {
         return fail(project, err instanceof Error ? err.message : "Falha na triangulação.");
       }
@@ -725,12 +989,8 @@ export function executeCadAiCommand(
       break;
     }
 
-    case "gerar_mdt":
     case "gerar_mds":
     case "mapa_declividade":
-    case "secoes":
-    case "volume_corte":
-    case "volume_aterro":
     case "inserir_sondagem":
     case "perfil_geologico":
     case "secao_spt":
@@ -738,6 +998,58 @@ export function executeCadAiCommand(
     case "ajustar_poligono":
       message = message || stub(command.acao.replace(/_/g, " "));
       break;
+
+    case "volume_corte":
+    case "volume_aterro": {
+      const samples = extractSurveyElevationPoints(nextProject.entities);
+      if (samples.length < 3) return fail(project, "Mínimo 3 pontos com cota Z para calcular volume.");
+      const clip = findClosedPolygonStrict(nextProject, command.entidade_id, selectedId);
+      const z = command.z ?? meanElevation(samples);
+      try {
+        const result = computeEarthworkVolume({
+          terrainSamples: samples,
+          design: planeFromHorizontalZ(z),
+          clipPolygon: clip?.vertices ?? null,
+          designLabel: `Platô Z=${z.toFixed(2)} m`,
+        });
+        const focus =
+          command.acao === "volume_aterro"
+            ? `Aterro: ${formatVolumeM3(result.fillM3)} (corte ${formatVolumeM3(result.cutM3)})`
+            : `Corte: ${formatVolumeM3(result.cutM3)} (aterro ${formatVolumeM3(result.fillM3)})`;
+        message =
+          message ||
+          `${focus}. Líquido ${formatVolumeM3(result.netM3)}. Platô Z=${z.toFixed(2)} m${clip ? ` · região ${clip.name ?? clip.id}` : ""}.`;
+        sideEffects.push({
+          type: "download_binary",
+          filename: volumeOdsFilename(nextProject),
+          bytes: buildOdsBytes(volumeSummarySheets(result), "Volume terraplanagem"),
+          mime: "application/vnd.oasis.opendocument.spreadsheet",
+        });
+      } catch (err) {
+        return fail(project, err instanceof Error ? err.message : "Falha no cálculo de volume.");
+      }
+      break;
+    }
+
+    case "secoes": {
+      const axis = findAlignmentPolyline(nextProject.entities, command.entidade_id ?? selectedId ?? null);
+      if (!axis) return fail(project, "Selecione a polilinha do eixo para gerar as seções-tipo.");
+      const interval = command.intervalo ?? command.distancia ?? 20;
+      const width = command.largura ?? 20;
+      if (!(interval > 0) || !(width > 0)) {
+        return fail(project, "Informe intervalo de estacas e largura da seção (m), ambos > 0.");
+      }
+      try {
+        const sections = generateTypicalCrossSections(nextProject.entities, axis.vertices, interval, width / 2);
+        const layers = ensureLayer(nextProject, { ...TRANSVERSAL_PROFILE_LAYER });
+        nextProject = { ...nextProject, layers, entities: [...nextProject.entities, ...sections] };
+        if (sections[0]) selectedId = sections[0].id;
+        message = message || `${sections.length} seção(ões)-tipo geradas no eixo (intervalo ${interval} m, largura ${width} m).`;
+      } catch (err) {
+        return fail(project, err instanceof Error ? err.message : "Falha ao gerar seções-tipo.");
+      }
+      break;
+    }
 
     case "mapa_hipsometrico": {
       const samples = extractSurveyElevationPoints(nextProject.entities);
@@ -763,19 +1075,29 @@ export function executeCadAiCommand(
       if (!content) return fail(project, "Anexe o arquivo (CSV, KML, KMZ, DXF, GeoJSON…) e repita o comando.");
       const ext = (command.arquivo ?? "csv").toLowerCase();
 
-      if (ext === "kml") {
-        const parsed = parseKml(content);
-        if (parsed.points.length === 0) return fail(project, parsed.warnings.join(" ") || "KML sem pontos.");
-        const imported = surveyPointsToEntities(parsed.points);
-        const layers = ensureLayer(nextProject, { id: "rtk_points", name: "PONTOS_KML", color: "#38bdf8", visible: true, locked: false });
-        nextProject = { ...nextProject, layers, entities: [...nextProject.entities, ...imported] };
-        sideEffects.push({ type: "fit_view", entities: nextProject.entities });
-        message = message || `${imported.length} pontos importados do KML.`;
+      if (ext === "kml" || ext === "kmz") {
+        const georef = resolveKmlImportGeoref(nextProject, content);
+        const parsed = parseKmlToCadGeoms(content, georef);
+        parsed.source = ext === "kmz" ? "kmz" : "kml";
+        if (parsed.geoms.length === 0) return fail(project, parsed.warnings.join(" ") || "KML sem geometria.");
+        const merged = mergeImportedDrawing(nextProject, parsed);
+        nextProject = merged.project;
+        sideEffects.push({ type: "fit_view", entities: merged.entities });
+        sideEffects.push({ type: "enable_satellite" });
+        message = message || `Importados ${merged.entities.length} objetos de ${ext.toUpperCase()}.`;
         break;
       }
 
-      if (ext === "kmz") {
-        return fail(project, "Para KMZ, anexe o arquivo .kmz pelo botão 📎 (não cole texto).");
+      if (ext === "dxf") {
+        const parsed = parseAsciiDxf(content);
+        if (parsed.geoms.length === 0) {
+          return fail(project, parsed.warnings.join(" ") || "DXF sem geometria suportada.");
+        }
+        const merged = mergeImportedDrawing(nextProject, parsed);
+        nextProject = merged.project;
+        sideEffects.push({ type: "fit_view", entities: merged.entities });
+        message = message || `Importados ${merged.entities.length} objetos de DXF.`;
+        break;
       }
 
       if (ext === "shp") {
@@ -836,6 +1158,308 @@ export function executeCadAiCommand(
         break;
       }
       return fail(project, `Formato "${fmt}" não suportado. Use dxf, dwg, shp, csv, ods ou pdf.`);
+    }
+
+    case "exportar_sigef": {
+      const polygon = findClosedPolygon(nextProject, command.entidade_id, selectedId);
+      if (!polygon) return fail(project, "Selecione um polígono fechado (≥ 3 vértices) para gerar a planilha SIGEF.");
+      const georef = detectCadGeorefFromProject(nextProject);
+      if (!georef.isGeoreferenced) {
+        return fail(project, "Importe pontos RTK e use Enquadrar antes de exportar SIGEF.");
+      }
+      if (polygon.vertices.length < 3) {
+        return fail(project, "A poligonal precisa de pelo menos 3 vértices.");
+      }
+      selectedId = polygon.id;
+      const form = options.memorialForm ?? defaultMemorialForm();
+      const bytes = buildSigefOdsBytes(nextProject, polygon, form);
+      sideEffects.push({
+        type: "download_binary",
+        filename: sigefOdsFilename(nextProject, polygon),
+        bytes,
+        mime: "application/vnd.oasis.opendocument.spreadsheet",
+      });
+      message =
+        message ||
+        "Planilha SIGEF gerada. Copie os dados para o modelo oficial e valide com a extensão LibreOffice no portal INCRA.";
+      break;
+    }
+
+    case "gerar_loteamento": {
+      const tryId = command.entidade_id ?? selectedId ?? undefined;
+      if (tryId) {
+        const raw = nextProject.entities.find((e) => e.id === tryId);
+        if (raw && !(raw.type === "polyline" && raw.closed && raw.vertices.length >= 3)) {
+          return fail(project, "A entidade referenciada não é um polígono fechado.");
+        }
+      }
+      const gleba = findClosedPolygon(nextProject, command.entidade_id, selectedId);
+      if (!gleba || gleba.vertices.length < 3) {
+        return fail(project, "Selecione um polígono fechado (gleba) para gerar o loteamento.");
+      }
+
+      const larguraViaM = command.largura_via_m ?? 0;
+      const profundidadeQuadraM = command.profundidade_quadra_m ?? 0;
+      const testadaMinimaM = command.testada_minima_m ?? 0;
+      const areaMinimaQuadraM2 =
+        command.area_minima_quadra_m2 != null && Number.isFinite(command.area_minima_quadra_m2)
+          ? Math.max(0, command.area_minima_quadra_m2)
+          : command.area_quadra_m2 != null && Number.isFinite(command.area_quadra_m2)
+            ? Math.max(0, command.area_quadra_m2)
+            : 0;
+      const larguraQuadraM =
+        command.largura_quadra_m != null && Number.isFinite(command.largura_quadra_m)
+          ? Math.max(0, command.largura_quadra_m)
+          : 0;
+      const profundidadeBlocoM =
+        command.distancia_quadra_m != null && Number.isFinite(command.distancia_quadra_m)
+          ? Math.max(0, command.distancia_quadra_m)
+          : 0;
+      const larguraCalcadaM =
+        command.largura_calcada_m != null && Number.isFinite(command.largura_calcada_m)
+          ? Math.max(0, command.largura_calcada_m)
+          : 0;
+      const raioEsquinaM =
+        command.raio_esquina_m != null && Number.isFinite(command.raio_esquina_m)
+          ? Math.max(0, command.raio_esquina_m)
+          : 0;
+      const eixoRua = command.eixo_rua !== false;
+      const viasExistentesExtremidades = command.vias_existentes_extremidades === true;
+      const nVerts = gleba.vertices.length;
+      const ladosViaExistente = (command.lados_aresta ?? [])
+        .map((i) => Math.trunc(i))
+        .filter((i) => i >= 0 && i < nVerts)
+        .map((i) => {
+          const a = gleba.vertices[i];
+          const b = gleba.vertices[(i + 1) % nVerts];
+          return [
+            [a.x, a.y],
+            [b.x, b.y],
+          ] as [number, number][];
+        });
+      const pickedEixoIds = new Set(command.entidade_ids ?? []);
+      const eixosExistentes = nextProject.entities
+        .filter((entity): entity is Extract<(typeof nextProject.entities)[number], { type: "polyline" }> => {
+          if (entity.type !== "polyline" || entity.id === gleba.id || entity.vertices.length < 2) return false;
+          return pickedEixoIds.has(entity.id) || entity.layerId === VIA_EXISTENTE_LAYER.id;
+        })
+        .map((entity) => entity.vertices.map((v) => [v.x, v.y] as [number, number]));
+      nextProject = stripPreviousAreaUtil(nextProject);
+      const reservas = collectLoteamentoExclusionRings(nextProject);
+      const reservaLegal = collectReservaLegalRings(nextProject);
+      const apps = collectAppRings(nextProject);
+      const percentAreaUtil =
+        command.percentual_area_util != null && Number.isFinite(command.percentual_area_util)
+          ? Math.max(0, Math.min(99.9, command.percentual_area_util))
+          : 15;
+      if (larguraViaM <= 0 || profundidadeQuadraM <= 0 || testadaMinimaM <= 0) {
+        return fail(
+          project,
+          "Parâmetros incoerentes: informe largura da via, profundidade do lote e testada mínima maiores que zero.",
+        );
+      }
+
+      const z0 = gleba.vertices[0]?.z ?? 0;
+      const coords = gleba.vertices.map((v) => [v.x, v.y] as [number, number]);
+      try {
+        const result = generateLoteamento(coords, {
+          larguraViaM,
+          profundidadeQuadraM,
+          testadaMinimaM,
+          areaMinimaQuadraM2,
+          larguraQuadraM: larguraQuadraM > 0 ? larguraQuadraM : undefined,
+          profundidadeBlocoM: profundidadeBlocoM > 0 ? profundidadeBlocoM : undefined,
+          orientacao: command.orientacao,
+          prefixoQuadra: command.prefixo_quadra?.trim() || "Quadra",
+          larguraCalcadaM,
+          eixoRua,
+          raioEsquinaM,
+          viasExistentesExtremidades: viasExistentesExtremidades || ladosViaExistente.length > 0,
+          eixosExistentes: eixosExistentes.length > 0 ? eixosExistentes : undefined,
+          ladosViaExistente: ladosViaExistente.length > 0 ? ladosViaExistente : undefined,
+          reservas: reservas.length > 0 ? reservas : undefined,
+          reservaLegal: reservaLegal.length > 0 ? reservaLegal : undefined,
+          apps: apps.length > 0 ? apps : undefined,
+          percentAreaUtil,
+          cantoAreaUtil: command.canto_area_util,
+        });
+
+        const stamp = new Date().toISOString().slice(0, 10);
+        const viasLayer = {
+          ...LOTEAMENTO_VIAS_LAYER,
+          name: `Loteamento vias — ${stamp}`,
+        };
+        const lotesLayer = {
+          ...LOTEAMENTO_LOTES_LAYER,
+          name: `Loteamento lotes — ${stamp}`,
+        };
+        const calcadasLayer = {
+          ...LOTEAMENTO_CALCADAS_LAYER,
+          name: `Loteamento calçadas — ${stamp}`,
+        };
+        const eixosLayer = {
+          ...LOTEAMENTO_EIXOS_LAYER,
+          name: `Loteamento eixos — ${stamp}`,
+        };
+        const quadrasLayer = {
+          ...LOTEAMENTO_QUADRAS_LAYER,
+          name: `Loteamento quadras — ${stamp}`,
+        };
+
+        const toPolyline = (
+          ring: number[][],
+          layerId: string,
+          name: string,
+          idPrefix: string,
+          closed: boolean,
+        ): CadPolylineEntity => {
+          const raw = ring.map(([x, y]) => ({ x, y, z: z0 }));
+          const first = raw[0];
+          const last = raw[raw.length - 1];
+          const vertices =
+            closed && first && last && first.x === last.x && first.y === last.y && first.z === last.z
+              ? raw.slice(0, -1)
+              : raw;
+          return {
+            id: newId(idPrefix),
+            type: "polyline",
+            layerId,
+            vertices,
+            closed,
+            name,
+          };
+        };
+
+        const viaEntities = result.vias.map((poly, i) =>
+          toPolyline(poly[0] ?? [], viasLayer.id, formatStreetPlanName(`Via ${i + 1}`, i), "via", true),
+        );
+        const loteEntities = result.lotes.map((lote) =>
+          toPolyline(lote.coordinates[0] ?? [], lotesLayer.id, `${lote.quadra} — ${lote.numero}`, "lote", true),
+        );
+        const calcadaEntities = result.calcadas.map((poly, i) =>
+          toPolyline(poly[0] ?? [], calcadasLayer.id, `Calçada ${i + 1}`, "calcada", true),
+        );
+        const eixoEntities = result.eixos.map((line, i) =>
+          toPolyline(line, eixosLayer.id, `Eixo ${i + 1}`, "eixo", false),
+        );
+        const quadraEntities = result.quadraPolys.map((poly, i) =>
+          toPolyline(poly[0] ?? [], quadrasLayer.id, `Quadra ${i + 1}`, "quadra", true),
+        );
+
+        const kept = nextProject.entities.filter((e) => {
+          if (LOTEAMENTO_LAYER_IDS.has(e.layerId)) return false;
+          if (e.layerId === AREA_UTIL_LAYER.id) return false;
+          return true;
+        });
+        let layers = ensureLayer(nextProject, viasLayer);
+        layers = layers.some((l) => l.id === lotesLayer.id) ? layers : [...layers, lotesLayer];
+        if (calcadaEntities.length > 0) {
+          layers = layers.some((l) => l.id === calcadasLayer.id) ? layers : [...layers, calcadasLayer];
+        }
+        if (eixoEntities.length > 0) {
+          layers = layers.some((l) => l.id === eixosLayer.id) ? layers : [...layers, eixosLayer];
+        }
+        if (quadraEntities.length > 0) {
+          layers = layers.some((l) => l.id === quadrasLayer.id) ? layers : [...layers, quadrasLayer];
+        }
+        nextProject = {
+          ...nextProject,
+          layers,
+          entities: [...kept, ...viaEntities, ...calcadaEntities, ...eixoEntities, ...quadraEntities, ...loteEntities],
+        };
+        if (result.areaUtil.length > 0) {
+          nextProject = appendAreaUtilToProject(
+            nextProject,
+            result.areaUtil.map((poly) => poly[0] ?? []),
+            percentAreaUtil,
+            z0,
+          );
+        }
+        const labeledLots = applyReurbLotLabels(nextProject, { includeCotas: true, includeArea: true });
+        if (labeledLots.lotCount > 0) nextProject = labeledLots.project;
+        nextProject = applyLoteamentoLotClassification(nextProject, {
+          percentualEsquina: command.percentual_esquina ?? DEFAULT_PERCENTUAL_ESQUINA,
+          areaMinimaInterno: resolveAreaMinimaInterno({
+            areaMinimaM2: command.area_minima_m2,
+            testadaM: testadaMinimaM,
+            profundidadeM: profundidadeQuadraM,
+          }),
+        });
+        nextProject = applyLoteamentoTables(nextProject, {
+          percentualEsquina: command.percentual_esquina ?? DEFAULT_PERCENTUAL_ESQUINA,
+          areaMinimaInterno: resolveAreaMinimaInterno({
+            areaMinimaM2: command.area_minima_m2,
+            testadaM: testadaMinimaM,
+            profundidadeM: profundidadeQuadraM,
+          }),
+        }).project;
+        selectedId = loteEntities[0]?.id ?? gleba.id;
+        sideEffects.push({ type: "fit_view", entities: nextProject.entities });
+        const areaLotes = result.lotes.reduce((s, l) => s + l.area_m2, 0);
+        const rlM2 = reservaLegal.reduce((s, ring) => s + polygonAreaPlanarM2(ring), 0);
+        const rlShow = rlM2 > 0 ? rlM2 : result.areaGlebaM2 * 0.2;
+        message =
+          message ||
+          `Loteamento gerado: ${result.lotes.length} lotes em ${result.quadras} quadras, lotes ${formatAreaBr(areaLotes)}. Total ${formatAreaBr(result.areaGlebaM2)}. RL 20% ${formatAreaBr(rlShow)}. Ruas ${formatAreaBr(result.areaViasM2)}. ${percentAreaUtil.toFixed(0)}% − ruas = área útil ${formatAreaBr(result.areaUtilAlvoM2)}.`;
+      } catch (err) {
+        const text = err instanceof LoteamentoError || err instanceof Error ? err.message : "Falha ao gerar loteamento.";
+        return fail(project, text);
+      }
+      break;
+    }
+
+    case "alterar_eixo": {
+      if (!nextProject.entities.some(isLoteamentoEixoPolyline)) {
+        return fail(project, EIXO_NEED_LOTEAMENTO);
+      }
+      sideEffects.push({ type: "start_alterar_eixo" });
+      message = message || "Clique o primeiro ponto do eixo (face da quadra).";
+      break;
+    }
+
+    case "gerar_reurb": {
+      const labeled = applyReurbLotLabels(nextProject, { includeCotas: true, includeArea: true });
+      if (labeled.lotCount === 0) {
+        return fail(
+          project,
+          "Nenhum polígono fechado de lote. Feche polilinhas na camada de lotes (ou desenhe lotes sobre a ortofoto).",
+        );
+      }
+      nextProject = labeled.project;
+      sideEffects.push({ type: "fit_view", entities: nextProject.entities });
+      message =
+        message ||
+        `REURB: ${labeled.lotCount} lote(s) numerados com cotas e medidas (Lei 13.465/2017).`;
+      break;
+    }
+
+    case "exportar_reurb_tabular": {
+      const lots = listReurbLots(nextProject);
+      if (lots.length === 0) {
+        return fail(project, "Nenhum lote fechado para o memorial tabular REURB.");
+      }
+      const form = options.memorialForm ?? defaultMemorialForm();
+      const bytes = buildReurbTabularMemorialBytes(nextProject, form);
+      sideEffects.push({
+        type: "download_binary",
+        filename: reurbTabularFilename(nextProject),
+        bytes,
+        mime: "application/vnd.oasis.opendocument.spreadsheet",
+      });
+      message = message || `Memorial tabular REURB gerado (${lots.length} lote(s)).`;
+      break;
+    }
+
+    case "gerar_plantas_reurb": {
+      const lots = listReurbLots(nextProject);
+      if (lots.length === 0) {
+        return fail(project, "Nenhum lote fechado para gerar plantas individuais.");
+      }
+      sideEffects.push({ type: "generate_reurb_plantas", project: nextProject });
+      message =
+        message ||
+        `Gerando plantas individuais de ${lots.length} lote(s) em DWG e PDF…`;
+      break;
     }
 
     case "memorial_descritivo": {
@@ -984,6 +1608,182 @@ export function executeCadAiCommand(
       break;
     }
 
+    case "ativar_ferramenta": {
+      const rawTool = (command.ferramenta ?? "").trim().toLowerCase().replace(/\s+/g, "_");
+      const tool = FERRAMENTA_TO_TOOL[rawTool];
+      if (!tool) {
+        return fail(
+          project,
+          "Informe a ferramenta: selecionar, pan, linha, polilinha, editar_poligono ou confrontacao.",
+        );
+      }
+      sideEffects.push({ type: "set_tool", tool });
+      message = message || `Ferramenta ativa: ${command.ferramenta?.replace(/_/g, " ") ?? tool}.`;
+      break;
+    }
+
+    case "trocar_camada": {
+      const rawLayer = command.camada?.trim();
+      if (!rawLayer) return fail(project, "Informe o nome da camada.");
+      const layer = findProjectLayer(nextProject, rawLayer);
+      if (!layer) {
+        const names = nextProject.layers.map((l) => l.name).join(", ");
+        return fail(project, `Camada "${rawLayer}" não encontrada.${names ? ` Camadas: ${names}.` : ""}`);
+      }
+      const visible = command.visivel ?? true;
+      nextProject = {
+        ...nextProject,
+        layers: nextProject.layers.map((l) => (l.id === layer.id ? { ...l, visible } : l)),
+      };
+      message = message || `Camada ${layer.name} ${visible ? "visível" : "oculta"}.`;
+      break;
+    }
+
+    case "subdividir_quadra": {
+      const gleba = findClosedPolygon(nextProject, command.entidade_id, selectedId);
+      if (!gleba || gleba.vertices.length < 3) {
+        return fail(project, "Selecione um polígono fechado (quadra) para subdividir.");
+      }
+      const testadaM = command.testada_m ?? command.testada_minima_m ?? 0;
+      if (!(testadaM > 0)) {
+        return fail(project, "Informe a testada desejada em metros (testada_m).");
+      }
+      const coords = gleba.vertices.map((v) => [v.x, v.y] as [number, number]);
+      const az = pickFrontAzimuth(gleba.vertices, command.lado, options.selectedSegmentIndex);
+      const lots = subdivideQuadraEmLotes(coords, az, testadaM, 0);
+      if (lots.length === 0) {
+        return fail(
+          project,
+          "Não foi possível subdividir a quadra com essa testada. Verifique o lado da frente ou aumente a testada.",
+        );
+      }
+      const z0 = gleba.vertices[0]?.z ?? 0;
+      const layers = ensureLayer(nextProject, LOTEAMENTO_LOTES_LAYER);
+      const loteEntities = lots.map((poly, i) =>
+        coordsToPolyline(poly[0] ?? [], LOTEAMENTO_LOTES_LAYER.id, `Lote ${i + 1}`, "lote", z0),
+      );
+      nextProject = {
+        ...nextProject,
+        layers,
+        entities: [...nextProject.entities.filter((e) => e.id !== gleba.id), ...loteEntities],
+      };
+      selectedId = loteEntities[0]?.id ?? null;
+      sideEffects.push({ type: "fit_view", entities: nextProject.entities });
+      message = message || `Quadra subdividida em ${loteEntities.length} lote(s) com testada de ${testadaM} m.`;
+      break;
+    }
+
+    case "criar_rua_existente": {
+      const poly = findPolyline(nextProject, command.entidade_id, selectedId);
+      if (!poly || poly.vertices.length < 2) {
+        return fail(project, "Selecione ou desenhe uma polilinha para marcar como rua existente.");
+      }
+      const nome = (command.nome ?? command.texto)?.trim() || poly.name || "Via existente";
+      const layers = ensureLayer(nextProject, VIA_EXISTENTE_LAYER);
+      nextProject = {
+        ...nextProject,
+        layers,
+        entities: nextProject.entities.map((e) =>
+          e.id === poly.id ? { ...e, layerId: VIA_EXISTENTE_LAYER.id, name: nome } : e,
+        ),
+      };
+      selectedId = poly.id;
+      message = message || `Polilinha marcada como rua existente${nome ? ` (${nome})` : ""}.`;
+      break;
+    }
+
+    case "reservar_area": {
+      const gleba = findClosedPolygon(nextProject, command.entidade_id, selectedId);
+      if (!gleba || gleba.vertices.length < 3) {
+        return fail(project, "Selecione um polígono fechado (gleba) para reservar a faixa.");
+      }
+      const tipo = (command.tipo ?? "").trim().toLowerCase();
+      if (tipo !== "institucional" && tipo !== "reserva_legal") {
+        return fail(project, "Informe o tipo da reserva: institucional ou reserva_legal.");
+      }
+      const pct = command.percentual ?? 0;
+      if (!(pct > 0) || pct >= 100) {
+        return fail(project, "Informe um percentual entre 0 e 100 (exclusive).");
+      }
+      const ladoRaw = (command.lado ?? "fundo").toLowerCase();
+      const canto = parseReservaCanto(ladoRaw);
+      const lado: ReservaAreaLado =
+        ladoRaw === "frente" || ladoRaw === "fundo" || ladoRaw === "esquerda" || ladoRaw === "direita"
+          ? ladoRaw
+          : "fundo";
+      const areaTotal = polygonAreaM2(gleba.vertices, true);
+      const alvo = (pct / 100) * areaTotal;
+      try {
+        const z0 = gleba.vertices[0]?.z ?? 0;
+        const reserveLayer = tipo === "institucional" ? AREA_INSTITUCIONAL_LAYER : AREA_RESERVA_LEGAL_LAYER;
+        const layers = ensureLayer(nextProject, reserveLayer);
+        const glebaCoords = gleba.vertices.map((v) => [v.x, v.y] as [number, number]);
+
+        if (tipo === "reserva_legal" && canto) {
+          const applied = applyReservaLegalToProject(nextProject, {
+            glebaId: gleba.id,
+            percent: pct,
+            canto,
+          });
+          nextProject = applied.project;
+          selectedId = applied.reserved.id;
+          sideEffects.push({ type: "set_tool", tool: "select" });
+          message =
+            message ||
+            `Reservados ${formatAreaBr(applied.reservedM2)} (${pct}%) para reserva legal no canto ${canto.replace(/_/g, " ")}. Arraste o polígono para reposicionar.`;
+        } else if (canto) {
+          const placed = reservarRetanguloNoCanto(glebaCoords, canto, alvo);
+          const reserved = coordsToPolyline(
+            placed.reserved,
+            reserveLayer.id,
+            "Área institucional",
+            "inst",
+            z0,
+          );
+          nextProject = {
+            ...nextProject,
+            layers,
+            entities: [
+              ...nextProject.entities.filter(
+                (e) => !(e.layerId === reserveLayer.id && e.type === "polyline" && e.closed),
+              ),
+              reserved,
+            ],
+          };
+          nextProject = appendPolygonCenterLabel(nextProject, reserved);
+          selectedId = reserved.id;
+          sideEffects.push({ type: "set_tool", tool: "select" });
+          message =
+            message ||
+            `Reservados ${formatAreaBr(placed.reservedM2)} (${pct}%) para área institucional no canto ${canto.replace(/_/g, " ")}. Arraste o polígono para reposicionar.`;
+        } else {
+          const cut = reservarFaixaDeArea(glebaCoords, lado, alvo);
+          const reserved = coordsToPolyline(
+            cut.reserved,
+            reserveLayer.id,
+            tipo === "institucional" ? "Área institucional" : "Reserva legal",
+            tipo === "institucional" ? "inst" : "rl",
+            z0,
+          );
+          const remainder = coordsToPolyline(cut.remainder, gleba.layerId, gleba.name ?? "Gleba", "gleba", z0);
+          nextProject = {
+            ...nextProject,
+            layers,
+            entities: [...nextProject.entities.filter((e) => e.id !== gleba.id), remainder, reserved],
+          };
+          selectedId = reserved.id;
+          sideEffects.push({ type: "fit_view", entities: nextProject.entities });
+          message =
+            message ||
+            `Reservados ${formatAreaBr(cut.reservedM2)} (${pct}%) para ${tipo === "institucional" ? "área institucional" : "reserva legal"} no ${lado}. Gleba restante: ${formatAreaBr(cut.remainderM2)}.`;
+        }
+      } catch (err) {
+        const text = err instanceof LoteamentoError || err instanceof Error ? err.message : "Falha ao reservar a faixa.";
+        return fail(project, text);
+      }
+      break;
+    }
+
     case "selecionar": {
       const targetId = command.entidade_id;
       if (!targetId) return fail(project, "Informe entidade_id.");
@@ -1016,9 +1816,9 @@ export function importKmzIntoProject(project: CadProject, buffer: ArrayBuffer): 
   if (!kml) return fail(project, warnings.join(" ") || "KMZ inválido.");
   return executeCadAiCommand(project, {
     acao: "importar",
-    arquivo: "kml",
+    arquivo: "kmz",
     conteudo: kml,
-    resposta: "Importação KMZ concluída.",
+    resposta: "",
   });
 }
 

@@ -1,4 +1,5 @@
 import type { SystemRole } from "@prisma/client";
+import { withAuthTimeout } from "@/lib/auth-timeout";
 import { prisma } from "@/lib/prisma";
 
 type AuthUser = {
@@ -38,7 +39,12 @@ export async function getLocalBypassAuthUser(): Promise<AuthUser | null> {
   if (!isAuthBypassEnabled()) return null;
 
   try {
-    return await resolveLocalBypassAuthUser();
+    const user = await withAuthTimeout(
+      resolveLocalBypassAuthUser(),
+      "auth-bypass prisma",
+    );
+    if (user) return user;
+    return LOCAL_BYPASS_FALLBACK_USER;
   } catch (err) {
     console.warn(
       "[auth-bypass] Base de dados indisponível; a usar utilizador local de fallback.",

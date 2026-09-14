@@ -9,6 +9,8 @@ type CadSvgMultilineTextProps = {
   fontFamily?: string;
   fontWeight?: number | string;
   textAnchor?: "start" | "middle" | "end";
+  dominantBaseline?: "auto" | "middle" | "hanging" | "central";
+  rotationDeg?: number;
   lineHeight?: number;
   stroke?: string;
   strokeWidth?: number;
@@ -24,6 +26,8 @@ export function CadSvgMultilineText({
   fontFamily = "ui-monospace, monospace",
   fontWeight,
   textAnchor = "start",
+  dominantBaseline,
+  rotationDeg,
   lineHeight,
   stroke,
   strokeWidth,
@@ -33,8 +37,7 @@ export function CadSvgMultilineText({
   if (lines.length === 0) return null;
 
   const dy = lineHeight ?? Math.max(fontSize * 1.15, fontSize + 2);
-
-  return (
+  const text = (
     <text
       x={x}
       y={y}
@@ -43,15 +46,21 @@ export function CadSvgMultilineText({
       fontFamily={fontFamily}
       fontWeight={fontWeight}
       textAnchor={textAnchor}
+      dominantBaseline={dominantBaseline}
       stroke={stroke}
       strokeWidth={strokeWidth}
       paintOrder={paintOrder}
     >
       {lines.map((line, index) => (
-        <tspan key={index} x={textAnchor === "middle" ? x : x} dy={index === 0 ? 0 : dy}>
+        <tspan key={index} x={x} dy={index === 0 ? 0 : dy}>
           {line}
         </tspan>
       ))}
     </text>
   );
+
+  if (rotationDeg && Number.isFinite(rotationDeg) && Math.abs(rotationDeg) > 0.05) {
+    return <g transform={`rotate(${rotationDeg} ${x} ${y})`}>{text}</g>;
+  }
+  return text;
 }

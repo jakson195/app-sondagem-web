@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import type { CadLayer } from "@/lib/rtk-validation/cad/types";
 import { isUserLayer } from "@/lib/rtk-validation/cad/layer-styles";
@@ -10,7 +11,7 @@ type CadLayersPanelProps = {
   entityCounts: Record<string, number>;
   onToggleVisibility: (layerId: string) => void;
   onSetActive: (layerId: string) => void;
-  onAddLayer: () => void;
+  onAddLayer: (name: string, color: string) => void;
   onUpdateLayer: (layerId: string, patch: Partial<CadLayer>) => void;
   onDeleteLayer?: (layerId: string) => void;
 };
@@ -51,21 +52,60 @@ export function CadLayersPanel({
   onDeleteLayer,
 }: CadLayersPanelProps) {
   const t = useTranslations("rtkCad.layers");
+  const nextIndex = useMemo(
+    () => layers.filter((l) => l.id.startsWith("lyr_")).length + 1,
+    [layers],
+  );
+  const [draftName, setDraftName] = useState("");
+  const [draftColor, setDraftColor] = useState("#fbbf24");
+  const [createNotice, setCreateNotice] = useState<string | null>(null);
+
   const editingLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
   const canEditStyles = editingLayer ? !editingLayer.locked : false;
   const canDelete = editingLayer ? isUserLayer(editingLayer) : false;
+
+  function submitNewLayer() {
+    const name = draftName.trim().toUpperCase() || `CAMADA_${nextIndex}`;
+    const color = draftColor.startsWith("#") ? draftColor.slice(0, 7) : "#fbbf24";
+    onAddLayer(name, color);
+    setDraftName("");
+    setCreateNotice(t("created", { name }));
+    window.setTimeout(() => setCreateNotice(null), 4000);
+  }
 
   return (
     <section className="rounded-xl border border-[#e5e7eb] bg-white p-4">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-[#0f2848]">{t("title")}</h3>
+      </div>
+
+      <div className="mt-3 space-y-2 rounded-lg border border-[#dbeafe] bg-[#f8fafc] p-3">
+        <p className="text-[10px] font-medium uppercase tracking-wide text-[#6b7280]">{t("createTitle")}</p>
+        <label className="block text-[10px] text-[#6b7280]">
+          {t("name")}
+          <input
+            type="text"
+            value={draftName}
+            placeholder={`CAMADA_${nextIndex}`}
+            onChange={(e) => setDraftName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitNewLayer();
+              }
+            }}
+            className="mt-0.5 w-full rounded border border-[#d1d5db] px-2 py-1 font-mono text-xs"
+          />
+        </label>
+        <ColorField label={t("lineColor")} value={draftColor} onChange={setDraftColor} />
         <button
           type="button"
-          onClick={onAddLayer}
-          className="rounded-lg border border-[#0f2848] px-2 py-1 text-[10px] font-medium text-[#0f2848] hover:bg-[#f8fafc]"
+          onClick={submitNewLayer}
+          className="w-full rounded-lg bg-[#0f2848] px-2 py-1.5 text-xs font-medium text-white hover:bg-[#1e3a5f]"
         >
-          {t("add")}
+          {t("create")}
         </button>
+        {createNotice ? <p className="text-[10px] text-emerald-700">{createNotice}</p> : null}
       </div>
 
       <ul className="mt-3 space-y-2">
@@ -139,6 +179,26 @@ export function CadLayersPanel({
                 value={editingLayer.textColor ?? "#e2e8f0"}
                 onChange={(textColor) => onUpdateLayer(editingLayer.id, { textColor })}
               />
+
+              <label className="block text-[10px] text-[#6b7280]">
+                {t("textSize")}
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={6}
+                    max={36}
+                    step={1}
+                    value={editingLayer.textSize ?? 10}
+                    onChange={(e) =>
+                      onUpdateLayer(editingLayer.id, { textSize: Number(e.target.value) })
+                    }
+                    className="flex-1"
+                  />
+                  <span className="w-10 text-right font-mono text-xs text-[#374151]">
+                    {(editingLayer.textSize ?? 10).toFixed(0)}
+                  </span>
+                </div>
+              </label>
 
               <label className="block text-[10px] text-[#6b7280]">
                 {t("lineWidth")}
