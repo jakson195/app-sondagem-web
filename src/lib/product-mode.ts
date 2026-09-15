@@ -1,8 +1,8 @@
 /**
  * Modo comercial da UI (não é controlo de acesso).
  *
- * - `FULL` ou variável omitida: mostra todos os módulos actuais no menu.
- * - `LOTEAMENTO`: oculta na UI tudo o que não for CAD, GEO ou Estudo de Viabilidade.
+ * - `LOTEAMENTO` ou variável omitida: só CAD, GEO e Estudo de Viabilidade no menu.
+ * - `FULL`: mostra todos os módulos actuais no menu.
  *
  * Rotas, APIs, Prisma e permissões existentes permanecem intactas.
  * Ocultar um item do menu não bloqueia URL nem API.
@@ -39,7 +39,7 @@ export const LOTEAMENTO_MODULE_CARDS = [
 
 export function getProductMode(): ProductMode {
   const raw = process.env.NEXT_PUBLIC_PRODUCT_MODE?.trim().toUpperCase();
-  return raw === "LOTEAMENTO" ? "LOTEAMENTO" : "FULL";
+  return raw === "FULL" ? "FULL" : "LOTEAMENTO";
 }
 
 export function isLoteamentoProductMode(): boolean {

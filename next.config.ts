@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_PRODUCT_MODE:
+      process.env.NEXT_PUBLIC_PRODUCT_MODE?.trim() || "LOTEAMENTO",
+  },
   images: {
     remotePatterns: [
       {
