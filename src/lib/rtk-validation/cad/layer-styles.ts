@@ -71,25 +71,53 @@ export function isLoteamentoLotesLayer(layer: Pick<CadLayer, "id"> | undefined):
   return layer?.id === LOTEAMENTO_LOTES_LAYER_ID;
 }
 
-/** Estilo de gramado no plano 2D; traço cadastral fino e preto. */
-export function applyLoteamentoLotesGrassStyle(layer: CadLayer): CadLayer {
+function loteamentoLotesCadastreLine(layer: CadLayer): Pick<CadLayer, "color" | "textColor" | "lineWidth" | "textSize"> {
   return {
-    ...layer,
     color: LOTEAMENTO_LOTES_LINE,
     textColor: LOTEAMENTO_LOTES_LINE,
     lineWidth:
       layer.lineWidth != null && layer.lineWidth <= LOTEAMENTO_LOTES_LINE_WIDTH + 0.2
         ? layer.lineWidth
         : LOTEAMENTO_LOTES_LINE_WIDTH,
-    fillColor: LOTEAMENTO_LOTES_GRASS_FILL,
-    fillAlpha: layer.fillAlpha != null && layer.fillAlpha >= 0.35 ? layer.fillAlpha : LOTEAMENTO_LOTES_GRASS_FILL_ALPHA,
-    hatchPattern: "grass",
     textSize: Math.max(layer.textSize ?? 0, LOTEAMENTO_LOTES_TEXT_SIZE),
   };
 }
 
+export function isLoteamentoLotesHatchOff(layer: Pick<CadLayer, "hatchPattern"> | undefined): boolean {
+  return layer?.hatchPattern === "none";
+}
+
+/** Contorno cadastral sem gramado — hachura verde apagada. */
+export function applyLoteamentoLotesNoHatchStyle(layer: CadLayer): CadLayer {
+  return {
+    ...layer,
+    ...loteamentoLotesCadastreLine(layer),
+    hatchPattern: "none",
+    fillAlpha: 0,
+  };
+}
+
+/** Estilo de gramado no plano 2D; traço cadastral fino e preto. */
+export function applyLoteamentoLotesGrassStyle(layer: CadLayer): CadLayer {
+  return {
+    ...layer,
+    ...loteamentoLotesCadastreLine(layer),
+    fillColor: LOTEAMENTO_LOTES_GRASS_FILL,
+    fillAlpha: layer.fillAlpha != null && layer.fillAlpha >= 0.35 ? layer.fillAlpha : LOTEAMENTO_LOTES_GRASS_FILL_ALPHA,
+    hatchPattern: "grass",
+  };
+}
+
+/** Respeita hachura desligada; caso contrário aplica o gramado padrão. */
+export function applyLoteamentoLotesDisplayStyle(layer: CadLayer): CadLayer {
+  return isLoteamentoLotesHatchOff(layer)
+    ? applyLoteamentoLotesNoHatchStyle(layer)
+    : applyLoteamentoLotesGrassStyle(layer);
+}
+
 export function resolveLayerHatchPattern(layer: CadLayer | undefined): CadHatchPattern | undefined {
   if (!layer) return undefined;
+  if (layer.hatchPattern === "none") return undefined;
   if (isLoteamentoLotesLayer(layer)) return "grass";
   if (layer.hatchPattern === "diagonal" || layer.hatchPattern === "cross" || layer.hatchPattern === "grass") {
     return layer.hatchPattern;
@@ -105,7 +133,7 @@ export function normalizeCadLayer(layer: CadLayer): CadLayer {
     textColor: layer.textColor ?? DEFAULT_TEXT_COLOR,
     textSize: layer.textSize ?? DEFAULT_TEXT_SIZE,
   };
-  return isLoteamentoLotesLayer(next) ? applyLoteamentoLotesGrassStyle(next) : next;
+  return isLoteamentoLotesLayer(next) ? applyLoteamentoLotesDisplayStyle(next) : next;
 }
 
 export function normalizeCadLayers(layers: CadLayer[]): CadLayer[] {
@@ -147,7 +175,7 @@ export function getLayerFillColor(
   selected = false,
   fallback = DEFAULT_FILL_COLOR,
 ): string {
-  const styled = isLoteamentoLotesLayer(layer) && layer ? applyLoteamentoLotesGrassStyle(layer) : layer;
+  const styled = isLoteamentoLotesLayer(layer) && layer ? applyLoteamentoLotesDisplayStyle(layer) : layer;
   const base = styled?.fillColor ?? styled?.color ?? fallback;
   const custom = styled?.fillAlpha;
   const idle = custom ?? DEFAULT_FILL_ALPHA;

@@ -1,5 +1,6 @@
 import * as turf from "@turf/turf";
 import type { Feature, MultiPolygon, Polygon, Position } from "geojson";
+import { otimizarEquidadeDosLotes, otimizarEquidadePorQuadras, relatoriosEquidadePorQuadras } from "./lot-equity";
 
 /** Anel externo [x, y] em metros (E/N do CAD). Primeiro ponto pode ou não repetir o último. */
 export type PolygonCoords = Position[];
@@ -13,8 +14,10 @@ export type LoteamentoParams = {
    */
   profundidadeQuadraM: number;
   testadaMinimaM: number;
-  /** Ignorado — lotes dimensionam pela testada/profundidade restantes. */
+  /** Área mínima do lote interno (m²). Se omitida, usa testada × profundidade. */
   areaMinimaM2?: number;
+  /** Acréscimo % da área mínima nos lotes de esquina (padrão 20). */
+  percentualEsquina?: number;
   orientacao?: number;
   prefixoQuadra?: string;
   /** Calçada em cada lado, interna ao corredor da via (m). 0 = sem calçada. */
@@ -40,8 +43,8 @@ export type LoteamentoParams = {
   /** Polígonos de APP — entram na base urbanizável (gleba − APP − RL). */
   apps?: Position[][];
   /**
-   * Orçamento de área útil sobre a gleba total T (padrão 15).
-   * Área útil A = max(0, percent/100 × T − área das ruas). 0 = só restos.
+   * @deprecated A área útil é a parte loteável (gleba − área verde − APP − vias).
+   * Não cria polígono vazio; o restante vira lote.
    */
   percentAreaUtil?: number;
   /**
@@ -50,11 +53,15 @@ export type LoteamentoParams = {
    */
   cantoAreaUtil?: ReservaCanto | string;
   /**
-   * Não gera rua nova na borda da gleba (via pública já existente nas extremidades).
-   * Os lotes fazem testada no limite da gleba.
+   * Via pública já existente nas extremidades: o corredor fica **fora** da gleba
+   * (largura `larguraViaExistenteM`) e as ruas do loteamento se unem a ele na borda.
    * Se `ladosViaExistente` estiver preenchido, aplica só nesses lados.
    */
   viasExistentesExtremidades?: boolean;
+  /**
+   * Largura (m) da via existente gerada fora da gleba. Omitida = mesma `larguraViaM`.
+   */
+  larguraViaExistenteM?: number;
   /** Eixos de via já desenhados (polilinhas) para inserir/bufferizar no loteamento. */
   eixosExistentes?: Position[][];
   /**
@@ -64,6 +71,13 @@ export type LoteamentoParams = {
   usarEixosComoRede?: boolean;
   /** Arestas da gleba (cada uma [A, B]) onde já existe via pública — marcar no desenho. */
   ladosViaExistente?: Position[][];
+  /**
+   * Arestas da gleba voltadas à rodovia. A faixa de domínio entra **para dentro**
+   * da gleba (`larguraFaixaDominioM`) e não recebe lote nem via.
+   */
+  ladosFaixaDominio?: Position[][];
+  /** Largura (m) da faixa de domínio recuada para dentro da gleba. */
+  larguraFaixaDominioM?: number;
 };
 
 export type LoteResult = {
@@ -92,11 +106,10 @@ export type LoteamentoResult = {
   quadras: number;
   areaGlebaM2: number;
   /**
-   * Área útil pública (não são lotes): max(0, 15%×T − ruas) colada na reserva
-   * + restos de lote ao lado da reserva legal.
+   * Polígonos de AREA_UTIL. Sempre vazio: a área útil é loteada, não reservada.
    */
   areaUtil: Position[][][];
-  /** max(0, orçamento − ruas). Orçamento = percent × T. */
+  /** Área loteável alvo (gleba − RL − APP), informativa. */
   areaUtilAlvoM2: number;
   /** percent/100 × T (antes de descontar ruas). */
   areaUtilOrcamentoM2: number;
@@ -105,6 +118,42 @@ export type LoteamentoResult = {
   areaViasM2: number;
   /** gleba − APP − reserva legal. */
   areaUrbanizavelM2: number;
+  /** Faixa de domínio da rodovia (dentro da gleba). */
+  faixaDominio: Position[][][];
+  /**
+   * Sobra real após complementar o loteamento. Nunca é institucional/área verde.
+   * Vazio quando a área loteável fecha nos lotes.
+   */
+  remanescente: Position[][][];
+  /** Diagnóstico da malha (área/testada/profundidade). Lotes inválidos não entram em `lotes`. */
+  report: LoteamentoReport;
+};
+
+export type LoteamentoReport = {
+  totalLots: number;
+  totalLotArea: number;
+  residualArea: number;
+  minArea: number;
+  maxArea: number;
+  averageArea: number;
+  minDepth: number;
+  maxDepth: number;
+  averageDepth: number;
+  minFrontage: number;
+  maxFrontage: number;
+  invalidLots: string[];
+  desvioPadraoArea: number;
+  coeficienteVariacao: number;
+  equityByQuadra: Array<{
+    quadra: string;
+    quantidade: number;
+    media: number;
+    menor: number;
+    maior: number;
+    desvioPadrao: number;
+    coeficienteVariacao: number;
+    areaAlvo: number;
+  }>;
 };
 
 export const DEFAULT_PERCENT_AREA_UTIL = 15;
@@ -416,8 +465,40 @@ export type PerimeterSkip = {
   sMax?: boolean;
 };
 
+function resolvePerimeterSkip(skipPerimeter: boolean | PerimeterSkip): PerimeterSkip {
+  if (skipPerimeter === true) return { dMin: true, dMax: true, sMin: true, sMax: true };
+  if (skipPerimeter && typeof skipPerimeter === "object") return skipPerimeter;
+  return {};
+}
+
 function allPerimeterSkip(skip: PerimeterSkip): boolean {
   return Boolean(skip.dMin && skip.dMax && skip.sMin && skip.sMax);
+}
+
+function orPerimeterSkip(a: boolean | PerimeterSkip, b: boolean | PerimeterSkip): boolean | PerimeterSkip {
+  const A = resolvePerimeterSkip(a);
+  const B = resolvePerimeterSkip(b);
+  const m: PerimeterSkip = {
+    dMin: Boolean(A.dMin || B.dMin),
+    dMax: Boolean(A.dMax || B.dMax),
+    sMin: Boolean(A.sMin || B.sMin),
+    sMax: Boolean(A.sMax || B.sMax),
+  };
+  if (!m.dMin && !m.dMax && !m.sMin && !m.sMax) return false;
+  if (allPerimeterSkip(m)) return true;
+  return m;
+}
+
+function ringEdges(ring: Position[]): Position[][] {
+  const pts = dropClosing(ring);
+  const edges: Position[][] = [];
+  if (pts.length < 2) return edges;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    if (a && b) edges.push([a, b]);
+  }
+  return edges;
 }
 
 /** Quais lados da malha coincidem com arestas marcadas (via já existente). */
@@ -483,6 +564,109 @@ function markedEdgesAsStreetRings(edges: Position[][]): Position[][] {
   return rings;
 }
 
+function resolveExistingViaWidthM(larguraViaM: number, larguraViaExistenteM?: number): number {
+  if (larguraViaExistenteM != null && Number.isFinite(larguraViaExistenteM) && larguraViaExistenteM > 0) {
+    return larguraViaExistenteM;
+  }
+  return larguraViaM;
+}
+
+/** Corredor da via existente **fora** da gleba, colado na aresta marcada. */
+export function generateExistingEdgeStreets(
+  glebaCoords: PolygonCoords,
+  edges: Position[][],
+  widthM: number,
+): { vias: Position[][][]; eixos: Position[][] } {
+  const ring = dropClosing(glebaCoords);
+  if (ring.length < 3 || !(widthM > 0) || edges.length === 0) return { vias: [], eixos: [] };
+  const origin = originOf(ring);
+  const gleba = asTurfPolygon(ring, origin);
+  const inwardRef = origin;
+  const halfW = widthM / 2;
+  const pad = Math.max(widthM, 4);
+  const vias: Position[][][] = [];
+  const eixos: Position[][] = [];
+  for (const edge of edges) {
+    const a = edge[0];
+    const b = edge[1];
+    if (!a || !b || planarLength(a, b) < 0.5) continue;
+    const len = planarLength(a, b);
+    const ux = (b[0] - a[0]) / len;
+    const uy = (b[1] - a[1]) / len;
+    let px = -uy;
+    let py = ux;
+    const mid = midpoint(a, b);
+    if ((inwardRef[0] - mid[0]) * px + (inwardRef[1] - mid[1]) * py > 0) {
+      px = -px;
+      py = -py;
+    }
+    const a0: Position = [a[0] - ux * pad + px * halfW, a[1] - uy * pad + py * halfW];
+    const b0: Position = [b[0] + ux * pad + px * halfW, b[1] + uy * pad + py * halfW];
+    const corr = corridorPolygon(a0, b0, halfW);
+    if (corr.length < 4) continue;
+    try {
+      const feat = asTurfPolygon(corr, origin);
+      const outside = turf.difference(turf.featureCollection([feat, gleba]));
+      const clipped = flattenPoly(outside, origin).filter((poly) => planarAreaM2(poly[0]) >= SLIVER_M2);
+      if (clipped.length > 0) vias.push(...clipped);
+      else vias.push([corr]);
+    } catch {
+      vias.push([corr]);
+    }
+    eixos.push([a0, b0]);
+  }
+  return { vias, eixos };
+}
+
+/**
+ * Faixa de domínio da rodovia: corredor de `widthM` **para dentro** da gleba,
+ * colado nas arestas marcadas. Não é via — é área não loteável.
+ */
+export function generateFaixaDominioFromEdges(
+  glebaCoords: PolygonCoords,
+  edges: Position[][],
+  widthM: number,
+): Position[][][] {
+  const ring = dropClosing(glebaCoords);
+  if (ring.length < 3 || !(widthM > 0) || edges.length === 0) return [];
+  const origin = originOf(ring);
+  const gleba = asTurfPolygon(ring, origin);
+  const inwardRef = origin;
+  const extra = Math.max(widthM, 4);
+  const out: Position[][][] = [];
+  for (const edge of edges) {
+    const a = edge[0];
+    const b = edge[1];
+    if (!a || !b || planarLength(a, b) < 0.5) continue;
+    const len = planarLength(a, b);
+    const ux = (b[0] - a[0]) / len;
+    const uy = (b[1] - a[1]) / len;
+    let px = -uy;
+    let py = ux;
+    const mid = midpoint(a, b);
+    if ((inwardRef[0] - mid[0]) * px + (inwardRef[1] - mid[1]) * py < 0) {
+      px = -px;
+      py = -py;
+    }
+    const a0: Position = [a[0] - ux * extra, a[1] - uy * extra];
+    const b0: Position = [b[0] + ux * extra, b[1] + uy * extra];
+    const c1: Position = [b0[0] + px * widthM, b0[1] + py * widthM];
+    const d1: Position = [a0[0] + px * widthM, a0[1] + py * widthM];
+    try {
+      const strip = asTurfPolygon([a0, b0, c1, d1], origin);
+      const cut = turf.intersect(turf.featureCollection([gleba, strip]));
+      out.push(...flattenPoly(cut, origin).filter((poly) => planarAreaM2(poly[0]) >= SLIVER_M2));
+    } catch {
+      /* aresta degenerada */
+    }
+  }
+  return out;
+}
+
+export type StreetGridOpts = {
+  skipInternals?: boolean;
+};
+
 export function generateStreetGrid(
   polygonCoords: PolygonCoords,
   azimuthDeg: number,
@@ -490,7 +674,7 @@ export function generateStreetGrid(
   profundidadeQuadraM: number,
   _areaMinimaQuadraM2 = 0,
   skipPerimeter: boolean | PerimeterSkip = false,
-  opts: { skipInternals?: boolean } = {},
+  opts: StreetGridOpts = {},
 ): { vias: Position[][][]; eixos: Position[][] } {
   const ring = dropClosing(polygonCoords);
   if (ring.length < 3 || larguraViaM <= 0 || profundidadeQuadraM <= 0) return { vias: [], eixos: [] };
@@ -518,6 +702,7 @@ export function generateStreetGrid(
   }
 
   const halfW = larguraViaM / 2;
+  const skip = resolvePerimeterSkip(skipPerimeter);
   const dStart = dMin + halfW;
   const dEnd = dMax - halfW;
   if (dEnd < dStart - ANGLE_EPS) return { vias: [], eixos: [] };
@@ -537,17 +722,23 @@ export function generateStreetGrid(
 
   const internals: number[] = [];
   if (!opts.skipInternals) {
-    for (let d = dStart + step; d <= dEnd - step * 0.45 + 1e-6; d += step) {
-      internals.push(d);
+    const skipBothD = Boolean(skip.dMin && skip.dMax);
+    if (skipBothD) {
+      /** Bloco já encostado em via externa: primeira interna após 2 fileiras, sem rua fantasma na borda. */
+      const minRemain = profundidadeQuadraM * 0.75;
+      for (
+        let d = dMin + profundidadeQuadraM * 2 + halfW;
+        d + halfW + minRemain <= dMax + 1e-6;
+        d += step
+      ) {
+        internals.push(d);
+      }
+    } else {
+      const first = skip.dMin ? dMin + profundidadeQuadraM * 2 + halfW : dStart + step;
+      const lastLimit = skip.dMax ? dMax - profundidadeQuadraM * 2 - halfW : dEnd - step * 0.45;
+      for (let d = first; d <= lastLimit + 1e-6; d += step) internals.push(d);
     }
   }
-
-  const skip: PerimeterSkip =
-    skipPerimeter === true
-      ? { dMin: true, dMax: true, sMin: true, sMax: true }
-      : skipPerimeter && typeof skipPerimeter === "object"
-        ? skipPerimeter
-        : {};
 
   const dPositions: number[] = [...internals];
   if (dEnd - dStart > 1e-3) {
@@ -864,6 +1055,7 @@ export function splitParcelByDimensions(
   viaWidthM: number,
   azimuthDeg: number,
   originHint?: Position,
+  skipPerimeter: boolean | PerimeterSkip = false,
 ): { quadras: Position[][]; vias: Position[][][]; eixos: Position[][] } {
   const ring = dropClosing(polygonCoords);
   const empty = { quadras: [] as Position[][], vias: [] as Position[][][], eixos: [] as Position[][] };
@@ -878,6 +1070,7 @@ export function splitParcelByDimensions(
   const spanS = b.sMax - b.sMin;
   const spanD = b.dMax - b.dMin;
   const halfW = viaWidthM / 2;
+  const skip = resolvePerimeterSkip(skipPerimeter);
   const vias: Position[][][] = [];
   const eixos: Position[][] = [];
   const pieceFeat = asTurfPolygon(ring, origin);
@@ -886,6 +1079,14 @@ export function splitParcelByDimensions(
   const addCut = (s0: number, s1: number, d0: number, d1: number, alongS: boolean) => {
     const midS = (s0 + s1) / 2;
     const midD = (d0 + d1) / 2;
+    const margin = halfW + 1;
+    if (alongS) {
+      if (skip.dMin && midD - margin <= b.dMin + 0.5) return;
+      if (skip.dMax && midD + margin >= b.dMax - 0.5) return;
+    } else {
+      if (skip.sMin && midS - margin <= b.sMin + 0.5) return;
+      if (skip.sMax && midS + margin >= b.sMax - 0.5) return;
+    }
     const a: Position = alongS
       ? [c[0] + s0 * dirS[0] + midD * dirD[0], c[1] + s0 * dirS[1] + midD * dirD[1]]
       : [c[0] + midS * dirS[0] + d0 * dirD[0], c[1] + midS * dirS[1] + d0 * dirD[1]];
@@ -896,21 +1097,43 @@ export function splitParcelByDimensions(
     eixos.push(...clipStraightAxisToPolygon(a, bb, pieceFeat, origin));
   };
 
-  const sLimit = b.sMax - TARGET_GRID_MIN_SIDE - halfW;
-  for (
-    let sCut = b.sMin + larguraQuadraM + halfW;
-    sCut <= sLimit + 1e-6;
-    sCut += larguraQuadraM + viaWidthM
-  ) {
-    addCut(sCut, sCut, b.dMin - pad, b.dMax + pad, false);
+  /** Encostar a primeira quadra na via existente; a sobra fina fica no lado oposto. */
+  const fromSMax = Boolean(skip.sMax);
+  const fromDMax = Boolean(skip.dMax);
+  const remain = Math.max(TARGET_GRID_MIN_SIDE, 18) + halfW;
+  if (fromSMax) {
+    for (
+      let sCut = b.sMax - larguraQuadraM - halfW;
+      sCut >= b.sMin + remain - 1e-6;
+      sCut -= larguraQuadraM + viaWidthM
+    ) {
+      addCut(sCut, sCut, b.dMin - pad, b.dMax + pad, false);
+    }
+  } else {
+    for (
+      let sCut = b.sMin + larguraQuadraM + halfW;
+      sCut <= b.sMax - remain + 1e-6;
+      sCut += larguraQuadraM + viaWidthM
+    ) {
+      addCut(sCut, sCut, b.dMin - pad, b.dMax + pad, false);
+    }
   }
-  const dLimit = b.dMax - TARGET_GRID_MIN_SIDE - halfW;
-  for (
-    let dCut = b.dMin + profundidadeBlocoM + halfW;
-    dCut <= dLimit + 1e-6;
-    dCut += profundidadeBlocoM + viaWidthM
-  ) {
-    addCut(b.sMin - pad, b.sMax + pad, dCut, dCut, true);
+  if (fromDMax) {
+    for (
+      let dCut = b.dMax - profundidadeBlocoM - halfW;
+      dCut >= b.dMin + remain - 1e-6;
+      dCut -= profundidadeBlocoM + viaWidthM
+    ) {
+      addCut(b.sMin - pad, b.sMax + pad, dCut, dCut, true);
+    }
+  } else {
+    for (
+      let dCut = b.dMin + profundidadeBlocoM + halfW;
+      dCut <= b.dMax - remain + 1e-6;
+      dCut += profundidadeBlocoM + viaWidthM
+    ) {
+      addCut(b.sMin - pad, b.sMax + pad, dCut, dCut, true);
+    }
   }
 
   if (vias.length === 0) {
@@ -1203,7 +1426,7 @@ export function polygonInteriorOverlapM2(a: PolygonCoords, b: PolygonCoords): nu
   }
 }
 
-function leftoverAfterLots(
+export function leftoverAfterLots(
   host: Position[],
   lots: Position[][][],
   origin: Position,
@@ -1232,37 +1455,373 @@ function leftoverAfterLots(
   }
 }
 
-function packRemainderLots(
+function absorbScrapAsLots(
   ring: Position[],
   azimuthDeg: number,
   testadaMinimaM: number,
   profundidadeQuadraM: number,
+  areaMinimaM2: number,
   streetRings: Position[][],
   origin: Position,
-  blockCentroid?: Position,
-): { coords: LotPoly; remainder: boolean }[] {
-  const area = planarAreaM2(ring);
-  if (area < REMAINDER_MIN_M2) return [];
-  const standard = testadaMinimaM * (profundidadeQuadraM > 0 ? profundidadeQuadraM : testadaMinimaM);
-  const n = Math.max(1, Math.round(area / Math.max(standard, 1)));
-  if (n >= 2 && standard > 0 && area >= standard * 1.45) {
-    const front = frontEdge(ring, azimuthDeg, streetRings, blockCentroid);
-    const along = front && front.length > 1 ? front.length : 0;
-    const testada = along > 1 ? Math.max(1, along / n) : Math.max(1, testadaMinimaM * 0.45);
-    const split = subdivideQuadraEmLotes(ring, azimuthDeg, testada, 0, streetRings, origin, blockCentroid);
-    if (split.length >= 2) {
-      const still = leftoverAfterLots(ring, split, origin);
-      return [
-        ...split.map((coords) => ({ coords, remainder: true })),
-        ...still.map((outer) => ({ coords: [closeRing(outer)] as LotPoly, remainder: true })),
-      ];
+  blockCentroid: Position | undefined,
+  lotOpts: { profundidadeM?: number; percentualEsquina?: number; allowShallow?: boolean; allowIrregular?: boolean },
+  pass = 0,
+): { lots: Position[][][]; remanescente: Position[][] } {
+  const closed = closeRing(dropClosing(ring));
+  const area = planarAreaM2(closed);
+  if (dropClosing(closed).length < 3 || area < REMAINDER_MIN_M2) return { lots: [], remanescente: [] };
+  const target = lotMinAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2);
+  const maxArea = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2);
+  const hostC = blockCentroid ?? originOf(closed);
+  const rows =
+    pass < 3 ? splitThroughBlock(closed, azimuthDeg, streetRings, origin, profundidadeQuadraM) : [closed];
+  const collected: Position[][][] = [];
+  for (const row of rows) {
+    const rowAz =
+      rows.length > 1
+        ? detectRowFrontage(row, streetRings, azimuthDeg, hostC).azimuthDeg
+        : azimuthDeg;
+    try {
+      collected.push(
+        ...subdivideQuadraEmLotes(
+          row,
+          rowAz,
+          testadaMinimaM,
+          areaMinimaM2,
+          streetRings,
+          origin,
+          rows.length > 1 ? hostC : blockCentroid,
+          { ...lotOpts, allowShallow: true },
+        ),
+      );
+    } catch {
+      /* geometria degenerada */
     }
   }
-  return [{ coords: [closeRing(ring)], remainder: true }];
+  const lots = collected.filter((poly) => {
+    const a = planarAreaM2(poly[0] ?? []);
+    if (target > 0 && a + 1e-6 < target * 0.95) return false;
+    if (Number.isFinite(maxArea) && a > maxArea + 0.5) return false;
+    return a >= SLIVER_M2;
+  });
+  const still = leftoverAfterLots(closed, lots, origin);
+  if (pass >= 2) {
+    return { lots, remanescente: still };
+  }
+  const remanescente: Position[][] = [];
+  const more: Position[][][] = [...lots];
+  for (const rem of still) {
+    const again = absorbScrapAsLots(
+      rem,
+      foldAz180(azimuthDeg + 90),
+      testadaMinimaM,
+      profundidadeQuadraM,
+      areaMinimaM2,
+      streetRings,
+      origin,
+      hostC,
+      lotOpts,
+      pass + 1,
+    );
+    more.push(...again.lots);
+    remanescente.push(...again.remanescente);
+  }
+  return { lots: more, remanescente };
+}
+
+export type ComplementarLoteamentoParams = {
+  azimuthDeg: number;
+  testadaMinimaM: number;
+  profundidadeQuadraM: number;
+  areaMinimaM2: number;
+  streetRings: Position[][];
+  origin: Position;
+  blockCentroid?: Position;
+  percentualEsquina?: number;
+};
+
+function depthFromAzimuth(ring: Position[], azimuthDeg: number): number {
+  const { dirD } = streetDir(azimuthDeg);
+  const c = originOf(ring);
+  let min = Infinity;
+  let max = -Infinity;
+  for (const p of dropClosing(ring)) {
+    const d = (p[0] - c[0]) * dirD[0] + (p[1] - c[1]) * dirD[1];
+    min = Math.min(min, d);
+    max = Math.max(max, d);
+  }
+  return Number.isFinite(min) ? Math.max(0, max - min) : 0;
+}
+
+function complementarLotAcceptable(
+  area: number,
+  testadaMinimaM: number,
+  profundidadeQuadraM: number,
+  areaMinimaM2: number,
+): boolean {
+  if (!(area >= REMAINDER_MIN_M2)) return false;
+  const minArea = lotMinAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2);
+  const maxArea = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2);
+  if (minArea > 0 && area + 0.5 < minArea * 0.65) return false;
+  if (Number.isFinite(maxArea) && area > maxArea * 1.4 + 0.5) return false;
+  return true;
+}
+
+function keepComplementarLots(
+  lots: Position[][][],
+  testadaMinimaM: number,
+  profundidadeQuadraM: number,
+  areaMinimaM2: number,
+): Position[][][] {
+  return lots.filter((poly) =>
+    complementarLotAcceptable(planarAreaM2(poly[0] ?? []), testadaMinimaM, profundidadeQuadraM, areaMinimaM2),
+  );
+}
+
+function trySubdivideComplementar(
+  ring: Position[],
+  azimuthDeg: number,
+  testadaMinimaM: number,
+  profundidadeM: number,
+  areaMinimaM2: number,
+  streetRings: Position[][],
+  origin: Position,
+  blockCentroid: Position | undefined,
+  percentualEsquina?: number,
+): Position[][][] {
+  try {
+    return keepComplementarLots(
+      subdivideQuadraEmLotes(ring, azimuthDeg, testadaMinimaM, areaMinimaM2, streetRings, origin, blockCentroid, {
+        profundidadeM,
+        percentualEsquina,
+        allowShallow: true,
+        allowIrregular: true,
+      }),
+      testadaMinimaM,
+      profundidadeM,
+      areaMinimaM2,
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Parte a sobra pela aresta mais longa — lotes de fundo / irregular, sem exigir via na frente. */
+function complementarPorArestaLonga(
+  ring: Position[],
+  testadaMinimaM: number,
+  profundidadeM: number,
+  areaMinimaM2: number,
+  origin: Position,
+): Position[][][] {
+  const pts = dropClosing(ring);
+  if (pts.length < 3) return [];
+  let best = { a: pts[0]!, b: pts[1] ?? pts[0]!, len: 0, az: 0 };
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i]!;
+    const b = pts[(i + 1) % pts.length]!;
+    const len = planarLength(a, b);
+    if (len > best.len) best = { a, b, len, az: planarAzimuthDeg(a, b) };
+  }
+  if (best.len < Math.max(4, testadaMinimaM * 0.45)) return [];
+  const depth = Math.max(depthFromAzimuth(ring, best.az), 0.5);
+  const target = lotTargetAreaM2(testadaMinimaM, profundidadeM, areaMinimaM2);
+  const minW = Math.max(
+    testadaMinimaM * 0.72,
+    target > 0 && depth > 0.5 ? (target * 0.65) / depth : testadaMinimaM * 0.72,
+  );
+  const widths = planRowLotWidths(best.len, minW, false, false, minW, Math.max(minW, testadaMinimaM * 0.85));
+  const used =
+    widths.length > 0
+      ? widths
+      : (() => {
+          const n = Math.max(1, Math.floor(best.len / Math.max(minW, 1e-6) + 1e-9));
+          return Array.from({ length: n }, () => best.len / n);
+        })();
+  return keepComplementarLots(
+    subdivideRowByWidths(ring, best.az, used, [], origin, undefined, 0),
+    testadaMinimaM,
+    profundidadeM,
+    areaMinimaM2,
+  );
+}
+
+function complementarForcarDivisao(
+  ring: Position[],
+  azimuthDeg: number,
+  testadaMinimaM: number,
+  profundidadeM: number,
+  areaMinimaM2: number,
+  origin: Position,
+): Position[][][] {
+  const depth = depthFromAzimuth(ring, azimuthDeg);
+  const nRows = Math.max(1, Math.round(depth / Math.max(profundidadeM * 0.72, 8)));
+  if (nRows >= 2) {
+    const rows = cutBlockIntoRows(ring, azimuthDeg, origin, nRows);
+    const lots: Position[][][] = [];
+    for (const row of rows) {
+      lots.push(...complementarPorArestaLonga(row, testadaMinimaM, profundidadeM, areaMinimaM2, origin));
+    }
+    if (lots.length > 0) return lots;
+  }
+  return complementarPorArestaLonga(ring, testadaMinimaM, profundidadeM, areaMinimaM2, origin);
+}
+
+function complementarUmFragmento(
+  ring: Position[],
+  params: ComplementarLoteamentoParams,
+  pass: number,
+): { lots: Position[][][]; remanescente: Position[][] } {
+  const closed = closeRing(dropClosing(ring));
+  const area = planarAreaM2(closed);
+  if (dropClosing(closed).length < 3 || area < REMAINDER_MIN_M2) return { lots: [], remanescente: [] };
+
+  const {
+    azimuthDeg,
+    testadaMinimaM,
+    profundidadeQuadraM,
+    areaMinimaM2,
+    streetRings,
+    origin,
+    blockCentroid,
+    percentualEsquina,
+  } = params;
+  const hostC = blockCentroid ?? originOf(closed);
+  const maxArea = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2);
+  const minArea = lotMinAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2);
+  if (minArea > 0 && area + 0.5 < minArea * 0.65) {
+    return { lots: [], remanescente: [closed] };
+  }
+
+  const collected: Position[][][] = [];
+  const testadas = [testadaMinimaM, testadaMinimaM * 0.88, testadaMinimaM * 0.75, Math.max(6, testadaMinimaM * 0.65)];
+  const depths = [
+    profundidadeQuadraM,
+    profundidadeQuadraM * 0.85,
+    profundidadeQuadraM * 0.72,
+    Math.max(8, profundidadeQuadraM * 0.55),
+  ];
+  const azimuths = [azimuthDeg, foldAz180(azimuthDeg + 90)];
+
+  for (const az of azimuths) {
+    const absorbed = absorbScrapAsLots(
+      closed,
+      az,
+      testadaMinimaM,
+      profundidadeQuadraM,
+      areaMinimaM2,
+      streetRings,
+      origin,
+      hostC,
+      { profundidadeM: profundidadeQuadraM, percentualEsquina, allowShallow: true, allowIrregular: true },
+    );
+    collected.push(
+      ...keepComplementarLots(absorbed.lots, testadaMinimaM, profundidadeQuadraM, areaMinimaM2),
+    );
+    if (collected.length > 0) break;
+    for (const t of testadas) {
+      for (const d of depths) {
+        const split = trySubdivideComplementar(
+          closed,
+          az,
+          t,
+          d,
+          Math.max(areaMinimaM2 * 0.7, t * d * 0.7),
+          streetRings,
+          origin,
+          hostC,
+          percentualEsquina,
+        );
+        if (split.length > 0) {
+          collected.push(...split);
+          break;
+        }
+      }
+      if (collected.length > 0) break;
+    }
+    if (collected.length > 0) break;
+  }
+
+  if (collected.length === 0) {
+    collected.push(
+      ...complementarForcarDivisao(closed, azimuthDeg, testadaMinimaM, profundidadeQuadraM, areaMinimaM2, origin),
+    );
+  }
+
+  const lots = keepComplementarLots(collected, testadaMinimaM, profundidadeQuadraM, areaMinimaM2);
+  const still = leftoverAfterLots(closed, lots, origin);
+  if (still.length === 0) return { lots, remanescente: [] };
+
+  const remanescente: Position[][] = [];
+  const more = [...lots];
+  for (const rem of still) {
+    const remA = planarAreaM2(rem);
+    if (remA < REMAINDER_MIN_M2) continue;
+    if (pass < 1) {
+      const again = complementarUmFragmento(rem, { ...params, azimuthDeg: foldAz180(params.azimuthDeg + 90) }, pass + 1);
+      more.push(...again.lots);
+      remanescente.push(...again.remanescente);
+      continue;
+    }
+    if (complementarLotAcceptable(remA, testadaMinimaM, profundidadeQuadraM, areaMinimaM2)) {
+      more.push([closeRing(rem)]);
+      continue;
+    }
+    if (Number.isFinite(maxArea) && remA > maxArea * 1.4 && minArea > 0) {
+      const forced = complementarForcarDivisao(
+        rem,
+        foldAz180(azimuthDeg + 90),
+        testadaMinimaM,
+        profundidadeQuadraM,
+        areaMinimaM2,
+        origin,
+      );
+      if (forced.length > 0) {
+        more.push(...forced);
+        continue;
+      }
+    }
+    remanescente.push(closeRing(rem));
+  }
+  return { lots: more, remanescente };
+}
+
+/**
+ * Completa a área loteável que a malha principal não ocupou.
+ * Nunca classifica a sobra como institucional/área verde — só lotes ou remanescente real.
+ */
+export function complementarLoteamento(
+  leftovers: Position[][],
+  params: ComplementarLoteamentoParams,
+): { lots: Position[][][]; remanescente: Position[][] } {
+  const lots: Position[][][] = [];
+  const remanescente: Position[][] = [];
+  for (const raw of leftovers) {
+    const filled = complementarUmFragmento(raw, params, 0);
+    lots.push(...filled.lots);
+    remanescente.push(...filled.remanescente);
+  }
+  return { lots, remanescente };
 }
 
 function totalPolysAreaM2(polys: Position[][][]): number {
   return polys.reduce((s, p) => s + planarAreaM2(p[0] ?? []), 0);
+}
+
+/** Área das vias sem contar duas vezes o cruzamento (T / esquina). */
+function unionPolysAreaM2(polys: Position[][][], origin: Position): number {
+  if (polys.length === 0) return 0;
+  try {
+    const merged = unionPolygons(polys, origin);
+    if (merged) {
+      const flat = flattenPoly(merged, origin);
+      const area = flat.reduce((s, p) => s + planarAreaM2(p[0] ?? []), 0);
+      if (area >= SLIVER_M2) return area;
+    }
+  } catch {
+    /* união degenerada */
+  }
+  return totalPolysAreaM2(polys);
 }
 
 function subtractRingsFromHost(host: Position[], rings: Position[][], origin: Position): Position[][][] {
@@ -1417,29 +1976,81 @@ function cantoDir(canto: ReservaCanto): Position {
   return [-1, -1];
 }
 
-/** Mantém só fragmentos que compartilham aresta com a âncora (ou com outro já colado). */
-function keepContiguousToAnchors(polys: Position[][][], anchors: Position[][]): Position[][][] {
-  if (anchors.length === 0 || polys.length === 0) return polys;
-  const kept = new Set<number>();
-  const queue: number[] = [];
-  polys.forEach((poly, i) => {
-    if (anchors.some((anchor) => ringsShareBoundary(poly[0] ?? [], anchor))) {
-      kept.add(i);
-      queue.push(i);
-    }
-  });
-  while (queue.length > 0) {
-    const i = queue.pop();
-    if (i == null) break;
-    polys.forEach((poly, j) => {
-      if (kept.has(j)) return;
-      if (ringsShareBoundary(polys[i][0] ?? [], poly[0] ?? [])) {
-        kept.add(j);
-        queue.push(j);
+function connectedPolyComponents(polys: Position[][][]): number[][] {
+  const n = polys.length;
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (ringsShareBoundary(polys[i][0] ?? [], polys[j][0] ?? [])) {
+        adj[i].push(j);
+        adj[j].push(i);
       }
-    });
+    }
   }
-  return polys.filter((_, i) => kept.has(i));
+  const seen = new Set<number>();
+  const comps: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    if (seen.has(i)) continue;
+    const comp: number[] = [];
+    const stack = [i];
+    seen.add(i);
+    while (stack.length > 0) {
+      const k = stack.pop();
+      if (k == null) break;
+      comp.push(k);
+      for (const j of adj[k]) {
+        if (seen.has(j)) continue;
+        seen.add(j);
+        stack.push(j);
+      }
+    }
+    comps.push(comp);
+  }
+  return comps;
+}
+
+function keepLargestComponent(polys: Position[][][]): Position[][][] {
+  if (polys.length <= 1) return polys;
+  const comps = connectedPolyComponents(polys);
+  let best = comps[0] ?? [];
+  let bestArea = -1;
+  for (const comp of comps) {
+    const area = comp.reduce((sum, i) => sum + planarAreaM2(polys[i][0] ?? []), 0);
+    if (area > bestArea) {
+      bestArea = area;
+      best = comp;
+    }
+  }
+  return best.map((i) => polys[i]);
+}
+
+/**
+ * Um único bloco colado na âncora (RL): o maior componente conexo que compartilha aresta.
+ * Fragmentos noutros lados da reserva ou restos espalhados no loteamento são descartados.
+ */
+function keepContiguousToAnchors(polys: Position[][][], anchors: Position[][]): Position[][][] {
+  if (polys.length === 0) return polys;
+  if (anchors.length === 0) return keepLargestComponent(polys);
+  const comps = connectedPolyComponents(polys);
+  const touchesAnchor = (i: number) =>
+    anchors.some((anchor) => ringsShareBoundary(polys[i][0] ?? [], anchor));
+  let best: number[] = [];
+  let bestArea = -1;
+  for (const comp of comps) {
+    if (!comp.some(touchesAnchor)) continue;
+    const area = comp.reduce((sum, i) => sum + planarAreaM2(polys[i][0] ?? []), 0);
+    if (area > bestArea) {
+      bestArea = area;
+      best = comp;
+    }
+  }
+  return best.map((i) => polys[i]);
+}
+
+function coalesceAreaUtil(polys: Position[][][], anchors: Position[][], origin: Position): Position[][][] {
+  const glued = keepContiguousToAnchors(polys, anchors);
+  if (glued.length === 0) return [];
+  return mergePolys([], glued, origin);
 }
 
 type InnerRlEdge = { a: Position; b: Position; mid: Position; outward: Position; len: number };
@@ -1581,13 +2192,18 @@ function cantoVertex(anchors: Position[][], canto: ReservaCanto): Position {
   return best;
 }
 
-/** Faces internas da RL voltadas ao canto; se o canto está na borda da gleba, todas as faces internas. */
-function pickDirectedEdges(inner: InnerRlEdge[], canto: ReservaCanto): InnerRlEdge[] {
-  const matched = inner
-    .filter((edge) => edgeMatchesCanto(edge, canto))
-    .sort((a, b) => scoreInnerEdge(b, canto) - scoreInnerEdge(a, canto));
-  if (matched.length > 0) return matched;
-  return [...inner].sort((a, b) => scoreInnerEdge(b, canto) - scoreInnerEdge(a, canto));
+/** Só as arestas do canto pedido (vértice + faces adjacentes), nunca o perímetro inteiro da RL. */
+function pickDirectedEdges(inner: InnerRlEdge[], canto: ReservaCanto, vertex: Position): InnerRlEdge[] {
+  const matched = inner.filter((edge) => edgeMatchesCanto(edge, canto));
+  const pool = matched.length > 0 ? matched : inner;
+  const atVertex = pool.filter(
+    (edge) => planarLength(edge.a, vertex) <= 1.8 || planarLength(edge.b, vertex) <= 1.8,
+  );
+  const chosen =
+    atVertex.length > 0
+      ? atVertex
+      : [...pool].sort((a, b) => planarLength(a.mid, vertex) - planarLength(b.mid, vertex)).slice(0, 2);
+  return chosen.sort((a, b) => scoreInnerEdge(b, canto) - scoreInnerEdge(a, canto));
 }
 
 function clipFeatToWindow(
@@ -1659,15 +2275,6 @@ function growCompactBesideCanto(
   return best;
 }
 
-function polysTouchAnchors(polys: Position[][][], anchors: Position[][]): boolean {
-  return polys.some((poly) =>
-    anchors.some(
-      (anchor) =>
-        ringsShareBoundary(poly[0] ?? [], anchor) || minDistBetweenRings(poly[0] ?? [], anchor) <= 1.1,
-    ),
-  );
-}
-
 function placeAreaUtilTowardCanto(
   remainingFeat: Feature<Polygon | MultiPolygon>,
   anchors: Position[][],
@@ -1675,54 +2282,31 @@ function placeAreaUtilTowardCanto(
   origin: Position,
   canto: ReservaCanto,
 ): Position[][][] {
+  const vertex = cantoVertex(anchors, canto);
   const inner = collectInnerRlEdges(anchors, remainingFeat, origin);
   const matched = inner.filter((edge) => edgeMatchesCanto(edge, canto));
-  const selected = pickDirectedEdges(inner, canto);
+  const selected = pickDirectedEdges(inner, canto, vertex);
 
   const accept = (polys: Position[][][], minRatio: number): Position[][][] | null => {
-    if (totalPolysAreaM2(polys) < take * minRatio) return null;
-    const glued = keepContiguousToAnchors(polys, anchors);
+    const glued = coalesceAreaUtil(polys, anchors, origin);
     if (totalPolysAreaM2(glued) >= take * minRatio) return glued;
-    return polysTouchAnchors(polys, anchors) ? polys : null;
+    return null;
   };
 
-  if (matched.length >= 1) {
-    const compact = growCompactBesideCanto(
-      cantoVertex(anchors, canto),
-      remainingFeat,
-      take,
-      origin,
-    );
-    const okCompact = accept(compact, 0.55);
-    if (okCompact) return okCompact;
-  }
+  const compact = growCompactBesideCanto(vertex, remainingFeat, take, origin);
+  const okCompact = accept(compact, matched.length >= 1 ? 0.55 : 0.4);
+  if (okCompact) return okCompact;
 
   const fromSelected = growFromEdgesToArea(selected, remainingFeat, take, origin);
   const okSel = accept(fromSelected, 0.55);
   if (okSel) return okSel;
-  const gluedSel = keepContiguousToAnchors(fromSelected, anchors);
+  const gluedSel = coalesceAreaUtil(fromSelected, anchors, origin);
   if (totalPolysAreaM2(gluedSel) >= take * 0.35) return gluedSel;
-  if (totalPolysAreaM2(fromSelected) >= take * 0.35 && polysTouchAnchors(fromSelected, anchors)) {
-    return fromSelected;
-  }
 
-  if (matched.length === 0 && inner.length > 0) {
-    const wrapped = growFromEdgesToArea(inner, remainingFeat, take, origin);
-    const okWrap = accept(wrapped, 0.55);
-    if (okWrap) return okWrap;
-    const gluedWrap = keepContiguousToAnchors(wrapped, anchors);
-    if (totalPolysAreaM2(gluedWrap) >= SLIVER_M2) return gluedWrap;
-    if (totalPolysAreaM2(wrapped) >= SLIVER_M2 && polysTouchAnchors(wrapped, anchors)) return wrapped;
-  }
+  const compactLoose = accept(compact, 0.25);
+  if (compactLoose) return compactLoose;
 
-  if (totalPolysAreaM2(gluedSel) >= SLIVER_M2) return gluedSel;
-  if (totalPolysAreaM2(fromSelected) >= SLIVER_M2 && polysTouchAnchors(fromSelected, anchors)) {
-    return fromSelected;
-  }
-
-  const grown = growBufferToArea(anchors, remainingFeat, take, origin);
-  const gluedGrown = keepContiguousToAnchors(grown, anchors);
-  return gluedGrown.length > 0 ? gluedGrown : grown;
+  return gluedSel;
 }
 
 /**
@@ -1740,7 +2324,7 @@ function placeAreaUtilPolys(
   if (!(alvoM2 > SLIVER_M2) || remArea < SLIVER_M2) return [];
   const take = Math.min(alvoM2, remArea * 0.98);
   if (take >= remArea - SLIVER_M2) {
-    return anchors.length > 0 ? keepContiguousToAnchors(remaining, anchors) : remaining;
+    return coalesceAreaUtil(remaining, anchors, origin);
   }
 
   const remU = unionPolygons(remaining, origin);
@@ -1751,10 +2335,10 @@ function placeAreaUtilPolys(
       const directed = placeAreaUtilTowardCanto(remU, anchors, take, origin, canto);
       if (totalPolysAreaM2(directed) >= SLIVER_M2) return directed;
     }
-    const grown = growBufferToArea(anchors, remU, take, origin);
-    const glued = keepContiguousToAnchors(grown, anchors);
-    if (totalPolysAreaM2(glued) >= SLIVER_M2) return glued;
-    if (totalPolysAreaM2(grown) >= SLIVER_M2) return grown;
+    const vertex = cantoVertex(anchors, canto ?? "inferior_esquerda");
+    const compact = growCompactBesideCanto(vertex, remU, take, origin);
+    const gluedCompact = coalesceAreaUtil(compact, anchors, origin);
+    if (totalPolysAreaM2(gluedCompact) >= SLIVER_M2) return gluedCompact;
     return [];
   }
 
@@ -1809,10 +2393,7 @@ export function placeAreaUtilBesideReserva(
   const remaining = subtractRingsFromHost(ring, obstacles, origin);
   const parsed = parseReservaCanto(canto != null ? String(canto) : null) ?? undefined;
   let placed = placeAreaUtilPolys(remaining, anchors, alvoM2, origin, parsed);
-  if (anchors.length > 0) {
-    const glued = keepContiguousToAnchors(placed, anchors);
-    if (glued.length > 0) placed = glued;
-  }
+  if (placed.length > 0) placed = coalesceAreaUtil(placed, anchors, origin);
   return placed;
 }
 
@@ -1823,12 +2404,24 @@ function looksStandardLot(
   streetRings: Position[][],
   azimuthDeg: number,
   blockCentroid?: Position,
+  areaMinimaM2 = 0,
 ): boolean {
-  const area = planarAreaM2(coords[0] ?? []);
-  const target = testadaMinimaM * (profundidadeQuadraM > 0 ? profundidadeQuadraM : testadaMinimaM);
-  if (area < target * 0.78) return false;
-  const testada = lotTestadaM(coords[0] ?? [], azimuthDeg, streetRings, blockCentroid);
-  return testada + 0.15 >= testadaMinimaM * 0.88;
+  const ring = coords[0] ?? [];
+  const area = planarAreaM2(ring);
+  const target = lotMinAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2);
+  if (area + 1e-6 < target * 0.95) return false;
+  if (area > lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2) + 0.5) return false;
+  const measured = measureLotFrontAndDepth(ring, streetRings, azimuthDeg, blockCentroid);
+  return validateLot(
+    { areaM2: area, depthM: measured.profundidadeM, frontageM: measured.testadaM },
+    {
+      minAreaM2: target * 0.95,
+      targetAreaM2: lotTargetAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2),
+      minDepthM: profundidadeQuadraM > 0 ? profundidadeQuadraM * SUBDIV_MIN_RATIO : 0,
+      maxDepthM: profundidadeQuadraM > 0 ? profundidadeQuadraM : 0,
+      minFrontageM: testadaMinimaM,
+    },
+  );
 }
 
 function frontEdge(
@@ -2024,18 +2617,389 @@ function collectBoundaryEdges(
   return out;
 }
 
-function shouldSplitThroughBlock(
+function lotMinAreaM2(testadaMinimaM: number, profundidadeQuadraM: number, areaMinimaM2?: number): number {
+  if (areaMinimaM2 != null && Number.isFinite(areaMinimaM2) && areaMinimaM2 > 0) return areaMinimaM2;
+  const t = testadaMinimaM > 0 ? testadaMinimaM : 0;
+  const p = profundidadeQuadraM > 0 ? profundidadeQuadraM : 0;
+  return t * p;
+}
+
+function lotTargetAreaM2(testadaMinimaM: number, profundidadeQuadraM: number, areaMinimaM2?: number): number {
+  const product =
+    (testadaMinimaM > 0 ? testadaMinimaM : 0) * (profundidadeQuadraM > 0 ? profundidadeQuadraM : 0);
+  return Math.max(lotMinAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2), product);
+}
+
+function lotMaxAllowedAreaM2(testadaMinimaM: number, profundidadeQuadraM: number, areaMinimaM2?: number): number {
+  const target = lotTargetAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaM2);
+  return target > 0 ? target * LOT_MAX_AREA_RATIO : Number.POSITIVE_INFINITY;
+}
+
+const SUBDIV_MIN_RATIO = 0.72;
+const SUBDIV_MAX_RATIO = 1.2;
+/** Nenhum lote (incluindo o 01) pode ultrapassar área-alvo × este fator. */
+export const LOT_MAX_AREA_RATIO = 1.25;
+/** Profundidade máxima relativa ao alvo (faixa uniforme, sem 25+25+40). */
+export const LOT_MAX_DEPTH_RATIO = 1.2;
+
+export type LotValidationInput = {
+  areaM2: number;
+  depthM: number;
+  frontageM: number;
+};
+
+export type LotValidationSpec = {
+  minAreaM2: number;
+  targetAreaM2: number;
+  minDepthM: number;
+  maxDepthM: number;
+  minFrontageM: number;
+  maxAreaRatio?: number;
+};
+
+/** Aceita lote interno ou de esquina perto da malha; rejeita cesta de sobras. */
+export function validateLot(lot: LotValidationInput, spec: LotValidationSpec): boolean {
+  const maxRatio = spec.maxAreaRatio ?? LOT_MAX_AREA_RATIO;
+  const maxArea = spec.targetAreaM2 > 0 ? spec.targetAreaM2 * maxRatio : Number.POSITIVE_INFINITY;
+  if (spec.minAreaM2 > 0 && lot.areaM2 + 0.5 < spec.minAreaM2) return false;
+  if (Number.isFinite(maxArea) && lot.areaM2 > maxArea + 0.5) return false;
+  if (spec.minDepthM > 0 && lot.depthM + 0.08 < spec.minDepthM * SUBDIV_MIN_RATIO) return false;
+  if (spec.maxDepthM > 0 && lot.depthM > spec.maxDepthM * LOT_MAX_DEPTH_RATIO + 0.5) return false;
+  if (spec.minFrontageM > 0 && lot.frontageM + 0.08 < spec.minFrontageM * 0.88) return false;
+  if (!Number.isFinite(lot.areaM2) || lot.areaM2 < SLIVER_M2) return false;
+  return true;
+}
+
+export function sortLotsForNumbering<T>(items: T[], azimuthDeg: number, ringOf: (item: T) => Position[]): T[] {
+  const { dirS, dirD } = streetDir(azimuthDeg);
+  return [...items].sort((a, b) => {
+    const ca = originOf(ringOf(a));
+    const cb = originOf(ringOf(b));
+    const rowA = ca[0] * dirD[0] + ca[1] * dirD[1];
+    const rowB = cb[0] * dirD[0] + cb[1] * dirD[1];
+    if (Math.abs(rowA - rowB) > 2) return rowA - rowB;
+    return ca[0] * dirS[0] + ca[1] * dirS[1] - (cb[0] * dirS[0] + cb[1] * dirS[1]);
+  });
+}
+
+function nearestQuadraName(ring: Position[], lotes: LoteResult[]): string | null {
+  const outer = dropClosing(ring);
+  if (outer.length < 3 || lotes.length === 0) return null;
+  for (const lote of lotes) {
+    if (ringsShareBoundary(outer, lote.coordinates[0] ?? [])) return lote.quadra;
+  }
+  const c = originOf(outer);
+  let best: { name: string; dist: number } | null = null;
+  for (const lote of lotes) {
+    const o = originOf(lote.coordinates[0] ?? []);
+    const dist = planarLength(c, o);
+    if (!best || dist < best.dist) best = { name: lote.quadra, dist };
+  }
+  return best && best.dist < 80 ? best.name : null;
+}
+
+export function buildLoteamentoReport(
+  lotes: LoteResult[],
+  remanescente: Position[][][],
+  streetRings: Position[][],
+  azimuthDeg: number,
+  spec: LotValidationSpec,
+): LoteamentoReport {
+  const areas = lotes.map((l) => l.area_m2);
+  const depths: number[] = [];
+  const fronts: number[] = [];
+  const invalidLots: string[] = [];
+  for (const lote of lotes) {
+    const m = measureLotFrontAndDepth(lote.coordinates[0] ?? [], streetRings, azimuthDeg);
+    depths.push(m.profundidadeM);
+    fronts.push(m.testadaM);
+    const maxArea = spec.targetAreaM2 > 0 ? spec.targetAreaM2 * (spec.maxAreaRatio ?? LOT_MAX_AREA_RATIO) : Number.POSITIVE_INFINITY;
+    const areaInvalid =
+      (spec.minAreaM2 > 0 && lote.area_m2 + 0.5 < spec.minAreaM2) ||
+      (Number.isFinite(maxArea) && lote.area_m2 > maxArea + 0.5);
+    if (areaInvalid) {
+      invalidLots.push(`${lote.quadra} ${lote.numero || "(sem número)"}`.trim());
+    }
+  }
+  const residualArea = remanescente.reduce((s, p) => s + planarAreaM2(p[0] ?? []), 0);
+  const totalLotArea = areas.reduce((s, a) => s + a, 0);
+  const n = lotes.length;
+  const equity = relatoriosEquidadePorQuadras(lotes);
+  const global = calcularErroDeEquidadeLocal(areas);
+  return {
+    totalLots: n,
+    totalLotArea,
+    residualArea,
+    minArea: n ? Math.min(...areas) : 0,
+    maxArea: n ? Math.max(...areas) : 0,
+    averageArea: n ? totalLotArea / n : 0,
+    minDepth: depths.length ? Math.min(...depths) : 0,
+    maxDepth: depths.length ? Math.max(...depths) : 0,
+    averageDepth: depths.length ? depths.reduce((s, d) => s + d, 0) / depths.length : 0,
+    minFrontage: fronts.length ? Math.min(...fronts) : 0,
+    maxFrontage: fronts.length ? Math.max(...fronts) : 0,
+    invalidLots,
+    desvioPadraoArea: global.desvioPadrao,
+    coeficienteVariacao: global.coeficienteVariacao,
+    equityByQuadra: equity,
+  };
+}
+
+function calcularErroDeEquidadeLocal(areas: number[]): { desvioPadrao: number; coeficienteVariacao: number } {
+  if (areas.length === 0) return { desvioPadrao: 0, coeficienteVariacao: 0 };
+  const media = areas.reduce((s, a) => s + a, 0) / areas.length;
+  let erro = 0;
+  for (const area of areas) {
+    const d = area - media;
+    erro += d * d;
+  }
+  const desvioPadrao = Math.sqrt(erro / areas.length);
+  return { desvioPadrao, coeficienteVariacao: media > 1e-9 ? desvioPadrao / media : 0 };
+}
+
+export type EvenCountPlan = {
+  n: number;
+  each: number;
+  score: number;
+};
+
+/** Quantidade uniforme que preenche `length` perto de `target`, sem concentrar sobra. */
+export function findBestEvenCount(
+  length: number,
+  target: number,
+  opts?: { minEach?: number; maxEach?: number; minN?: number; maxN?: number },
+): EvenCountPlan {
+  const tgt = target > 0 ? target : length;
+  const minEach = opts?.minEach ?? tgt * SUBDIV_MIN_RATIO;
+  const maxEach = opts?.maxEach ?? tgt * SUBDIV_MAX_RATIO;
+  const minN = Math.max(1, opts?.minN ?? 1);
+  const maxByMin = Math.max(minN, Math.floor(length / Math.max(minEach, 1e-6) + 1e-9));
+  const maxN = Math.max(minN, opts?.maxN ?? maxByMin);
+  const n0 = Math.max(minN, Math.min(maxN, Math.round(length / Math.max(tgt, 1e-6))));
+  let best: EvenCountPlan = { n: minN, each: length / minN, score: Number.POSITIVE_INFINITY };
+  const lo = Math.max(minN, n0 - 4);
+  const hi = Math.max(lo, Math.min(maxN, n0 + 4));
+  for (let n = lo; n <= hi; n++) {
+    const each = length / n;
+    if (n > 1 && each + 1e-9 < minEach) continue;
+    const depthPen = Math.abs(each - tgt);
+    const excess = Math.max(0, each - maxEach);
+    const short = n > 1 ? Math.max(0, minEach - each) : 0;
+    const score = short * 1_000_000 + excess * 10_000 + depthPen * 1_000 + Math.abs(n - n0) * 2;
+    if (score < best.score) best = { n, each, score };
+  }
+  return best;
+}
+
+export type SubdivisionScoreInput = {
+  areas: number[];
+  testadas: number[];
+  depths: number[];
+  leftoverM2: number;
+  blockAreaM2: number;
+  targetAreaM2: number;
+  targetTestadaM: number;
+  targetDepthM: number;
+  minAreaM2: number;
+  minTestadaM: number;
+  invalidCount?: number;
+};
+
+/** Menor score = melhor. Sobra pesa; lote absurdo pesa mais. */
+export function scoreSubdivision(input: SubdivisionScoreInput): number {
+  const {
+    areas,
+    testadas,
+    depths,
+    leftoverM2,
+    blockAreaM2,
+    targetAreaM2,
+    targetTestadaM,
+    targetDepthM,
+    minAreaM2,
+    minTestadaM,
+    invalidCount = 0,
+  } = input;
+  let belowMin = 0;
+  let excessArea = 0;
+  let depthPen = 0;
+  let testadaPen = 0;
+  for (let i = 0; i < areas.length; i++) {
+    const area = areas[i] ?? 0;
+    const t = testadas[i] ?? 0;
+    const d = depths[i] ?? 0;
+    if (minAreaM2 > 0 && area + 0.5 < minAreaM2) belowMin += 1;
+    if (minTestadaM > 0 && t + 0.08 < minTestadaM) belowMin += 1;
+    if (targetAreaM2 > 0) excessArea += Math.max(0, area - targetAreaM2 * LOT_MAX_AREA_RATIO);
+    if (targetDepthM > 0) depthPen += Math.abs(d - targetDepthM);
+    if (targetTestadaM > 0) testadaPen += Math.abs(t - targetTestadaM);
+  }
+  const n = Math.max(areas.length, 1);
+  const mean = areas.reduce((s, a) => s + a, 0) / n;
+  let uni = 0;
+  for (const a of areas) uni += Math.abs(a - mean);
+  uni /= n;
+  const leftoverPen = leftoverM2;
+  const cv = mean > 1e-9 ? uni / mean : uni;
+  return (
+    belowMin * 1_000_000 +
+    invalidCount * 1_000_000 +
+    excessArea * 10_000 +
+    depthPen * 1_000 +
+    testadaPen * 1_000 +
+    leftoverPen * 500 +
+    cv * areas.length * 500
+  );
+}
+
+/** 0 = todos iguais. Quanto maior, mais os lotes variam de tamanho. */
+export function coeficienteDeUniformidade(values: number[]): number {
+  if (values.length === 0) return 0;
+  const mean = values.reduce((s, v) => s + v, 0) / values.length;
+  if (mean <= 1e-9) return 0;
+  const mad = values.reduce((s, v) => s + Math.abs(v - mean), 0) / values.length;
+  return mad / mean;
+}
+
+export function geometryIsValid(ring: Position[]): boolean {
+  const pts = dropClosing(ring);
+  if (pts.length < 3) return false;
+  const area = planarAreaM2(pts);
+  if (!(area >= SLIVER_M2) || !Number.isFinite(area)) return false;
+  try {
+    asTurfPolygon(closeRing(pts), originOf(pts));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export type SubdivisionPlan = {
+  rowCount: number;
+  rowDepthM: number;
+  lotCountPerRow: number;
+  lotWidthM: number;
+  score: number;
+};
+
+/** Quantidades em torno da teórica, sem arredondar cegamente. */
+export function generateCandidateCounts(theoretical: number, span = 4): number[] {
+  const n0 = Math.max(1, Math.round(theoretical));
+  const out: number[] = [];
+  for (let n = Math.max(1, n0 - span); n <= n0 + span; n++) out.push(n);
+  return out;
+}
+
+/**
+ * Melhor (n faixas × n lotes/faixa) para um retângulo.
+ * Fecha 100% (profundidadeReal = D/n, testadaReal = L/m) perto do alvo, sem faixa-sobrante.
+ */
+export function findBestSubdivision(args: {
+  depthM: number;
+  alongM: number;
+  profundidadeM: number;
+  testadaM: number;
+  areaMinimaM2?: number;
+  cornerStart?: boolean;
+  cornerEnd?: boolean;
+  percentualEsquina?: number;
+}): SubdivisionPlan {
+  const p = args.profundidadeM > 0 ? args.profundidadeM : args.depthM;
+  const t = args.testadaM > 0 ? args.testadaM : args.alongM;
+  const minArea = lotMinAreaM2(t, p, args.areaMinimaM2);
+  const maxArea = lotMaxAllowedAreaM2(t, p, args.areaMinimaM2);
+  const targetArea = lotTargetAreaM2(t, p, args.areaMinimaM2);
+  const scale =
+    args.percentualEsquina != null && Number.isFinite(args.percentualEsquina)
+      ? 1 + Math.max(0, args.percentualEsquina) / 100
+      : 1;
+  const nCorners = (args.cornerStart ? 1 : 0) + (args.cornerEnd ? 1 : 0);
+
+  let best: SubdivisionPlan | null = null;
+  for (const nRows of generateCandidateCounts(args.depthM / Math.max(p, 1e-6), 2)) {
+    const rowDepth = args.depthM / nRows;
+    if (rowDepth + 0.05 < p * SUBDIV_MIN_RATIO) continue;
+    if (p > 0 && rowDepth > p * LOT_MAX_DEPTH_RATIO + 0.5) continue;
+    const minW = minArea > 0 && rowDepth > 0.5 ? Math.max(t, minArea / rowDepth) : t;
+    const maxW = Number.isFinite(maxArea) && rowDepth > 0.5 ? maxArea / rowDepth : 0;
+    const widths = planRowLotWidths(
+      args.alongM,
+      minW,
+      Boolean(args.cornerStart),
+      Boolean(args.cornerEnd),
+      minW * scale,
+      t,
+      maxW,
+    );
+    if (widths.length === 0) continue;
+    const areas = widths.map((w) => w * rowDepth);
+    if (areas.some((a) => minArea > 0 && a + 0.5 < minArea * 0.95)) continue;
+    if (areas.some((a) => Number.isFinite(maxArea) && a > maxArea + 0.5)) continue;
+    const leftoverM2 = Math.abs(args.depthM * args.alongM - areas.reduce((s, a) => s + a, 0) * nRows);
+    const score = scoreSubdivision({
+      areas: Array.from({ length: nRows }, () => areas).flat(),
+      testadas: Array.from({ length: nRows }, () => widths).flat(),
+      depths: Array.from({ length: nRows * widths.length }, () => rowDepth),
+      leftoverM2,
+      blockAreaM2: args.depthM * args.alongM,
+      targetAreaM2: targetArea,
+      targetTestadaM: t,
+      targetDepthM: p,
+      minAreaM2: minArea,
+      minTestadaM: t,
+    });
+    const plan: SubdivisionPlan = {
+      rowCount: nRows,
+      rowDepthM: rowDepth,
+      lotCountPerRow: widths.length,
+      lotWidthM: widths.length > 0 ? args.alongM / widths.length : 0,
+      score: score + Math.abs(nRows - args.depthM / Math.max(p, 1e-6)) + nCorners * 0.01,
+    };
+    if (!best || plan.score < best.score) best = plan;
+  }
+  if (best) return best;
+
+  const rows = findBestEvenCount(args.depthM, p, {
+    minEach: p * SUBDIV_MIN_RATIO,
+    maxEach: p * LOT_MAX_DEPTH_RATIO,
+  });
+  const minW = minArea > 0 && rows.each > 0.5 ? Math.max(t, minArea / rows.each) : t;
+  const widths = planRowLotWidths(
+    args.alongM,
+    minW,
+    Boolean(args.cornerStart),
+    Boolean(args.cornerEnd),
+    minW * scale,
+    t,
+  );
+  return {
+    rowCount: rows.n,
+    rowDepthM: rows.each,
+    lotCountPerRow: Math.max(1, widths.length),
+    lotWidthM: widths.length > 0 ? args.alongM / widths.length : minW,
+    score: rows.score + 50_000,
+  };
+}
+
+function planBlockRowCount(
   depth: number,
   profundidadeQuadraM: number,
   hasOppositeStreets: boolean,
   oppositeLongEdges: boolean,
-): boolean {
-  if (depth < 8) return false;
-  if (hasOppositeStreets) return true;
+): number {
   const lot = profundidadeQuadraM > 0 ? profundidadeQuadraM : 50;
-  if (depth >= lot * 1.65) return true;
-  if (oppositeLongEdges && depth >= lot * 1.35) return true;
-  return false;
+  if (depth < 8) return 1;
+  const eachIfTwo = depth / 2;
+  const opposite = hasOppositeStreets || oppositeLongEdges;
+  const minN =
+    opposite && eachIfTwo + 0.05 >= 18 && (eachIfTwo + 0.05 >= lot * SUBDIV_MIN_RATIO || depth + 0.05 >= 70)
+      ? 2
+      : 1;
+  return findBestEvenCount(depth, lot, {
+    minN,
+    minEach: minN >= 2 ? Math.min(lot * SUBDIV_MIN_RATIO, eachIfTwo) : lot * SUBDIV_MIN_RATIO,
+    maxEach: lot * SUBDIV_MAX_RATIO,
+  }).n;
 }
 
 /** Azimute da via/aresta de testada (ruas opostas ou dois lados longos paralelos). */
@@ -2140,6 +3104,7 @@ function cutBlockIntoRows(
   ring: Position[],
   splitAz: number,
   origin: Position,
+  rowCount = 2,
 ): Position[][] {
   const { dirS, dirD } = streetDir(splitAz);
   const c = originOf(ring);
@@ -2158,8 +3123,9 @@ function cutBlockIntoRows(
     dMax = Math.max(dMax, d);
   }
   const depth = dMax - dMin;
+  const n = Math.max(2, Math.round(rowCount));
   if (depth < 8) return [closeRing(ring)];
-  const dMid = (dMin + dMax) / 2;
+  const h = depth / n;
   const pad = Math.max(sMax - sMin, depth, 10) + 8;
 
   const halfStrip = (d0: number, d1: number): Position[] => {
@@ -2172,9 +3138,11 @@ function cutBlockIntoRows(
 
   const quadraFeat = asTurfPolygon(ring, origin);
   const rows: Position[][] = [];
-  for (const stripRing of [halfStrip(dMin - 0.05, dMid), halfStrip(dMid, dMax + 0.05)]) {
+  for (let i = 0; i < n; i++) {
+    const d0 = dMin + i * h - (i === 0 ? 0.05 : 0.02);
+    const d1 = dMin + (i + 1) * h + (i === n - 1 ? 0.05 : 0.02);
     try {
-      const strip = asTurfPolygon(stripRing, origin);
+      const strip = asTurfPolygon(halfStrip(d0, d1), origin);
       const cut = turf.intersect(turf.featureCollection([quadraFeat, strip]));
       for (const poly of flattenPoly(cut, origin)) {
         if (planarAreaM2(poly[0]) >= SLIVER_M2) rows.push(closeRing(poly[0]));
@@ -2213,11 +3181,9 @@ export function splitThroughBlock(
   const along = boundaryFrontageLengths(ring, splitAz, streetRings);
   const hasOppStreet = along.posStreet >= 2 && along.negStreet >= 2;
   const oppLong = hasOppositeLongFrontage(along);
-  if (!shouldSplitThroughBlock(along.depth, profundidadeQuadraM, hasOppStreet, oppLong)) {
-    return [closeRing(ring)];
-  }
-
-  return cutBlockIntoRows(ring, splitAz, origin);
+  const rowCount = planBlockRowCount(along.depth, profundidadeQuadraM, hasOppStreet, oppLong);
+  if (rowCount < 2) return [closeRing(ring)];
+  return cutBlockIntoRows(ring, splitAz, origin, rowCount);
 }
 
 /** Fatia a fileira com larguras explícitas ao longo da testada (soma = frente). */
@@ -2282,7 +3248,12 @@ export function subdivideRowByWidths(
     } catch {
       continue;
     }
-    const cut = turf.intersect(turf.featureCollection([quadraFeat, strip]));
+    let cut: ReturnType<typeof turf.intersect> = null;
+    try {
+      cut = turf.intersect(turf.featureCollection([quadraFeat, strip]));
+    } catch {
+      continue;
+    }
     for (const poly of flattenPoly(cut, origin)) {
       const area = planarAreaM2(poly[0]);
       if (area < SLIVER_M2) continue;
@@ -2295,21 +3266,239 @@ export function subdivideRowByWidths(
   return lots;
 }
 
+function streetTouchesFrontEnd(
+  ring: Position[],
+  front: { a: Position; b: Position },
+  which: "start" | "end",
+  streetRings: Position[][],
+): boolean {
+  if (streetRings.length === 0) return false;
+  const end = which === "start" ? front.a : front.b;
+  const frontAz = planarAzimuthDeg(front.a, front.b);
+  const pts = dropClosing(ring);
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    const mid = midpoint(a, b);
+    const near =
+      Math.min(planarLength(a, end), planarLength(b, end), planarLength(mid, end)) <= 2.8;
+    if (!near) continue;
+    if (azDelta180(planarAzimuthDeg(a, b), frontAz) <= 18) continue;
+    if (edgeAlongStreet(a, b, streetRings)) return true;
+  }
+  const alongLen = planarLength(front.a, front.b);
+  if (alongLen < 0.5 || minDistToRings(end, streetRings) > 2.8) return false;
+  let px = -(front.b[1] - front.a[1]) / alongLen;
+  let py = (front.b[0] - front.a[0]) / alongLen;
+  const inward = originOf(ring);
+  const mid = midpoint(front.a, front.b);
+  if ((inward[0] - mid[0]) * px + (inward[1] - mid[1]) * py < 0) {
+    px = -px;
+    py = -py;
+  }
+  const probe: Position = [end[0] + px * 4, end[1] + py * 4];
+  return minDistToRings(probe, streetRings) <= 2.8;
+}
+
+function planRowLotWidths(
+  alongLen: number,
+  minWidth: number,
+  cornerStart: boolean,
+  cornerEnd: boolean,
+  cornerWidth: number,
+  targetWidth = minWidth,
+  maxWidth = 0,
+): number[] {
+  if (!(alongLen > 0) || !(minWidth > 0) || alongLen + 0.05 < minWidth) return [];
+  const tgt = targetWidth > 0 ? targetWidth : minWidth;
+  const wCorner = Math.max(minWidth, cornerWidth);
+  const cornerScale = minWidth > 1e-9 ? wCorner / minWidth : 1;
+  const nCorners = (cornerStart ? 1 : 0) + (cornerEnd ? 1 : 0);
+  const maxN = Math.max(1, Math.floor(alongLen / minWidth + 1e-9));
+  const minN =
+    maxWidth > minWidth
+      ? Math.max(1, nCorners, Math.ceil(alongLen / maxWidth - 1e-9))
+      : Math.max(1, nCorners);
+  const n0 =
+    nCorners > 0 && alongLen > nCorners * wCorner + tgt
+      ? nCorners + Math.max(0, Math.round((alongLen - nCorners * wCorner) / Math.max(tgt, 1e-6)))
+      : Math.max(nCorners || 1, Math.round(alongLen / Math.max(tgt, 1e-6)));
+
+  const widthsForN = (n: number): number[] | null => {
+    if (n < minN || n > maxN) return null;
+    const innerN = n - nCorners;
+    const weights: number[] = [];
+    if (cornerStart) weights.push(cornerScale);
+    for (let i = 0; i < innerN; i++) weights.push(1);
+    if (cornerEnd) weights.push(cornerScale);
+    const wsum = weights.reduce((s, w) => s + w, 0);
+    if (wsum <= 1e-9) return null;
+    const unit = alongLen / wsum;
+    const widths = weights.map((w) => w * unit);
+    if (widths.some((w) => w + 0.05 < minWidth)) return null;
+    return widths;
+  };
+
+  let best: { widths: number[]; score: number } | null = null;
+  const lo = Math.max(minN, Math.min(Math.max(n0, minN), maxN) - 4);
+  const hi = Math.min(maxN, Math.max(n0, minN) + 4);
+  for (let n = lo; n <= hi; n++) {
+    const widths = widthsForN(n);
+    if (!widths) continue;
+    const innerN = n - nCorners;
+    let testadaPen = 0;
+    let excess = 0;
+    for (let i = 0; i < widths.length; i++) {
+      const w = widths[i] ?? 0;
+      const want =
+        (cornerStart && i === 0) || (cornerEnd && i === widths.length - 1) ? wCorner : tgt;
+      testadaPen += Math.abs(w - want);
+      excess += Math.max(0, w - tgt * SUBDIV_MAX_RATIO);
+    }
+    const uni = innerN > 1 ? Math.abs((widths[cornerStart ? 1 : 0] ?? tgt) - tgt) : 0;
+    const score = excess * 10_000 + testadaPen * 1_000 + uni * 500 + Math.abs(n - n0) * 2;
+    if (!best || score < best.score) best = { widths, score };
+  }
+  if (best) return best.widths;
+  if (minN > maxN) return [];
+  const fallbackN = Math.max(minN, Math.min(maxN, n0));
+  return Array.from({ length: fallbackN }, () => alongLen / fallbackN);
+}
+
+function seedInternalStreetsInBlocks(
+  blocks: Position[][][],
+  azimuthDeg: number,
+  larguraViaM: number,
+  profundidadeQuadraM: number,
+  origin: Position,
+): { quadras: Position[][][]; vias: Position[][][]; eixos: Position[][] } {
+  const vias: Position[][][] = [];
+  const eixos: Position[][] = [];
+  const quadras: Position[][][] = [];
+  const module = profundidadeQuadraM * 2 + larguraViaM;
+  for (const block of blocks) {
+    const outer = block[0];
+    if (!outer || dropClosing(outer).length < 3) continue;
+    const box = (() => {
+      const pts = dropClosing(outer);
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const p of pts) {
+        minX = Math.min(minX, p[0]);
+        maxX = Math.max(maxX, p[0]);
+        minY = Math.min(minY, p[1]);
+        maxY = Math.max(maxY, p[1]);
+      }
+      return { minX, maxX, minY, maxY };
+    })();
+    const span = Math.max(box.maxX - box.minX, box.maxY - box.minY);
+    const fill = findBestEvenCount(span, profundidadeQuadraM, {
+      minEach: profundidadeQuadraM * SUBDIV_MIN_RATIO,
+      maxEach: profundidadeQuadraM * 1.38,
+    });
+    const fillsNearTarget =
+      fill.n >= 1 && fill.n <= 12 && fill.each <= profundidadeQuadraM * 1.38 + 1e-6;
+    if (fillsNearTarget || span + 0.5 < module * 1.15) {
+      quadras.push(block);
+      continue;
+    }
+    const grid = generateStreetGrid(outer, azimuthDeg, larguraViaM, profundidadeQuadraM, 0, true);
+    if (grid.vias.length === 0) {
+      quadras.push(block);
+      continue;
+    }
+    vias.push(...grid.vias);
+    eixos.push(...grid.eixos);
+    const leftover = subtractStreets(outer, grid.vias);
+    if (leftover.length === 0) quadras.push(block);
+    else quadras.push(...leftover);
+  }
+  return { quadras, vias, eixos };
+}
+
 export function subdivideQuadraEmLotes(
   quadraCoords: PolygonCoords,
   azimuthDeg: number,
   testadaMinimaM: number,
-  _areaMinimaM2 = 0,
+  areaMinimaM2 = 0,
   streetRings?: Position[][],
   originHint?: Position,
   blockCentroid?: Position,
+  opts?: {
+    profundidadeM?: number;
+    percentualEsquina?: number;
+    skipRowSplit?: boolean;
+    allowShallow?: boolean;
+    allowIrregular?: boolean;
+  },
+): Position[][][] {
+  return subdivideQuadraEmLotesPass(
+    quadraCoords,
+    azimuthDeg,
+    testadaMinimaM,
+    areaMinimaM2,
+    streetRings,
+    originHint,
+    blockCentroid,
+    opts,
+    0,
+  );
+}
+
+function subdivideQuadraEmLotesPass(
+  quadraCoords: PolygonCoords,
+  azimuthDeg: number,
+  testadaMinimaM: number,
+  areaMinimaM2: number,
+  streetRings: Position[][] | undefined,
+  originHint: Position | undefined,
+  blockCentroid: Position | undefined,
+  opts:
+    | {
+        profundidadeM?: number;
+        percentualEsquina?: number;
+        skipRowSplit?: boolean;
+        allowShallow?: boolean;
+        allowIrregular?: boolean;
+      }
+    | undefined,
+  pass: number,
 ): Position[][][] {
   const ring = dropClosing(quadraCoords);
-  if (ring.length < 3 || testadaMinimaM <= 0) return [];
+  if (ring.length < 3 || testadaMinimaM <= 0 || pass > 6) return [];
 
   const origin = originHint ?? originOf(ring);
   const inwardRef = originOf(ring);
-  const front = frontEdge(ring, azimuthDeg, streetRings, blockCentroid);
+  const streets = streetRings ?? [];
+  const hostArea = planarAreaM2(ring);
+  const profundidadeMEarly =
+    opts?.profundidadeM != null && opts.profundidadeM > 0
+      ? opts.profundidadeM
+      : areaMinimaM2 > 0 && testadaMinimaM > 0
+        ? areaMinimaM2 / testadaMinimaM
+        : 0;
+  const minAreaEarly = lotMinAreaM2(testadaMinimaM, profundidadeMEarly, areaMinimaM2);
+  const maxAreaEarly = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeMEarly, areaMinimaM2);
+  let front = frontEdge(ring, azimuthDeg, streets, blockCentroid);
+  if ((!front || front.length < testadaMinimaM - 0.05) && hostArea > maxAreaEarly && pass < 4) {
+    const altAz = foldAz180(azimuthDeg + 90);
+    const altFront = frontEdge(ring, altAz, streets, blockCentroid);
+    if (altFront && altFront.length >= testadaMinimaM - 0.05) {
+      return subdivideQuadraEmLotesPass(
+        ring,
+        altAz,
+        testadaMinimaM,
+        areaMinimaM2,
+        streets,
+        origin,
+        blockCentroid,
+        opts,
+        pass + 1,
+      );
+    }
+  }
   if (!front || front.length < testadaMinimaM - 0.05) return [];
 
   const alongLen = planarLength(front.a, front.b);
@@ -2330,41 +3519,143 @@ export function subdivideQuadraEmLotes(
   }
   if (depth < 0.5) return [];
 
-  const testadaDisponivel = alongLen;
-
-  const numLotes = Math.floor(testadaDisponivel / testadaMinimaM + 1e-9);
-  if (numLotes < 1) return [];
-  if (testadaDisponivel / numLotes < testadaMinimaM - 0.05) return [];
-
-  const width = testadaDisponivel / numLotes;
-  const quadraFeat = asTurfPolygon(ring, origin);
-  const lots: Position[][][] = [];
-  const extra = depth + Math.max(2, larguraPad(depth));
-
-  for (let i = 0; i < numLotes; i++) {
-    const t0 = i * width;
-    const t1 = (i + 1) * width;
-    const a: Position = [front.a[0] + ux * t0, front.a[1] + uy * t0];
-    const b: Position = [front.a[0] + ux * t1, front.a[1] + uy * t1];
-    const c1: Position = [b[0] + px * extra, b[1] + py * extra];
-    const d1: Position = [a[0] + px * extra, a[1] + py * extra];
-    let strip: Feature<Polygon>;
-    try {
-      strip = turf.polygon([[toGeo(a, origin), toGeo(b, origin), toGeo(c1, origin), toGeo(d1, origin), toGeo(a, origin)]]);
-    } catch {
-      continue;
-    }
-    const cut = turf.intersect(turf.featureCollection([quadraFeat, strip]));
-    for (const poly of flattenPoly(cut, origin)) {
-      const area = planarAreaM2(poly[0]);
-      if (area < SLIVER_M2) continue;
-      const testada = lotFrontWidthM(poly[0], ux, uy);
-      if (testada + 0.08 < testadaMinimaM) continue;
-      lots.push(poly);
+  if (
+    pass < 4 &&
+    alongLen + 0.05 < Math.max(testadaMinimaM * 1.9, profundidadeMEarly * 1.05) &&
+    depth > alongLen * 1.35 &&
+    hostArea > maxAreaEarly
+  ) {
+    const altAz = foldAz180(azimuthDeg + 90);
+    if (Math.abs(azDelta180(altAz, azimuthDeg)) > 20) {
+      return subdivideQuadraEmLotesPass(
+        ring,
+        altAz,
+        testadaMinimaM,
+        areaMinimaM2,
+        streets,
+        origin,
+        blockCentroid,
+        opts,
+        pass + 1,
+      );
     }
   }
 
-  return lots;
+  if (
+    !opts?.skipRowSplit &&
+    profundidadeMEarly > 0 &&
+    depth > profundidadeMEarly * SUBDIV_MAX_RATIO + 0.05 &&
+    pass < 5
+  ) {
+    const n = findBestEvenCount(depth, profundidadeMEarly, {
+      minEach: profundidadeMEarly * SUBDIV_MIN_RATIO,
+      maxEach: profundidadeMEarly * SUBDIV_MAX_RATIO,
+    }).n;
+    if (n >= 2) {
+      const rows = cutBlockIntoRows(ring, azimuthDeg, origin, n);
+      if (rows.length >= 2) {
+        const fromRows: Position[][][] = [];
+        for (const row of rows) {
+          fromRows.push(
+            ...subdivideQuadraEmLotesPass(
+              row,
+              azimuthDeg,
+              testadaMinimaM,
+              areaMinimaM2,
+              streets,
+              origin,
+              blockCentroid ?? inwardRef,
+              { ...opts, skipRowSplit: false },
+              pass + 1,
+            ),
+          );
+        }
+        if (fromRows.length > 0) return fromRows;
+      }
+    }
+  }
+
+  const profundidadeM =
+    opts?.profundidadeM != null && opts.profundidadeM > 0
+      ? opts.profundidadeM
+      : areaMinimaM2 > 0 && testadaMinimaM > 0
+        ? areaMinimaM2 / testadaMinimaM
+        : 0;
+  const minArea = lotMinAreaM2(testadaMinimaM, profundidadeM, areaMinimaM2);
+  const minWidth =
+    minArea > 0 && depth > 0.5 ? Math.max(testadaMinimaM, minArea / depth) : testadaMinimaM;
+  if (profundidadeM > 0 && depth + 0.05 < profundidadeM * SUBDIV_MIN_RATIO) {
+    const shallowOk =
+      Boolean(opts?.allowShallow) &&
+      (Boolean(opts?.allowIrregular) || minWidth <= testadaMinimaM * 1.75 + 0.05);
+    if (!shallowOk) return [];
+  }
+  if (alongLen + 0.05 < minWidth * 1.85 && hostArea > maxAreaEarly && pass < 4) {
+    const altAz = foldAz180(azimuthDeg + 90);
+    if (Math.abs(azDelta180(altAz, azimuthDeg)) > 20) {
+      return subdivideQuadraEmLotesPass(
+        ring,
+        altAz,
+        testadaMinimaM,
+        areaMinimaM2,
+        streets,
+        origin,
+        blockCentroid,
+        opts,
+        pass + 1,
+      );
+    }
+  }
+  if (alongLen + 0.05 < minWidth) return [];
+
+  const pct = opts?.percentualEsquina != null && Number.isFinite(opts.percentualEsquina) ? opts.percentualEsquina : 0;
+  const cornerStart = pct > 0 && streetTouchesFrontEnd(ring, front, "start", streets);
+  const cornerEnd = pct > 0 && streetTouchesFrontEnd(ring, front, "end", streets);
+  const cornerWidth =
+    pct > 0 && profundidadeM > 0 ? (minArea * (1 + pct / 100)) / Math.max(depth, profundidadeM, 0.5) : minWidth;
+  const maxLotWidth =
+    Number.isFinite(maxAreaEarly) && maxAreaEarly > 0 && depth > 0.5 ? maxAreaEarly / depth : 0;
+  const widths = planRowLotWidths(
+    alongLen,
+    minWidth,
+    cornerStart,
+    cornerEnd,
+    cornerWidth,
+    testadaMinimaM,
+    maxLotWidth,
+  );
+  if (widths.length === 0) return [];
+
+  const lots = subdivideRowByWidths(ring, azimuthDeg, widths, streets, origin, blockCentroid, minWidth * 0.88);
+  const maxArea = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeM, areaMinimaM2);
+  const kept: Position[][][] = [];
+  for (const poly of lots) {
+    const area = planarAreaM2(poly[0] ?? []);
+    if (minArea > 0 && area + 1e-6 < minArea * 0.95) continue;
+    if (Number.isFinite(maxArea) && area > maxArea + 0.5) {
+      if (pass < 5) {
+        const split = subdivideQuadraEmLotesPass(
+          poly[0] ?? [],
+          azimuthDeg,
+          testadaMinimaM,
+          areaMinimaM2,
+          streets,
+          origin,
+          blockCentroid,
+          { ...opts, skipRowSplit: false },
+          pass + 1,
+        );
+        const ok = split.filter((p) => {
+          const a = planarAreaM2(p[0] ?? []);
+          return (minArea <= 0 || a + 1e-6 >= minArea * 0.95) && a <= maxArea + 0.5;
+        });
+        if (ok.length >= 2) kept.push(...ok);
+      }
+      continue;
+    }
+    kept.push(poly);
+  }
+  return kept;
 }
 
 function lotFrontWidthM(ring: Position[], ux: number, uy: number): number {
@@ -2471,6 +3762,9 @@ export function resolveLotSizeSpec(
   if (p != null) {
     return { testadaM: current.testadaM > 0.2 ? current.testadaM : p, profundidadeM: p };
   }
+  if (current.testadaM > 0.2 && current.profundidadeM > 0.2) {
+    return { testadaM: current.testadaM, profundidadeM: current.profundidadeM };
+  }
   throw new LoteamentoError("Informe testada e profundidade (ou área em m²) maiores que zero.");
 }
 
@@ -2499,31 +3793,102 @@ export function unionClosedRings(rings: Position[][], originHint?: Position): Po
   return closeRing(best);
 }
 
-function closeHostWithLots(host: Position[], lots: Position[][][], origin: Position): Position[][][] {
-  const scraps = leftoverAfterLots(host, lots, origin);
-  if (scraps.length === 0) {
-    return lots.length > 0 ? lots : planarAreaM2(host) >= REMAINDER_MIN_M2 ? [[closeRing(host)]] : [];
+function mergeTwoPolys(a: Position[][], b: Position[][], origin: Position): Position[][] | null {
+  try {
+    const u = unionPolygons([a, b], origin);
+    const flat = flattenPoly(u, origin).filter((p) => planarAreaM2(p[0] ?? []) >= SLIVER_M2);
+    if (flat.length === 1) return flat[0];
+  } catch {
+    /* união degenerada */
   }
+  return null;
+}
+
+function nearestPolyIndex(lots: Position[][][], scrap: Position[]): number {
+  if (lots.length === 0) return -1;
+  let best = 0;
+  let bestScore = -Infinity;
+  const cScrap = originOf(dropClosing(scrap));
+  for (let i = 0; i < lots.length; i++) {
+    const ring = lots[i]?.[0] ?? [];
+    const share = ringsShareBoundary(ring, scrap) ? 1_000_000 : 0;
+    const dist = planarLength(originOf(dropClosing(ring)), cScrap);
+    const score = share - dist;
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/**
+ * Sobra fina entra no lote vizinho. Sobra grande NÃO vira lote-cesta nem vai para o último lote.
+ */
+export function closeHostWithLots(host: Position[], lots: Position[][][], origin: Position): Position[][][] {
+  if (lots.length === 0) return [];
+  const scraps = leftoverAfterLots(host, lots, origin);
+  if (scraps.length === 0) return lots;
   const result = lots.map((lot) => lot);
   for (const scrap of scraps) {
-    let merged = false;
-    if (result.length > 0) {
-      try {
-        const u = unionPolygons([result[result.length - 1], [scrap]], origin);
-        const flat = flattenPoly(u, origin).filter((p) => planarAreaM2(p[0] ?? []) >= SLIVER_M2);
-        if (flat.length === 1) {
-          result[result.length - 1] = flat[0];
-          merged = true;
-        }
-      } catch {
-        /* união degenerada */
+    const scrapA = planarAreaM2(scrap);
+    if (scrapA < SLIVER_M2) continue;
+    const areas = result.map((lot) => planarAreaM2(lot[0] ?? []));
+    const mean = areas.reduce((s, a) => s + a, 0) / Math.max(areas.length, 1);
+    const ranked = areas
+      .map((_, i) => i)
+      .sort((i, j) => {
+        const belowI = (areas[i] ?? 0) < mean - 1e-6 ? 0 : 1;
+        const belowJ = (areas[j] ?? 0) < mean - 1e-6 ? 0 : 1;
+        if (belowI !== belowJ) return belowI - belowJ;
+        return (areas[i] ?? 0) - (areas[j] ?? 0);
+      });
+    const nearest = nearestPolyIndex(result, scrap);
+    let mergedOk = false;
+    for (const idx of ranked) {
+      const lotA = areas[idx] ?? 0;
+      const tiny = scrapA <= Math.max(mean * 0.22, 48);
+      if (!tiny && scrapA + lotA > mean * LOT_MAX_AREA_RATIO + 8) continue;
+      if (!tiny && lotA > mean && ranked.some((k) => (areas[k] ?? 0) < mean * 0.98) && idx !== nearest) {
+        continue;
+      }
+      const merged = mergeTwoPolys(result[idx]!, [closeRing(scrap)], origin);
+      if (merged) {
+        result[idx] = merged;
+        mergedOk = true;
+        break;
       }
     }
-    if (!merged && planarAreaM2(scrap) >= REMAINDER_MIN_M2) {
-      result.push([closeRing(scrap)]);
-    }
+    if (mergedOk || nearest < 0) continue;
+    const nearestA = areas[nearest] ?? 0;
+    const tiny = scrapA <= Math.max(mean * 0.22, 48);
+    if (!tiny && scrapA + nearestA > mean * LOT_MAX_AREA_RATIO + 8) continue;
+    const merged = mergeTwoPolys(result[nearest]!, [closeRing(scrap)], origin);
+    if (merged) result[nearest] = merged;
   }
   return result;
+}
+
+function mergeScrapIntoLotes(
+  scrap: Position[],
+  lotes: LoteResult[],
+  origin: Position,
+  maxArea: number,
+): boolean {
+  if (lotes.length === 0) return false;
+  const scrapA = planarAreaM2(scrap);
+  if (scrapA < SLIVER_M2) return true;
+  const polys = lotes.map((l) => l.coordinates);
+  const idx = nearestPolyIndex(polys, scrap);
+  if (idx < 0) return false;
+  const lote = lotes[idx]!;
+  const next = mergeTwoPolys(lote.coordinates, [closeRing(scrap)], origin);
+  if (!next) return false;
+  const area = planarAreaM2(next[0] ?? []);
+  if (Number.isFinite(maxArea) && area > maxArea + 0.5 && scrapA > 48) return false;
+  lote.coordinates = next.map(closeRing);
+  lote.area_m2 = area;
+  return true;
 }
 
 function cutBlockAtDepthFromSide(
@@ -2671,7 +4036,7 @@ function slicesToLotes(
 
 /**
  * Reloteia só esta quadra com testada × profundidade uniformes.
- * Restos vão para o(s) último(s) lote(s) — a área da quadra fecha.
+ * A soma fecha a quadra; sobra fina redistribui entre vizinhos, nunca num lote-cesta.
  */
 export function rebuildQuadraLotes(
   quadraCoords: PolygonCoords,
@@ -2702,10 +4067,11 @@ export function rebuildQuadraLotes(
         row,
         rowFront.azimuthDeg,
         testadaM,
-        0,
+        testadaM * profundidadeM,
         streetRings,
         origin,
         rowCentroid,
+        { profundidadeM },
       );
       const closed = closeHostWithLots(row, split, origin);
       for (const coords of closed) {
@@ -2723,12 +4089,34 @@ export function rebuildQuadraLotes(
     slices.map((s) => s.coords),
     origin,
   );
-  const byPacked = packed.map((coords, i) => ({
+  const leftover = leftoverAfterLots(ring, packed, origin);
+  const filled = complementarLoteamento(leftover, {
+    azimuthDeg: frontage.azimuthDeg,
+    testadaMinimaM: testadaM,
+    profundidadeQuadraM: profundidadeM,
+    areaMinimaM2: testadaM * profundidadeM,
+    streetRings,
+    origin,
+    blockCentroid,
+  });
+  const closedAll = closeHostWithLots(ring, [...packed, ...filled.lots], origin);
+  const byPacked = closedAll.map((coords, i) => ({
     coords,
     az: slices[Math.min(i, slices.length - 1)]?.az ?? frontage.azimuthDeg,
-    remainder: i >= slices.length ? true : slices[i]?.remainder,
+    remainder: i >= packed.length ? false : slices[i]?.remainder,
   }));
-  return slicesToLotes(byPacked, streetRings, rows.length > 1 ? blockCentroid : undefined, quadraName);
+  const initial = slicesToLotes(byPacked, streetRings, rows.length > 1 ? blockCentroid : undefined, quadraName);
+  return otimizarEquidadeDosLotes({
+    host: ring,
+    lotes: initial,
+    streetRings,
+    origin,
+    testadaMinimaM: testadaM,
+    profundidadeM,
+    areaMinimaM2: testadaM * profundidadeM,
+    percentualEsquina: 0,
+    config: { areaTarget: testadaM * profundidadeM },
+  }).lotes;
 }
 
 /**
@@ -2797,10 +4185,11 @@ export function adjustLotInQuadra(
         row,
         rowFront.azimuthDeg,
         size.testadaM,
-        0,
+        size.testadaM * size.profundidadeM,
         streetRings,
         origin,
         rowCentroid,
+        { profundidadeM: size.profundidadeM },
       );
       for (const coords of closeHostWithLots(row, split, origin)) {
         slices.push({ coords, az: rowFront.azimuthDeg, remainder: true });
@@ -3118,6 +4507,7 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
     eixosExistentes,
     usarEixosComoRede = false,
     ladosViaExistente,
+    ladosFaixaDominio,
   } = params;
   const larguraCalcadaM =
     params.larguraCalcadaM != null && Number.isFinite(params.larguraCalcadaM)
@@ -3140,6 +4530,12 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
       : 0;
   const splitByMedidas = larguraQuadraM > 0 && profundidadeBlocoM > 0;
   const splitByArea = !splitByMedidas && areaQuadraM2 > 0;
+  const areaMinimaLoteM2 = lotMinAreaM2(testadaMinimaM, profundidadeQuadraM, params.areaMinimaM2);
+  const percentualEsquina =
+    params.percentualEsquina != null && Number.isFinite(params.percentualEsquina)
+      ? Math.max(0, params.percentualEsquina)
+      : 20;
+  const lotOpts = { profundidadeM: profundidadeQuadraM, percentualEsquina };
 
   if (!(larguraViaM > 0) || !(profundidadeQuadraM > 0) || !(testadaMinimaM > 0)) {
     throw new LoteamentoError(
@@ -3161,11 +4557,25 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
   const origin = originOf(ring);
   const azimuthDeg = orientacao != null && Number.isFinite(orientacao) ? orientacao : getMainAxisAzimuth(ring);
   const markedSides = (ladosViaExistente ?? []).filter((edge) => edge.length >= 2);
-  const skipPerimeter: boolean | PerimeterSkip =
+  const markedDominio = (ladosFaixaDominio ?? []).filter((edge) => edge.length >= 2);
+  const existW = resolveExistingViaWidthM(larguraViaM, params.larguraViaExistenteM);
+  const faixaW =
+    params.larguraFaixaDominioM != null && Number.isFinite(params.larguraFaixaDominioM)
+      ? Math.max(0, params.larguraFaixaDominioM)
+      : 0;
+  const generatedFaixa =
+    faixaW > 0 && markedDominio.length > 0 ? generateFaixaDominioFromEdges(ring, markedDominio, faixaW) : [];
+  const skipVia: boolean | PerimeterSkip =
     markedSides.length > 0
       ? perimeterSkipFromExistingSides(ring, azimuthDeg, markedSides)
       : viasExistentesExtremidades;
-  const appRings = (params.apps ?? [])
+  const skipFaixa: boolean | PerimeterSkip =
+    markedDominio.length > 0 ? perimeterSkipFromExistingSides(ring, azimuthDeg, markedDominio) : false;
+  const skipPerimeter = orPerimeterSkip(skipVia, skipFaixa);
+  const appRings = [
+    ...(params.apps ?? []),
+    ...generatedFaixa.map((poly) => poly[0] ?? []),
+  ]
     .map((r) => closeRing(dropClosing(r)))
     .filter((r) => dropClosing(r).length >= 3 && planarAreaM2(r) >= SLIVER_M2);
   const rlRings = (params.reservaLegal ?? [])
@@ -3180,23 +4590,23 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
     params.percentAreaUtil != null && Number.isFinite(params.percentAreaUtil)
       ? Math.max(0, Math.min(99.9, params.percentAreaUtil))
       : DEFAULT_PERCENT_AREA_UTIL;
-  const cantoAreaUtil = parseReservaCanto(params.cantoAreaUtil != null ? String(params.cantoAreaUtil) : null) ?? undefined;
+  void percentAreaUtil;
   /**
-   * Área útil A = max(0, percent × T − S). T = gleba; S = ruas após recorte de APP/RL.
-   * Reserva legal (20% de T) é à parte. Só depois das vias se coloca o polígono A.
+   * Área útil = gleba − APP − RL: vai para vias e lotes. Não se cria polígono laranja vazio.
    */
   const baseExclusions = appRings.length > 0 || rlRings.length > 0 ? [...appRings, ...rlRings] : extraReservas;
   const remainingUrban = subtractRingsFromHost(ring, baseExclusions, origin);
   const areaUrbanizavelM2 = totalPolysAreaM2(remainingUrban);
-  const areaUtilOrcamentoM2 = areaGlebaM2 * (percentAreaUtil / 100);
-  const placeAnchors =
-    rlRings.length > 0 ? rlRings : params.reservaLegal == null && extraReservas.length > 0 ? extraReservas : [];
+  const areaUtilOrcamentoM2 = areaUrbanizavelM2;
   let areaUtilPolys: Position[][][] = [];
-  let areaUtilAlvoM2 = 0;
+  let areaUtilAlvoM2 = areaUtilOrcamentoM2;
   let areaViasM2 = 0;
   const leftoverScraps: Position[][] = [];
   const axisNetwork = Boolean(usarEixosComoRede) && (eixosExistentes?.length ?? 0) > 0;
   const existing = bufferExistingStreetAxes(ring, eixosExistentes ?? [], larguraViaM);
+  const existingEdges =
+    markedSides.length > 0 ? markedSides : viasExistentesExtremidades ? ringEdges(ring) : [];
+  const outsideStreets = generateExistingEdgeStreets(ring, existingEdges, existW);
   let vias: Position[][][] = [];
   const eixos: Position[][] = [];
   if (axisNetwork) {
@@ -3224,11 +4634,6 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
       if (eixoRua) eixos.push(...existing.eixos);
     }
   }
-  if (eixoRua) {
-    for (const edge of markedSides) {
-      if (edge[0] && edge[1] && planarLength(edge[0], edge[1]) >= 1) eixos.push([edge[0], edge[1]]);
-    }
-  }
   if (obstaclePolys.length > 0) {
     vias = subtractObstaclesFromPolys(vias, obstaclePolys, origin);
     if (eixoRua) {
@@ -3245,7 +4650,15 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
       const outer = inner[0];
       if (!outer) continue;
       const split = splitByMedidas
-        ? splitParcelByDimensions(outer, larguraQuadraM, profundidadeBlocoM, larguraViaM, azimuthDeg, origin)
+        ? splitParcelByDimensions(
+            outer,
+            larguraQuadraM,
+            profundidadeBlocoM,
+            larguraViaM,
+            azimuthDeg,
+            origin,
+            skipPerimeter,
+          )
         : splitParcelByTargetArea(outer, areaQuadraM2, larguraViaM, azimuthDeg, origin);
       vias = [...vias, ...split.vias];
       if (eixoRua) eixos.push(...split.eixos);
@@ -3261,39 +4674,38 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
       }
     }
     quadrasRings = blocks.length > 0 ? blocks : leftover;
+    const refined = seedInternalStreetsInBlocks(
+      quadrasRings,
+      azimuthDeg,
+      larguraViaM,
+      profundidadeQuadraM,
+      origin,
+    );
+    if (refined.vias.length > 0) {
+      vias = [...vias, ...refined.vias];
+      if (eixoRua) eixos.push(...refined.eixos);
+      quadrasRings = refined.quadras;
+      if (obstaclePolys.length > 0) {
+        vias = subtractObstaclesFromPolys(vias, obstaclePolys, origin);
+        if (eixoRua) {
+          const clipped = clipAxesOutsideObstacles(eixos, obstaclePolys, origin);
+          eixos.splice(0, eixos.length, ...clipped);
+        }
+        quadrasRings = subtractObstaclesFromPolys(quadrasRings, obstaclePolys, origin);
+      }
+    }
   } else {
     quadrasRings = subtractStreets(ring, [...vias, ...obstaclePolys]);
   }
-  areaViasM2 = totalPolysAreaM2(vias);
-  areaUtilAlvoM2 = areaUtilFromStreetsM2(areaGlebaM2, areaViasM2, percentAreaUtil);
-  if (areaUtilAlvoM2 >= SLIVER_M2) {
-    const remainingForUtil = subtractObstaclesFromPolys(
-      remainingUrban.length > 0 ? remainingUrban : [[closeRing(ring)]],
-      vias,
-      origin,
-    );
-    areaUtilPolys = placeAreaUtilPolys(remainingForUtil, placeAnchors, areaUtilAlvoM2, origin, cantoAreaUtil);
-    if (placeAnchors.length > 0 && areaUtilPolys.length > 0) {
-      const glued = keepContiguousToAnchors(areaUtilPolys, placeAnchors);
-      if (glued.length > 0) areaUtilPolys = glued;
-    }
-    if (areaUtilPolys.length > 0) {
-      obstaclePolys.push(...areaUtilPolys);
-      vias = subtractObstaclesFromPolys(vias, areaUtilPolys, origin);
-      if (eixoRua) {
-        const clipped = clipAxesOutsideObstacles(eixos, areaUtilPolys, origin);
-        eixos.splice(0, eixos.length, ...clipped);
-      }
-      quadrasRings = subtractObstaclesFromPolys(quadrasRings, areaUtilPolys, origin);
-    }
-  }
+  areaViasM2 = unionPolysAreaM2(vias, origin);
   const skipAll =
     markedSides.length === 0 && viasExistentesExtremidades
       ? true
-      : markedSides.length > 0 && allPerimeterSkip(skipPerimeter as PerimeterSkip);
+      : markedSides.length > 0 && allPerimeterSkip(resolvePerimeterSkip(skipPerimeter));
   const streetRings = [
     ...streetOuterRings(vias),
-    ...markedEdgesAsStreetRings(markedSides),
+    ...streetOuterRings(outsideStreets.vias),
+    ...markedEdgesAsStreetRings(existingEdges),
     ...(skipAll ? [closeRing(ring)] : []),
   ];
 
@@ -3320,10 +4732,11 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
           row,
           rowFront.azimuthDeg,
           testadaMinimaM,
-          0,
+          areaMinimaLoteM2,
           streetRings,
           origin,
           rowCentroid,
+          lotOpts,
         )) {
           slices.push({ coords, az: rowFront.azimuthDeg });
         }
@@ -3341,44 +4754,39 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
         rows.length > 1
           ? detectRowFrontage(rem, streetRings, frontage.azimuthDeg, blockCentroid)
           : frontage;
-      let extraLots: Position[][][] = [];
-      try {
-        extraLots = subdivideQuadraEmLotes(
-          rem,
-          remFront.azimuthDeg,
-          testadaMinimaM,
-          0,
-          streetRings,
-          origin,
-          blockCentroid,
-        );
-      } catch {
-        leftoverScraps.push(closeRing(rem));
-        continue;
+      const absorbed = absorbScrapAsLots(
+        rem,
+        remFront.azimuthDeg,
+        testadaMinimaM,
+        profundidadeQuadraM,
+        areaMinimaLoteM2,
+        streetRings,
+        origin,
+        blockCentroid,
+        lotOpts,
+      );
+      for (const coords of absorbed.lots) {
+        slices.push({ coords, az: remFront.azimuthDeg });
       }
-      const standard: Position[][][] = [];
-      for (const coords of extraLots) {
-        if (
-          looksStandardLot(
-            coords,
-            testadaMinimaM,
-            profundidadeQuadraM,
-            streetRings,
-            remFront.azimuthDeg,
-            blockCentroid,
-          )
-        ) {
-          standard.push(coords);
-          slices.push({ coords, az: remFront.azimuthDeg });
-        }
-      }
-      const scraps = leftoverAfterLots(rem, standard, origin);
-      leftoverScraps.push(...(scraps.length > 0 ? scraps : standard.length === 0 ? [closeRing(rem)] : []));
     }
-    if (slices.length === 0) continue;
+    if (slices.length > 0) {
+      const packed = closeHostWithLots(
+        outer,
+        slices.map((s) => s.coords),
+        origin,
+      );
+      leftoverScraps.push(...leftoverAfterLots(outer, packed, origin).map((r) => closeRing(r)));
+      slices.length = 0;
+      for (const coords of packed) slices.push({ coords, az: frontage.azimuthDeg });
+    }
+    if (slices.length === 0) {
+      leftoverScraps.push(closeRing(dropClosing(outer)));
+      continue;
+    }
     const qName = quadraLabel(quadraIndex, prefixoQuadra);
     quadraIndex += 1;
-    slices.forEach((slice, i) => {
+    const ordered = sortLotsForNumbering(slices, frontage.azimuthDeg, (slice) => slice.coords[0] ?? []);
+    ordered.forEach((slice, i) => {
       const closed = slice.coords.map(closeRing);
       sharpRings.push(closed);
       let finalCoords = closed;
@@ -3390,6 +4798,14 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
         }
       }
       const area = planarAreaM2(finalCoords[0]);
+      if (areaMinimaLoteM2 > 0 && area + 0.5 < areaMinimaLoteM2 * 0.95) {
+        leftoverScraps.push(closeRing(closed[0] ?? []));
+        return;
+      }
+      if (areaMinimaLoteM2 > 0 && area > lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaLoteM2) + 0.5) {
+        leftoverScraps.push(closeRing(closed[0] ?? []));
+        return;
+      }
       const testada = lotTestadaM(
         closed[0],
         slice.az,
@@ -3401,8 +4817,8 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
         area_m2: area,
         testada_m: testada,
         quadra: qName,
-        numero: lotNumero(i),
-        remainder: slice.remainder,
+        numero: "",
+        remainder: false,
       });
     });
   }
@@ -3417,40 +4833,42 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
   }
 
   if (leftoverScraps.length > 0) {
-    const scrapPolys = leftoverScraps
-      .filter((r) => dropClosing(r).length >= 3 && planarAreaM2(r) >= REMAINDER_MIN_M2)
-      .map((r) => [closeRing(r)]);
-    if (scrapPolys.length > 0) {
-      if (placeAnchors.length > 0) {
-        const touchingUtil: Position[][][] = [];
-        let extraM2 = 0;
-        for (const scrap of scrapPolys) {
-          const nextToUtil = areaUtilPolys.some((u) => ringsShareBoundary(scrap[0] ?? [], u[0] ?? []));
-          if (nextToUtil) touchingUtil.push(scrap);
-          else extraM2 += planarAreaM2(scrap[0] ?? []);
-        }
-        areaUtilPolys = mergePolys(areaUtilPolys, touchingUtil, origin);
-        if (extraM2 >= REMAINDER_MIN_M2) {
-          const remAfter = subtractObstaclesFromPolys(remainingUrban, [...vias, ...areaUtilPolys], origin);
-          const remU = unionPolygons(remAfter, origin);
-          if (remU) {
-            const grown =
-              areaUtilPolys.length > 0
-                ? growBufferToArea(
-                    areaUtilPolys.map((poly) => poly[0] ?? []),
-                    remU,
-                    extraM2,
-                    origin,
-                  )
-                : placeAreaUtilPolys(remAfter, placeAnchors, extraM2, origin, cantoAreaUtil);
-            areaUtilPolys = mergePolys(areaUtilPolys, grown, origin);
-          }
-        }
-        const glued = keepContiguousToAnchors(areaUtilPolys, placeAnchors);
-        if (glued.length > 0) areaUtilPolys = glued;
-      } else {
-        areaUtilPolys = mergePolys(areaUtilPolys, scrapPolys, origin);
-      }
+    const maxArea = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaLoteM2);
+    const scrapRings = leftoverScraps.filter(
+      (r) =>
+        dropClosing(r).length >= 3 &&
+        planarAreaM2(r) >= REMAINDER_MIN_M2 &&
+        !areaUtilPolys.some((u) => polygonInteriorOverlapM2(r, u[0] ?? []) > 1) &&
+        !exclusionRings.some((ex) => polygonInteriorOverlapM2(r, ex) > 1),
+    );
+    const pushComplementar = (coords: Position[][], hint: Position[]) => {
+      const outerLot = coords[0] ?? [];
+      const area = planarAreaM2(outerLot);
+      if (areaMinimaLoteM2 > 0 && area + 0.5 < areaMinimaLoteM2) return;
+      if (Number.isFinite(maxArea) && area > maxArea + 0.5) return;
+      const qName = nearestQuadraName(hint.length ? hint : outerLot, lotes) ?? quadraLabel(quadraIndex, prefixoQuadra);
+      if (!lotes.some((l) => l.quadra === qName)) quadraIndex += 1;
+      lotes.push({
+        coordinates: coords.map(closeRing),
+        area_m2: area,
+        testada_m: lotTestadaM(outerLot, azimuthDeg, streetRings),
+        quadra: qName,
+        numero: "",
+        remainder: false,
+      });
+    };
+    const filled = complementarLoteamento(scrapRings, {
+      azimuthDeg,
+      testadaMinimaM,
+      profundidadeQuadraM,
+      areaMinimaM2: areaMinimaLoteM2,
+      streetRings,
+      origin,
+      percentualEsquina,
+    });
+    for (const coords of filled.lots) pushComplementar(coords, coords[0] ?? []);
+    for (const rem of filled.remanescente) {
+      mergeScrapIntoLotes(rem, lotes, origin, maxArea);
     }
   }
 
@@ -3466,6 +4884,7 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
       for (const coords of leftover) {
         const area = planarAreaM2(coords[0] ?? []);
         if (area < SLIVER_M2) continue;
+        if (areaMinimaLoteM2 > 0 && area + 0.5 < areaMinimaLoteM2 * 0.95) continue;
         kept.push({
           ...lote,
           coordinates: coords.map(closeRing),
@@ -3482,8 +4901,279 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
     }
   }
 
+  if (areaMinimaLoteM2 > 0) {
+    const floor = areaMinimaLoteM2 * 0.95;
+    const maxArea = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaLoteM2);
+    const keptMin: LoteResult[] = [];
+    for (const lote of lotes) {
+      if (lote.area_m2 + 0.5 < floor) continue;
+      if (lote.area_m2 > maxArea + 0.5) {
+        const absorbed = absorbScrapAsLots(
+          lote.coordinates[0] ?? [],
+          azimuthDeg,
+          testadaMinimaM,
+          profundidadeQuadraM,
+          areaMinimaLoteM2,
+          streetRings,
+          origin,
+          originOf(lote.coordinates[0] ?? []),
+          lotOpts,
+        );
+        for (const coords of absorbed.lots) {
+          const outerLot = coords[0] ?? [];
+          const area = planarAreaM2(outerLot);
+          if (area + 0.5 < floor || area > maxArea + 0.5) continue;
+          keptMin.push({
+            ...lote,
+            coordinates: coords.map(closeRing),
+            area_m2: area,
+            testada_m: lotTestadaM(outerLot, azimuthDeg, streetRings),
+            remainder: false,
+          });
+        }
+        for (const rem of absorbed.remanescente) {
+          mergeScrapIntoLotes(rem, keptMin, origin, maxArea);
+        }
+        continue;
+      }
+      keptMin.push(lote);
+    }
+    lotes.length = 0;
+    lotes.push(...keptMin);
+  }
+
+  if (punchObstacles.length > 0) {
+    const maxArea = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaLoteM2);
+    const keptPunch: LoteResult[] = [];
+    for (const lote of lotes) {
+      const leftover = subtractObstaclesFromPolys([lote.coordinates], punchObstacles, origin);
+      for (const coords of leftover) {
+        const area = planarAreaM2(coords[0] ?? []);
+        if (area < SLIVER_M2) continue;
+        if (areaMinimaLoteM2 > 0 && area + 0.5 < areaMinimaLoteM2 * 0.95) continue;
+        if (Number.isFinite(maxArea) && area > maxArea + 0.5) continue;
+        keptPunch.push({
+          ...lote,
+          coordinates: coords.map(closeRing),
+          area_m2: area,
+        });
+      }
+    }
+    lotes.length = 0;
+    lotes.push(...keptPunch);
+  }
+
+  if (punchObstacles.length > 0) {
+    const clean: LoteResult[] = [];
+    for (const lote of lotes) {
+      const overlaps = punchObstacles.some(
+        (obs) => polygonInteriorOverlapM2(lote.coordinates[0] ?? [], obs[0] ?? []) > 1.5,
+      );
+      if (overlaps) continue;
+      clean.push(lote);
+    }
+    lotes.length = 0;
+    lotes.push(...clean);
+  }
+
+  const byQuadra = new Map<string, LoteResult[]>();
+  for (const lote of lotes) {
+    const list = byQuadra.get(lote.quadra) ?? [];
+    list.push(lote);
+    byQuadra.set(lote.quadra, list);
+  }
+  for (const group of byQuadra.values()) {
+    const ordered = sortLotsForNumbering(group, azimuthDeg, (lote) => lote.coordinates[0] ?? []);
+    ordered.forEach((lote, i) => {
+      lote.numero = lotNumero(i);
+      lote.remainder = false;
+    });
+  }
+
   if (lotes.length === 0) {
     throw new LoteamentoError("Gleba pequena demais para caber sequer 1 lote com os parâmetros dados.");
+  }
+
+  const lotSpec: LotValidationSpec = {
+    minAreaM2: areaMinimaLoteM2 * 0.95,
+    targetAreaM2: lotTargetAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaLoteM2),
+    minDepthM: profundidadeQuadraM,
+    maxDepthM: profundidadeQuadraM,
+    minFrontageM: testadaMinimaM,
+  };
+  const maxAreaFinal = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaLoteM2);
+  let report = buildLoteamentoReport(lotes, [], streetRings, azimuthDeg, lotSpec);
+  if (report.invalidLots.length > 0) {
+    const rescued: LoteResult[] = [];
+    for (const lote of lotes) {
+      if (lote.area_m2 <= maxAreaFinal + 0.5 && (areaMinimaLoteM2 <= 0 || lote.area_m2 + 0.5 >= areaMinimaLoteM2 * 0.95)) {
+        rescued.push(lote);
+        continue;
+      }
+      const absorbed = absorbScrapAsLots(
+        lote.coordinates[0] ?? [],
+        azimuthDeg,
+        testadaMinimaM,
+        profundidadeQuadraM,
+        areaMinimaLoteM2,
+        streetRings,
+        origin,
+        originOf(lote.coordinates[0] ?? []),
+        lotOpts,
+      );
+      for (const coords of absorbed.lots) {
+        const outerLot = coords[0] ?? [];
+        const area = planarAreaM2(outerLot);
+        if (area + 0.5 < areaMinimaLoteM2 * 0.95 || area > maxAreaFinal + 0.5) continue;
+        rescued.push({
+          ...lote,
+          coordinates: coords.map(closeRing),
+          area_m2: area,
+          testada_m: lotTestadaM(outerLot, azimuthDeg, streetRings),
+          remainder: false,
+        });
+      }
+      for (const rem of absorbed.remanescente) {
+        mergeScrapIntoLotes(rem, rescued, origin, maxAreaFinal);
+      }
+    }
+    lotes.length = 0;
+    lotes.push(...rescued);
+    const regroup = new Map<string, LoteResult[]>();
+    for (const lote of lotes) {
+      const list = regroup.get(lote.quadra) ?? [];
+      list.push(lote);
+      regroup.set(lote.quadra, list);
+    }
+    for (const group of regroup.values()) {
+      const ordered = sortLotsForNumbering(group, azimuthDeg, (lote) => lote.coordinates[0] ?? []);
+      ordered.forEach((lote, i) => {
+        lote.numero = lotNumero(i);
+        lote.remainder = false;
+      });
+    }
+    if (lotes.length === 0) {
+      throw new LoteamentoError("Gleba pequena demais para caber sequer 1 lote com os parâmetros dados.");
+    }
+    report = buildLoteamentoReport(lotes, [], streetRings, azimuthDeg, lotSpec);
+    if (report.invalidLots.length > 0) {
+      const valid: LoteResult[] = [];
+      for (const lote of lotes) {
+        if (lote.area_m2 > maxAreaFinal + 0.5) continue;
+        if (areaMinimaLoteM2 > 0 && lote.area_m2 + 0.5 < areaMinimaLoteM2 * 0.95) continue;
+        valid.push(lote);
+      }
+      lotes.length = 0;
+      lotes.push(...valid);
+      if (lotes.length === 0) {
+        throw new LoteamentoError(
+          "Não foi encontrada uma configuração válida para preencher 100% da área loteável.",
+        );
+      }
+      const regroup2 = new Map<string, LoteResult[]>();
+      for (const lote of lotes) {
+        const list = regroup2.get(lote.quadra) ?? [];
+        list.push(lote);
+        regroup2.set(lote.quadra, list);
+      }
+      for (const group of regroup2.values()) {
+        const ordered = sortLotsForNumbering(group, azimuthDeg, (l) => l.coordinates[0] ?? []);
+        ordered.forEach((lote, i) => {
+          lote.numero = lotNumero(i);
+        });
+      }
+      report = buildLoteamentoReport(lotes, [], streetRings, azimuthDeg, lotSpec);
+    }
+  }
+
+  const remanescentePolys: Position[][][] = [];
+  {
+    const extraLots: LoteResult[] = [];
+    const complementarParams: ComplementarLoteamentoParams = {
+      azimuthDeg,
+      testadaMinimaM,
+      profundidadeQuadraM,
+      areaMinimaM2: areaMinimaLoteM2,
+      streetRings,
+      origin,
+      percentualEsquina,
+    };
+    const hosts = quadrasRings.length > 0 ? quadrasRings : remainingUrban.length > 0 ? remainingUrban : [[closeRing(ring)]];
+    for (const host of hosts) {
+      const outer = host[0];
+      if (!outer || dropClosing(outer).length < 3) continue;
+      if (areaUtilPolys.some((u) => polygonInteriorOverlapM2(outer, u[0] ?? []) > planarAreaM2(outer) * 0.8)) {
+        continue;
+      }
+      const leftover = leftoverAfterLots(
+        outer,
+        lotes.map((l) => l.coordinates),
+        origin,
+      ).filter(
+        (rem) =>
+          !areaUtilPolys.some((u) => polygonInteriorOverlapM2(rem, u[0] ?? []) > 1) &&
+          !exclusionRings.some((ex) => polygonInteriorOverlapM2(rem, ex) > 1),
+      );
+      const filled = complementarLoteamento(leftover, {
+        ...complementarParams,
+        blockCentroid: originOf(outer),
+      });
+      for (const coords of filled.lots) {
+        const outerLot = coords[0] ?? [];
+        const area = planarAreaM2(outerLot);
+        if (areaMinimaLoteM2 > 0 && area + 0.5 < areaMinimaLoteM2) continue;
+        const maxAreaFinal = lotMaxAllowedAreaM2(testadaMinimaM, profundidadeQuadraM, areaMinimaLoteM2);
+        if (Number.isFinite(maxAreaFinal) && area > maxAreaFinal + 0.5) continue;
+        if (lotes.some((l) => polygonInteriorOverlapM2(outerLot, l.coordinates[0] ?? []) > 1)) continue;
+        const qName = nearestQuadraName(outerLot, lotes) ?? quadraLabel(quadraIndex, prefixoQuadra);
+        if (!lotes.some((l) => l.quadra === qName) && !extraLots.some((l) => l.quadra === qName)) quadraIndex += 1;
+        extraLots.push({
+          coordinates: coords.map(closeRing),
+          area_m2: area,
+          testada_m: lotTestadaM(outerLot, azimuthDeg, streetRings),
+          quadra: qName,
+          numero: "",
+          remainder: false,
+        });
+      }
+      for (const rem of filled.remanescente) {
+        if (planarAreaM2(rem) < REMAINDER_MIN_M2) continue;
+        remanescentePolys.push([closeRing(rem)]);
+      }
+    }
+    if (extraLots.length > 0) {
+      lotes.push(...extraLots);
+    }
+    const equity = otimizarEquidadePorQuadras({
+      lotes,
+      hosts: quadrasRings,
+      streetRings,
+      origin,
+      testadaMinimaM,
+      profundidadeM: profundidadeQuadraM,
+      areaMinimaM2: areaMinimaLoteM2,
+      percentualEsquina,
+      forbiddenRings: [
+        ...exclusionRings,
+        ...areaUtilPolys.map((poly) => poly[0] ?? []),
+      ],
+    });
+    lotes.length = 0;
+    lotes.push(...equity.lotes);
+    const regroup = new Map<string, LoteResult[]>();
+    for (const lote of lotes) {
+      const list = regroup.get(lote.quadra) ?? [];
+      list.push(lote);
+      regroup.set(lote.quadra, list);
+    }
+    for (const group of regroup.values()) {
+      const ordered = sortLotsForNumbering(group, azimuthDeg, (lote) => lote.coordinates[0] ?? []);
+      ordered.forEach((lote, i) => {
+        lote.numero = lotNumero(i);
+        lote.remainder = false;
+      });
+    }
+    report = buildLoteamentoReport(lotes, remanescentePolys, streetRings, azimuthDeg, lotSpec);
   }
 
   const calcadas = generateCalcadas(
@@ -3495,9 +5185,13 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
   const calcadasOut =
     punchObstacles.length > 0 ? subtractObstaclesFromPolys(calcadas, punchObstacles, origin) : calcadas;
 
+  const areaRuasFinalM2 = unionPolysAreaM2(vias, origin);
+  if (outsideStreets.vias.length > 0) {
+    vias = [...vias, ...outsideStreets.vias];
+    if (eixoRua) eixos.push(...outsideStreets.eixos);
+  }
   const viasClosed = vias.map((poly) => poly.map(closeRing));
   const areaUtilClosed = areaUtilPolys.map((poly) => poly.map(closeRing));
-  const areaRuasFinalM2 = totalPolysAreaM2(viasClosed);
   return {
     vias: viasClosed,
     lotes,
@@ -3507,11 +5201,14 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
     quadras: Math.max(quadraIndex, quadrasRings.length),
     areaGlebaM2,
     areaUtil: areaUtilClosed,
-    areaUtilAlvoM2: areaUtilFromStreetsM2(areaGlebaM2, areaRuasFinalM2, percentAreaUtil),
+    areaUtilAlvoM2: areaUtilOrcamentoM2,
     areaUtilOrcamentoM2,
     areaUtilM2: totalPolysAreaM2(areaUtilClosed),
     areaViasM2: areaRuasFinalM2,
     areaUrbanizavelM2,
+    faixaDominio: generatedFaixa.map((poly) => poly.map(closeRing)),
+    remanescente: remanescentePolys.map((poly) => poly.map(closeRing)),
+    report,
   };
 }
 
@@ -3669,7 +5366,7 @@ export function reservarRetanguloNoCanto(
 ): { reserved: Position[]; reservedM2: number } {
   const ring = dropClosing(quadraCoords);
   if (ring.length < 3 || !(alvoM2 > 0)) {
-    throw new LoteamentoError("Informe um polígono e uma área alvo válidos para a reserva legal.");
+    throw new LoteamentoError("Informe um polígono e uma área alvo válidos para a área verde.");
   }
   const total = planarAreaM2(ring);
   const minKeep = Math.min(SLIVER_M2, Math.max(total * 1e-6, Number.EPSILON));
@@ -3685,7 +5382,7 @@ export function reservarRetanguloNoCanto(
   const spanS = b.sMax - b.sMin;
   const spanD = b.dMax - b.dMin;
   if (!(spanS > 0) || !(spanD > 0)) {
-    throw new LoteamentoError("A gleba é pequena demais para posicionar a reserva legal.");
+    throw new LoteamentoError("A gleba é pequena demais para posicionar a área verde.");
   }
 
   const corner = pickObbCorner(canto, b, origin, dirS, dirD);
@@ -3757,7 +5454,7 @@ export function reservarRetanguloNoCanto(
     /* cai no erro abaixo */
   }
 
-  throw new LoteamentoError("Não foi possível posicionar a reserva legal nesse canto da gleba.");
+  throw new LoteamentoError("Não foi possível posicionar a área verde nesse canto da gleba.");
 }
 
 function pickReservaEdge(ring: Position[], lado: ReservaAreaLado): { a: Position; b: Position } {

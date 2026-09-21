@@ -10,8 +10,7 @@ export type ModuleId =
   | "insar"
   | "lidar"
   | "digital-twin"
-  | "relatorios"
-  | "rtk";
+  | "relatorios";
 
 export type ModuleNavItem = {
   href: string;
@@ -26,9 +25,9 @@ export type PlatformModuleDef = {
   id: ModuleId;
   label: string;
   /** Chave em EmpresaModulo / gestão empresa */
-  empresaKey?: ModuloPlataformaChave | "digital_twin" | "relatorios" | "rtk";
+  empresaKey?: ModuloPlataformaChave | "digital_twin" | "relatorios";
   /** Chave em modulos da obra (ObraModulo) */
-  obraKey?: ModuloProjetoChave | "insar" | "lidar" | "digital_twin" | "rtk";
+  obraKey?: ModuloProjetoChave | "insar" | "lidar" | "digital_twin";
   nav: ModuleNavItem[];
   /** Rotas onde o bundle Cesium pode ser carregado */
   cesiumRoutes?: string[];

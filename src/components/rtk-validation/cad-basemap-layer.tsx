@@ -26,10 +26,39 @@ import {
   type SigefOverlayState,
 } from "@/lib/cad-map/overlay-sources";
 
-const CadMapboxBasemap = dynamic(
-  () => import("./cad-mapbox-basemap").then((m) => ({ default: m.CadMapboxBasemap })),
-  { ssr: false },
-);
+function CadMapboxChunkFailed() {
+  const t = useTranslations("rtkCad.basemap");
+  return (
+    <div className="pointer-events-none absolute inset-0 z-[1] flex items-end justify-center pb-8">
+      <p className="rounded-md bg-black/70 px-3 py-1.5 text-[11px] text-amber-100">
+        {t("satelliteChunkFailed")}
+      </p>
+    </div>
+  );
+}
+
+async function loadCadMapboxBasemap() {
+  const load = () =>
+    import(
+      /* webpackChunkName: "cad-mapbox-basemap" */
+      "./cad-mapbox-basemap"
+    ).then((m) => ({ default: m.CadMapboxBasemap }));
+  try {
+    return await load();
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    try {
+      return await load();
+    } catch {
+      return { default: CadMapboxChunkFailed };
+    }
+  }
+}
+
+const CadMapboxBasemap = dynamic(loadCadMapboxBasemap, {
+  ssr: false,
+  loading: () => null,
+});
 
 export type { AnmSigmineLayerKey, AnmSigmineOverlayState, SigefLayerKey, SigefOverlayState };
 

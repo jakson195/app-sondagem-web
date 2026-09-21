@@ -406,19 +406,18 @@ export function AppShell({
         <main
           className={`dg-grid-bg flex-1 print:bg-white print:px-2 print:py-2 ${
             isCadWorkspace
-              ? "flex min-h-0 flex-col overflow-hidden px-4 py-3"
+              ? "flex min-h-0 flex-col overflow-hidden p-0"
               : "px-4 py-6 sm:px-6 lg:px-8"
           }`}
         >
-          {!isLoteamentoProductMode() && (
-            <div className={isCadWorkspace ? "cad-app-chrome shrink-0" : "cad-app-chrome"}>
+          {!isLoteamentoProductMode() && !isCadWorkspace && (
+            <div className="cad-app-chrome">
               <GlobalQuickActions
                 selectedObraId={selectedObraId}
                 setObraContext={setObraContext}
                 pathname={pathname}
                 search={searchParams?.toString() ?? ""}
                 isPlatformAdmin={isPlatformAdmin}
-                compact={isCadWorkspace}
               />
             </div>
           )}

@@ -79,6 +79,22 @@ export type CadAiAction =
   | "secao_spt"
   | "poco_monitoramento"
   | "selecionar"
+  | "selecionar_objetos"
+  | "consultar_projeto"
+  | "consultar_quadras"
+  | "consultar_quadra"
+  | "consultar_lotes"
+  | "consultar_lote"
+  | "calcular_testada"
+  | "calcular_area_remanescente"
+  | "otimizar_quadra"
+  | "ajustar_lote"
+  | "redistribuir_lotes"
+  | "validar_loteamento"
+  | "aplicar_alteracao"
+  | "desfazer_alteracao"
+  | "zoom_objeto"
+  | "renomear_quadra"
   | "desconhecido";
 
 export type CadImportFormat = "csv" | "txt" | "dxf" | "shp" | "kml" | "kmz" | "geojson";
@@ -143,8 +159,14 @@ export interface CadAiCommand {
   raio_esquina_m?: number;
   /** Não gera rua nova na borda da gleba (via pública já existente). */
   vias_existentes_extremidades?: boolean;
+  /** Largura (m) da via gerada nos lados com via existente. Omitir = largura_via_m. */
+  largura_via_existente_m?: number;
   /** Índices das arestas da gleba com via já existente (0 = primeiro lado). */
   lados_aresta?: number[];
+  /** Índices das arestas voltadas à rodovia (faixa de domínio para dentro da gleba). */
+  lados_faixa_dominio?: number[];
+  /** Largura (m) da faixa de domínio recuada para dentro da gleba. */
+  largura_faixa_dominio_m?: number;
   /** Ferramenta do canvas — ativar_ferramenta. */
   ferramenta?: string;
   /** Nome ou id da camada — trocar_camada. */
@@ -171,6 +193,31 @@ export interface CadAiCommand {
   equidistancia_m?: number;
   /** Cota de referência da volumetria (alias de z). */
   cota_referencia_m?: number;
+  /** Quadra alvo do assistente (ex.: "G" ou "Quadra G"). */
+  quadra?: string;
+  /** Lote alvo (ex.: "G-01"). */
+  lote?: string;
+  /** Vários lotes (seleção / filtro). */
+  lotes?: string[];
+  /** Área alvo de cada lote (m²) — otimizar_quadra / ajustar_lote. */
+  area_alvo_m2?: number;
+  /** Área máxima de filtro ou validação (m²). */
+  area_maxima_m2?: number;
+  preservar_ruas?: boolean;
+  preservar_limites?: boolean;
+  minimizar_remanescente?: boolean;
+  lotes_esquina_maiores?: boolean;
+  /** Pedido de lotes com áreas o mais iguais possível. A geometria continua no motor CAD. */
+  objetivo?: "maximizar_equidade";
+  excecoes?: Array<{ lote: string; area_alvo_m2: number }>;
+  filtro_area_max_m2?: number;
+  filtro_area_min_m2?: number;
+  /** Novos nomes das quadras, na ordem. */
+  nomes?: string[];
+  /** Pares de renomeação de quadra. */
+  mapeamentos?: Array<{ de: string; para: string }>;
+  /** Escopo da operação: um lote, a quadra, ou o lote + vizinhos autorizados. */
+  scope?: "single_lot" | "quad" | "local_redistribution";
 }
 
 export interface CadAiHistoryMessage {
@@ -221,6 +268,16 @@ export interface CadAiProjectContext {
   };
   elevationPointCount: number;
   pendingProfileStart?: string | null;
+  /** Resumo do loteamento (sem geometria bruta). */
+  loteamento?: {
+    projeto: { nome: string; unidade: string; sistemaCoordenadas: string };
+    quadras: Array<{ id: string; area: number; quantidadeLotes: number; areaMedia: number }>;
+    lotes: Array<{ id: string; quadra: string; area: number; testada: number; profundidade: number }>;
+    ruas: Array<{ id: string; nome: string; area: number }>;
+    areasInstitucionais: Array<{ id: string; nome: string; area: number }>;
+    areasVerdes: Array<{ id: string; nome: string; area: number }>;
+    remanescenteM2: number;
+  };
 }
 
 export interface CadAiInterpretRequest {
@@ -253,6 +310,7 @@ export interface CadCommandExecutionResult {
   selectedId?: string | null;
   message: string;
   sideEffects?: CadAiSideEffect[];
+  redistributionOffer?: { lote: string; areaAlvo: number };
 }
 
 export interface CadCommandExecutorMeta {

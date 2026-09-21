@@ -42,6 +42,17 @@ const FUNCAO_ALIASES: Record<string, string> = {
   calcularVolume: "volume_corte",
   calcularDeclividade: "mapa_declividade",
   selecionarObjetos: "selecionar",
+  otimizarQuadra: "otimizar_quadra",
+  ajustarLote: "ajustar_lote",
+  ajustarLotes: "otimizar_quadra",
+  validarLoteamento: "validar_loteamento",
+  consultarQuadra: "consultar_quadra",
+  desfazerAlteracao: "desfazer_alteracao",
+  alterarAreaVerde: "reservar_area",
+  alterarAreaInstitucional: "reservar_area",
+  reprojetarLoteamento: "otimizar_quadra",
+  renomearQuadra: "renomear_quadra",
+  nomearQuadras: "renomear_quadra",
   identificarPonto: "mostrar_coordenadas",
   ligarPontos: "criar_polilinha",
   numerarVertices: "renumerar_pontos",
@@ -159,6 +170,59 @@ export function parseOpenAiToolCalls(toolCalls: OpenAiToolCallLike[]): CadAiComm
     }
     return rawToCommand({ ...args, acao: name, funcao: name });
   });
+}
+
+export type OpenAiResponseOutputLike = {
+  type?: string;
+  name?: string;
+  arguments?: string;
+  content?: unknown;
+  role?: string;
+};
+
+/** Converte o `output` da Responses API em comandos CAD + texto. */
+export function parseOpenAiResponsesOutput(output: OpenAiResponseOutputLike[] | undefined, outputText?: string): {
+  commands: CadAiCommand[];
+  text: string;
+} {
+  const texts: string[] = [];
+  if (outputText?.trim()) texts.push(outputText.trim());
+  const toolCalls: OpenAiToolCallLike[] = [];
+
+  for (const item of output ?? []) {
+    if (item.type === "function_call" && item.name) {
+      toolCalls.push({
+        function: {
+          name: item.name,
+          arguments: typeof item.arguments === "string" ? item.arguments : "{}",
+        },
+      });
+      continue;
+    }
+    if (item.type === "message") {
+      const content = item.content;
+      if (typeof content === "string" && content.trim()) texts.push(content.trim());
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part && typeof part === "object") {
+            const rec = part as { type?: string; text?: string };
+            if ((rec.type === "output_text" || rec.type === "text") && rec.text?.trim()) {
+              texts.push(rec.text.trim());
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const text = texts.join("\n").trim();
+  if (toolCalls.length) {
+    return { commands: parseOpenAiToolCalls(toolCalls), text };
+  }
+  if (text && /[{[]/.test(text)) {
+    return { commands: parseCadAiResponse(text), text };
+  }
+  return { commands: [], text };
 }
 
 /** Executa uma sequência de comandos CAD, propagando estado entre eles. */

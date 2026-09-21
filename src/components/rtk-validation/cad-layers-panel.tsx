@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import type { CadLayer } from "@/lib/rtk-validation/cad/types";
 import { isUserLayer } from "@/lib/rtk-validation/cad/layer-styles";
+import { cadLayerPublicName } from "@/lib/rtk-validation/cad/loteamento-tools";
 
 type CadLayersPanelProps = {
   layers: CadLayer[];
@@ -134,7 +135,7 @@ export function CadLayersPanel({
                     className="truncate text-left font-mono text-xs text-[#111827] hover:underline"
                     title={t("setActive")}
                   >
-                    {layer.name}
+                    {cadLayerPublicName(layer)}
                   </button>
                 </label>
                 <span className="shrink-0 text-[10px] text-[#9ca3af]">
@@ -149,7 +150,7 @@ export function CadLayersPanel({
       {editingLayer ? (
         <div className="mt-4 space-y-3 border-t border-[#e5e7eb] pt-3">
           <p className="text-[10px] font-medium uppercase tracking-wide text-[#6b7280]">
-            {t("active")}: <span className="font-mono normal-case text-[#0f2848]">{editingLayer.name}</span>
+            {t("active")}: <span className="font-mono normal-case text-[#0f2848]">{cadLayerPublicName(editingLayer)}</span>
           </p>
 
           {canEditStyles ? (
@@ -198,6 +199,27 @@ export function CadLayersPanel({
                     {(editingLayer.textSize ?? 10).toFixed(0)}
                   </span>
                 </div>
+              </label>
+
+              <label className="block text-[10px] text-[#6b7280]">
+                {t("hatch")}
+                <select
+                  value={
+                    editingLayer.hatchPattern ??
+                    (editingLayer.id === "loteamento_lotes" ? "grass" : "none")
+                  }
+                  onChange={(e) =>
+                    onUpdateLayer(editingLayer.id, {
+                      hatchPattern: e.target.value as CadLayer["hatchPattern"],
+                    })
+                  }
+                  className="mt-0.5 w-full rounded border border-[#d1d5db] px-2 py-1 text-xs text-[#111827]"
+                >
+                  <option value="none">{t("hatchNone")}</option>
+                  <option value="grass">{t("hatchGrass")}</option>
+                  <option value="diagonal">{t("hatchDiagonal")}</option>
+                  <option value="cross">{t("hatchCross")}</option>
+                </select>
               </label>
 
               <label className="block text-[10px] text-[#6b7280]">

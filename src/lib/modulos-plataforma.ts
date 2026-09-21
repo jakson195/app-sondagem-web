@@ -10,7 +10,6 @@ export const MODULOS_PLATAFORMA = [
   "digital_twin",
   "insar",
   "lidar",
-  "rtk",
 ] as const;
 
 export type ModuloPlataformaChave = (typeof MODULOS_PLATAFORMA)[number];
@@ -31,5 +30,4 @@ export const MODULO_ROTULO: Record<ModuloPlataformaChave, string> = {
   digital_twin: "Digital Twin",
   insar: "InSAR",
   lidar: "LiDAR",
-  rtk: "GNSS / RTK",
 };

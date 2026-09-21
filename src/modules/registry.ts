@@ -8,7 +8,6 @@ import {
   Globe,
   Image,
   LayoutDashboard,
-  MapPinned,
   Mountain,
   Radar,
   Radio,
@@ -152,12 +151,6 @@ export const platformModules: PlatformModuleDef[] = [
         icon: Waves,
         parent: "digital-twin",
       },
-      {
-        href: `${DIGITAL_TWIN_BASE}/gnss-rtk`,
-        label: "GNSS RTK",
-        icon: MapPinned,
-        parent: "digital-twin",
-      },
     ],
   },
   {
@@ -171,19 +164,6 @@ export const platformModules: PlatformModuleDef[] = [
     label: "LiDAR",
     obraKey: "lidar",
     nav: [],
-  },
-  {
-    id: "rtk",
-    label: "RTK / GNSS",
-    empresaKey: "rtk",
-    obraKey: "rtk",
-    nav: [
-      {
-        href: `${DIGITAL_TWIN_BASE}/gnss-rtk`,
-        label: "📡 GNSS RTK",
-        icon: MapPinned,
-      },
-    ],
   },
 ];
 

@@ -75,6 +75,7 @@ import {
 } from "@/lib/rtk-validation/cad/loteamento-drainage";
 import { drainageEntityHasRedError } from "@/lib/rtk-validation/cad/loteamento-drainage-planilha";
 import { LOTEAMENTO_LOTES_LAYER_ID, LOTEAMENTO_VIAS_LAYER_ID } from "@/lib/rtk-validation/cad/reurb";
+import { displayAreaVerdeText } from "@/lib/rtk-validation/cad/loteamento-tools";
 
 export type DrawingScaleMode = "fit" | "nominal";
 
@@ -389,7 +390,7 @@ function renderPrintEntity(
             <CadSvgMultilineText
               x={labelX}
               y={labelY}
-              label={entity.label}
+              label={displayAreaVerdeText(entity.label)}
               fill={planFill}
               fontSize={
                 planRole === "lot-title" || planRole === "lot-area" || planRole === "lot-edge"
@@ -410,7 +411,7 @@ function renderPrintEntity(
               textKey={buildPrintPointLabelKey(entity.id)}
               x={labelX}
               y={labelY}
-              defaultValue={entity.label}
+              defaultValue={displayAreaVerdeText(entity.label)}
               overrides={textOverrides}
               editMode={editTextMode}
               onChange={onTextOverride}
@@ -598,7 +599,7 @@ function renderPrintEntity(
             const metrics = computePolygonMetrics(poly.vertices, true);
             const c = polygonCentroid(poly.vertices);
             const { sx, sy } = worldToScreen(c.x, c.y, viewport);
-            const polyName = poly.name ?? polyDefaultName;
+            const polyName = displayAreaVerdeText(poly.name ?? polyDefaultName);
             return (
               <CadSvgMultilineText
                 x={sx}

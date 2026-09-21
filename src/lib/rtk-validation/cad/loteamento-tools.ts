@@ -9,7 +9,6 @@ import {
   adjustLotInQuadra,
   bufferPolylineMeters,
   clipAxesOutsideObstacles,
-  areaUtilFromStreetsM2,
   DEFAULT_PERCENT_AREA_UTIL,
   DEFAULT_PERCENT_RESERVA_LEGAL,
   generateLoteamento,
@@ -28,7 +27,13 @@ import {
   type PolylineBufferSide,
   type ReservaCanto,
 } from "./lot-subdivision";
-import { applyLoteamentoLotesGrassStyle } from "./layer-styles";
+import {
+  applyLoteamentoNomenclature,
+  formatLotDisplayNumber,
+} from "./loteamento-nomenclature";
+
+export { applyLoteamentoNomenclature, renomearQuadrasAutomaticamente, renumerarLotesGlobalmente, validateUniqueLotNumbers } from "./loteamento-nomenclature";
+import { applyLoteamentoLotesDisplayStyle } from "./layer-styles";
 import { formatStreetPlanName } from "./plan-annotation-labels";
 import { appendPolygonCenterLabel, buildPolygonCenterLabelText, CAD_TEXT_LAYER } from "./polygon-labels";
 import { computePolygonMetrics, formatCoordBr, formatVertexCoordLabel, pointInPolygon } from "./polygon-utils";
@@ -58,14 +63,17 @@ export const LOTEAMENTO_TABELAS_LAYER: CadLayer = {
   id: "loteamento_tabelas",
   name: "LOTEAMENTO_TABELAS",
   color: "#0f2848",
-  textColor: "#0f2848",
+  textColor: "#111827",
+  textSize: 9,
   visible: true,
   locked: false,
 };
 
+export const AREA_VERDE_LABEL = "Área verde";
+
 export const AREA_RESERVA_LEGAL_LAYER: CadLayer = {
   id: "area_reserva_legal",
-  name: "AREA_RESERVA_LEGAL",
+  name: "AREA_VERDE",
   color: "#15803d",
   fillColor: "#4ade80",
   fillAlpha: 0.42,
@@ -77,6 +85,20 @@ export const AREA_RESERVA_LEGAL_LAYER: CadLayer = {
 };
 
 export const AREA_RESERVA_LEGAL_LAYER_ID = AREA_RESERVA_LEGAL_LAYER.id;
+
+export function isAreaVerdeLabel(label: string | undefined): boolean {
+  const text = (label ?? "").trim();
+  return /^área verde/i.test(text) || /^area verde/i.test(text) || /^reserva legal/i.test(text);
+}
+
+export function displayAreaVerdeText(text: string): string {
+  return text.replace(/^reserva legal/gi, AREA_VERDE_LABEL);
+}
+
+export function cadLayerPublicName(layer: { id: string; name: string }): string {
+  if (layer.id === AREA_RESERVA_LEGAL_LAYER_ID) return AREA_RESERVA_LEGAL_LAYER.name;
+  return displayAreaVerdeText(layer.name);
+}
 
 export const AREA_APP_LAYER: CadLayer = {
   id: "area_app",
@@ -93,6 +115,22 @@ export const AREA_APP_LAYER: CadLayer = {
 
 export const AREA_APP_LAYER_ID = AREA_APP_LAYER.id;
 
+export const AREA_FAIXA_DOMINIO_LAYER: CadLayer = {
+  id: "area_faixa_dominio",
+  name: "FAIXA_DOMINIO",
+  color: "#9a3412",
+  fillColor: "#fb923c",
+  fillAlpha: 0.4,
+  textColor: "#7c2d12",
+  lineWidth: 2.4,
+  hatchPattern: "cross",
+  visible: true,
+  locked: false,
+};
+
+export const AREA_FAIXA_DOMINIO_LAYER_ID = AREA_FAIXA_DOMINIO_LAYER.id;
+export const FAIXA_DOMINIO_LABEL = "Faixa de domínio";
+
 export const AREA_UTIL_LAYER: CadLayer = {
   id: "area_util",
   name: "AREA_UTIL",
@@ -107,6 +145,22 @@ export const AREA_UTIL_LAYER: CadLayer = {
 };
 
 export const AREA_UTIL_LAYER_ID = AREA_UTIL_LAYER.id;
+
+export const AREA_REMANESCENTE_LAYER: CadLayer = {
+  id: "area_remanescente",
+  name: "REMANESCENTE",
+  color: "#57534e",
+  fillColor: "#a8a29e",
+  fillAlpha: 0.38,
+  textColor: "#44403c",
+  lineWidth: 1.6,
+  hatchPattern: "diagonal",
+  visible: true,
+  locked: false,
+};
+
+export const AREA_REMANESCENTE_LAYER_ID = AREA_REMANESCENTE_LAYER.id;
+export const REMANESCENTE_LABEL = "Remanescente";
 
 export const LOTEAMENTO_QUADRAS_LAYER_ID = "loteamento_quadras";
 
@@ -162,6 +216,7 @@ const LOTEAMENTO_REPLACE_LAYER_IDS = new Set([
 export const LOTEAMENTO_EXCLUSION_LAYER_IDS = new Set([
   AREA_RESERVA_LEGAL_LAYER_ID,
   AREA_APP_LAYER_ID,
+  AREA_FAIXA_DOMINIO_LAYER_ID,
   "area_institucional",
 ]);
 
@@ -492,16 +547,16 @@ export function applyEixoTwoPointEdit(
 }
 
 export const RESERVA_LEGAL_NEED_POLYGON =
-  "Selecione um polígono fechado (gleba) para definir a reserva legal.";
+  "Selecione um polígono fechado (gleba) para definir a área verde.";
 
 export const AREA_UTIL_NEED_POLYGON =
   "Selecione um polígono fechado (gleba) para definir a área útil.";
 
 export const AREA_UTIL_NEED_RESERVA =
-  "Defina a reserva legal antes da área útil. A área útil fica colada na reserva, no canto escolhido.";
+  "Defina a área verde antes da área útil. A área útil fica colada na área verde, no canto escolhido.";
 
 export const AREA_UTIL_NEED_AREA =
-  "A área útil ficou 0 (as ruas já consomem o orçamento). Reduza as vias ou aumente o percentual.";
+  "Não coube a área útil junto da área verde neste canto. Ajuste o percentual ou a posição.";
 
 export const APP_NEED_LINE = "Selecione uma linha ou polilinha para definir a APP.";
 
@@ -514,6 +569,7 @@ function isUsableGleba(entity: CadEntity): entity is CadPolylineEntity {
     entity.vertices.length >= 3 &&
     entity.layerId !== AREA_RESERVA_LEGAL_LAYER_ID &&
     entity.layerId !== AREA_APP_LAYER_ID &&
+    entity.layerId !== AREA_FAIXA_DOMINIO_LAYER_ID &&
     entity.layerId !== AREA_UTIL_LAYER_ID &&
     entity.layerId !== "area_institucional" &&
     !entity.layerId.startsWith("loteamento_")
@@ -553,6 +609,7 @@ function ensureReservaLegalLayer(project: CadProject): CadLayer[] {
       ? {
           ...AREA_RESERVA_LEGAL_LAYER,
           ...layer,
+          name: AREA_RESERVA_LEGAL_LAYER.name,
           visible: true,
           locked: false,
           fillColor: layer.fillColor ?? AREA_RESERVA_LEGAL_LAYER.fillColor,
@@ -589,6 +646,10 @@ export function isAreaUtilLabel(label: string | undefined): boolean {
   return (label ?? "").startsWith("Área útil");
 }
 
+export function isRemanescenteLabel(label: string | undefined): boolean {
+  return (label ?? "").startsWith(REMANESCENTE_LABEL);
+}
+
 export function collectClosedRingsOnLayer(project: CadProject, layerId: string): [number, number][][] {
   return project.entities
     .filter(
@@ -607,6 +668,77 @@ export function collectReservaLegalRings(project: CadProject): [number, number][
 
 export function collectAppRings(project: CadProject): [number, number][][] {
   return collectClosedRingsOnLayer(project, AREA_APP_LAYER_ID);
+}
+
+export function isFaixaDominioLabel(label: string | undefined): boolean {
+  return /^faixa de dom[ií]nio/i.test(label ?? "");
+}
+
+export function collectFaixaDominioRings(project: CadProject): [number, number][][] {
+  return collectClosedRingsOnLayer(project, AREA_FAIXA_DOMINIO_LAYER_ID);
+}
+
+export function stripPreviousFaixaDominio(project: CadProject): CadProject {
+  return {
+    ...project,
+    entities: project.entities.filter((entity) => {
+      if (entity.layerId === AREA_FAIXA_DOMINIO_LAYER_ID) return false;
+      if (entity.type === "point" && entity.layerId === CAD_TEXT_LAYER.id && isFaixaDominioLabel(entity.label)) {
+        return false;
+      }
+      return true;
+    }),
+  };
+}
+
+function ensureFaixaDominioLayer(project: CadProject): CadLayer[] {
+  const idx = project.layers.findIndex((layer) => layer.id === AREA_FAIXA_DOMINIO_LAYER.id);
+  if (idx < 0) return [...project.layers, { ...AREA_FAIXA_DOMINIO_LAYER }];
+  return project.layers.map((layer, i) =>
+    i === idx
+      ? {
+          ...AREA_FAIXA_DOMINIO_LAYER,
+          ...layer,
+          name: AREA_FAIXA_DOMINIO_LAYER.name,
+          visible: true,
+          locked: false,
+          fillColor: layer.fillColor ?? AREA_FAIXA_DOMINIO_LAYER.fillColor,
+          fillAlpha: layer.fillAlpha ?? AREA_FAIXA_DOMINIO_LAYER.fillAlpha,
+          hatchPattern: layer.hatchPattern ?? AREA_FAIXA_DOMINIO_LAYER.hatchPattern,
+          lineWidth: layer.lineWidth ?? AREA_FAIXA_DOMINIO_LAYER.lineWidth,
+          textColor: layer.textColor ?? AREA_FAIXA_DOMINIO_LAYER.textColor,
+        }
+      : layer,
+  );
+}
+
+export function appendFaixaDominioToProject(
+  project: CadProject,
+  rings: [number, number][][] | number[][][],
+  widthM: number,
+  z0 = 0,
+): CadProject {
+  let next: CadProject = {
+    ...project,
+    layers: ensureFaixaDominioLayer(project),
+  };
+  const widthLabel = Number.isInteger(widthM) ? String(widthM) : widthM.toFixed(1).replace(".", ",");
+  const name = `${FAIXA_DOMINIO_LABEL} ${widthLabel} m`;
+  for (const ring of rings) {
+    const open = dropClosingXY(ring);
+    if (open.length < 3) continue;
+    const poly: CadPolylineEntity = {
+      id: newId("fd"),
+      type: "polyline",
+      layerId: AREA_FAIXA_DOMINIO_LAYER_ID,
+      vertices: open.map(([x, y]) => ({ x, y, z: z0 })),
+      closed: true,
+      name,
+    };
+    next = { ...next, entities: [...next.entities, poly] };
+    next = appendPolygonCenterLabel(next, poly);
+  }
+  return next;
 }
 
 export function stripPreviousAreaUtil(project: CadProject): CadProject {
@@ -650,6 +782,66 @@ export function appendAreaUtilToProject(
   return next;
 }
 
+export function stripPreviousRemanescente(project: CadProject): CadProject {
+  return {
+    ...project,
+    entities: project.entities.filter((entity) => {
+      if (entity.layerId === AREA_REMANESCENTE_LAYER_ID) return false;
+      if (entity.type === "point" && entity.layerId === CAD_TEXT_LAYER.id && isRemanescenteLabel(entity.label)) {
+        return false;
+      }
+      return true;
+    }),
+  };
+}
+
+function ensureRemanescenteLayer(project: CadProject): CadLayer[] {
+  const idx = project.layers.findIndex((layer) => layer.id === AREA_REMANESCENTE_LAYER.id);
+  if (idx < 0) return [...project.layers, { ...AREA_REMANESCENTE_LAYER }];
+  return project.layers.map((layer, i) =>
+    i === idx
+      ? {
+          ...AREA_REMANESCENTE_LAYER,
+          ...layer,
+          name: AREA_REMANESCENTE_LAYER.name,
+          visible: true,
+          locked: false,
+          fillColor: layer.fillColor ?? AREA_REMANESCENTE_LAYER.fillColor,
+          fillAlpha: layer.fillAlpha ?? AREA_REMANESCENTE_LAYER.fillAlpha,
+          hatchPattern: layer.hatchPattern ?? AREA_REMANESCENTE_LAYER.hatchPattern,
+          lineWidth: layer.lineWidth ?? AREA_REMANESCENTE_LAYER.lineWidth,
+          textColor: layer.textColor ?? AREA_REMANESCENTE_LAYER.textColor,
+        }
+      : layer,
+  );
+}
+
+export function appendRemanescenteToProject(
+  project: CadProject,
+  rings: [number, number][][] | number[][][],
+  z0 = 0,
+): CadProject {
+  let next: CadProject = {
+    ...project,
+    layers: ensureRemanescenteLayer(project),
+  };
+  for (const ring of rings) {
+    const open = dropClosingXY(ring);
+    if (open.length < 3) continue;
+    const poly: CadPolylineEntity = {
+      id: newId("rm"),
+      type: "polyline",
+      layerId: AREA_REMANESCENTE_LAYER_ID,
+      vertices: open.map(([x, y]) => ({ x, y, z: z0 })),
+      closed: true,
+      name: REMANESCENTE_LABEL,
+    };
+    next = { ...next, entities: [...next.entities, poly] };
+    next = appendPolygonCenterLabel(next, poly);
+  }
+  return next;
+}
+
 function ensureAppLayer(project: CadProject): CadLayer[] {
   const idx = project.layers.findIndex((layer) => layer.id === AREA_APP_LAYER.id);
   if (idx < 0) return [...project.layers, { ...AREA_APP_LAYER }];
@@ -674,11 +866,7 @@ function isReservaLegalEntity(entity: CadEntity): boolean {
   if (entity.type === "polyline" && entity.closed && entity.layerId === AREA_RESERVA_LEGAL_LAYER_ID) {
     return true;
   }
-  if (
-    entity.type === "point" &&
-    entity.layerId === CAD_TEXT_LAYER.id &&
-    (entity.label ?? "").startsWith("Reserva legal")
-  ) {
+  if (entity.type === "point" && entity.layerId === CAD_TEXT_LAYER.id && isAreaVerdeLabel(entity.label)) {
     return true;
   }
   return false;
@@ -811,7 +999,10 @@ export type RebuildLoteamentoFromEixosInput = {
   eixoRua?: boolean;
   raioEsquinaM?: number;
   viasExistentesExtremidades?: boolean;
+  larguraViaExistenteM?: number;
   ladosAresta?: number[];
+  larguraFaixaDominioM?: number;
+  ladosFaixaDominio?: number[];
   orientacao?: number;
   prefixoQuadra?: string;
   percentAreaUtil?: number;
@@ -876,19 +1067,38 @@ export function rebuildLoteamentoFromEixos(
         [b.x, b.y],
       ] as [number, number][];
     });
+  const ladosFaixaDominio = (input.ladosFaixaDominio ?? [])
+    .map((i) => Math.trunc(i))
+    .filter((i) => i >= 0 && i < nVerts)
+    .map((i) => {
+      const a = gleba.vertices[i];
+      const b = gleba.vertices[(i + 1) % nVerts];
+      return [
+        [a.x, a.y],
+        [b.x, b.y],
+      ] as [number, number][];
+    });
+  const larguraFaixaDominioM =
+    input.larguraFaixaDominioM != null && Number.isFinite(input.larguraFaixaDominioM) && input.larguraFaixaDominioM > 0
+      ? input.larguraFaixaDominioM
+      : 0;
+  const replacingFaixa = ladosFaixaDominio.length > 0 && larguraFaixaDominioM > 0;
+  const hostProject = replacingFaixa ? stripPreviousFaixaDominio(project) : project;
   const percentAreaUtil =
     input.percentAreaUtil != null && Number.isFinite(input.percentAreaUtil)
       ? Math.max(0, Math.min(99.9, input.percentAreaUtil))
       : 15;
-  const reservas = collectLoteamentoExclusionRings(project);
-  const reservaLegal = collectReservaLegalRings(project);
-  const apps = collectAppRings(project);
+  const reservas = collectLoteamentoExclusionRings(hostProject);
+  const reservaLegal = collectReservaLegalRings(hostProject);
+  const apps = [...collectAppRings(hostProject), ...collectFaixaDominioRings(hostProject)];
   const coords = gleba.vertices.map((v) => [v.x, v.y] as [number, number]);
   const z0 = gleba.vertices[0]?.z ?? 0;
   const result = generateLoteamento(coords, {
     larguraViaM: input.larguraViaM,
     profundidadeQuadraM: input.profundidadeQuadraM,
     testadaMinimaM: input.testadaMinimaM,
+    areaMinimaM2: input.areaMinimaM2,
+    percentualEsquina: input.percentualEsquina,
     areaMinimaQuadraM2: input.areaMinimaQuadraM2,
     larguraQuadraM: input.larguraQuadraM,
     profundidadeBlocoM: input.profundidadeBlocoM,
@@ -896,9 +1106,15 @@ export function rebuildLoteamentoFromEixos(
     eixoRua: input.eixoRua !== false,
     raioEsquinaM: input.raioEsquinaM,
     viasExistentesExtremidades: Boolean(input.viasExistentesExtremidades) || ladosViaExistente.length > 0,
+    larguraViaExistenteM:
+      input.larguraViaExistenteM != null && Number.isFinite(input.larguraViaExistenteM) && input.larguraViaExistenteM > 0
+        ? input.larguraViaExistenteM
+        : undefined,
     eixosExistentes: eixoRings,
     usarEixosComoRede: true,
     ladosViaExistente: ladosViaExistente.length > 0 ? ladosViaExistente : undefined,
+    ladosFaixaDominio: ladosFaixaDominio.length > 0 ? ladosFaixaDominio : undefined,
+    larguraFaixaDominioM: larguraFaixaDominioM > 0 ? larguraFaixaDominioM : undefined,
     reservas: reservas.length > 0 ? reservas : undefined,
     reservaLegal: reservaLegal.length > 0 ? reservaLegal : undefined,
     apps: apps.length > 0 ? apps : undefined,
@@ -921,26 +1137,31 @@ export function rebuildLoteamentoFromEixos(
     toClosedPolyline(poly[0] ?? [], LOTEAMENTO_QUADRAS_LAYER.id, `Quadra ${i + 1}`, "quadra", z0),
   );
 
-  const kept = project.entities.filter((entity) => {
+  const kept = hostProject.entities.filter((entity) => {
     if (LOTEAMENTO_REPLACE_LAYER_IDS.has(entity.layerId)) return false;
     if (entity.layerId === AREA_UTIL_LAYER_ID) return false;
+    if (entity.layerId === AREA_REMANESCENTE_LAYER_ID) return false;
     if (entity.type === "point" && entity.layerId === CAD_TEXT_LAYER.id && isAreaUtilLabel(entity.label)) {
+      return false;
+    }
+    if (entity.type === "point" && entity.layerId === CAD_TEXT_LAYER.id && isRemanescenteLabel(entity.label)) {
       return false;
     }
     return true;
   });
 
-  let layers = ensureLayer(project, LOTEAMENTO_VIAS_LAYER);
-  layers = ensureLayer({ ...project, layers }, LOTEAMENTO_LOTES_LAYER);
-  if (calcadaEntities.length > 0) layers = ensureLayer({ ...project, layers }, LOTEAMENTO_CALCADAS_LAYER);
-  if (quadraEntities.length > 0) layers = ensureLayer({ ...project, layers }, LOTEAMENTO_QUADRAS_LAYER);
+  let layers = ensureLayer(hostProject, LOTEAMENTO_VIAS_LAYER);
+  layers = ensureLayer({ ...hostProject, layers }, LOTEAMENTO_LOTES_LAYER);
+  if (calcadaEntities.length > 0) layers = ensureLayer({ ...hostProject, layers }, LOTEAMENTO_CALCADAS_LAYER);
+  if (quadraEntities.length > 0) layers = ensureLayer({ ...hostProject, layers }, LOTEAMENTO_QUADRAS_LAYER);
 
   let next: CadProject = {
-    ...project,
+    ...hostProject,
     layers,
     entities: [...kept, ...viaEntities, ...calcadaEntities, ...quadraEntities, ...loteEntities],
   };
   next = stripPreviousAreaUtil(next);
+  next = stripPreviousRemanescente(next);
   if (result.areaUtil.length > 0) {
     next = appendAreaUtilToProject(
       next,
@@ -949,16 +1170,24 @@ export function rebuildLoteamentoFromEixos(
       z0,
     );
   }
+  if (result.remanescente.length > 0) {
+    next = appendRemanescenteToProject(
+      next,
+      result.remanescente.map((poly) => poly[0] ?? []),
+      z0,
+    );
+  }
+  if (result.faixaDominio.length > 0 && larguraFaixaDominioM > 0) {
+    next = appendFaixaDominioToProject(
+      next,
+      result.faixaDominio.map((poly) => poly[0] ?? []),
+      larguraFaixaDominioM,
+      z0,
+    );
+  }
+  next = applyLoteamentoNomenclature(next).project;
   const labeled = applyReurbLotLabels(next, { includeCotas: true, includeArea: true });
   if (labeled.lotCount > 0) next = labeled.project;
-  next = applyLoteamentoLotClassification(next, {
-    percentualEsquina: input.percentualEsquina ?? DEFAULT_PERCENTUAL_ESQUINA,
-    areaMinimaInterno: resolveAreaMinimaInterno({
-      areaMinimaM2: input.areaMinimaM2,
-      testadaM: input.testadaMinimaM,
-      profundidadeM: input.profundidadeQuadraM,
-    }),
-  });
   next = applyLoteamentoTables(next, {
     percentualEsquina: input.percentualEsquina ?? DEFAULT_PERCENTUAL_ESQUINA,
     areaMinimaInterno: resolveAreaMinimaInterno({
@@ -981,18 +1210,22 @@ export function syncReservaLegalLabel(project: CadProject, reservaId: string): C
     (e): e is CadPolylineEntity => e.id === reservaId && e.type === "polyline" && Boolean(e.closed),
   );
   if (!reserva || reserva.vertices.length < 3) return project;
+  const nextName = displayAreaVerdeText(reserva.name ?? AREA_VERDE_LABEL);
   const metrics = computePolygonMetrics(reserva.vertices, true);
-  const text = buildPolygonCenterLabelText(reserva.name ?? "Reserva legal", metrics.areaM2);
+  const text = buildPolygonCenterLabelText(nextName, metrics.areaM2);
   const c = polygonCentroid(reserva.vertices);
   let found = false;
   return {
     ...project,
     entities: project.entities.map((entity) => {
+      if (entity.id === reserva.id && entity.type === "polyline") {
+        return { ...entity, name: nextName };
+      }
       if (
         !found &&
         entity.type === "point" &&
         entity.layerId === CAD_TEXT_LAYER.id &&
-        (entity.label ?? "").startsWith("Reserva legal")
+        isAreaVerdeLabel(entity.label)
       ) {
         found = true;
         return { ...entity, x: c.x, y: c.y, z: c.z, label: text };
@@ -1040,7 +1273,7 @@ export function applyReservaLegalToProject(
     canto !== "inferior_direita" &&
     canto !== "inferior_esquerda"
   ) {
-    throw new LoteamentoError("Informe o canto da reserva legal (superior/inferior × esquerda/direita).");
+    throw new LoteamentoError("Informe o canto da área verde (superior/inferior × esquerda/direita).");
   }
   const areaTotal = computePolygonMetrics(gleba.vertices, true).areaM2;
   const placed = reservarRetanguloNoCanto(
@@ -1055,7 +1288,7 @@ export function applyReservaLegalToProject(
     layerId: AREA_RESERVA_LEGAL_LAYER_ID,
     vertices: placed.reserved.map(([x, y]) => ({ x, y, z: z0 })),
     closed: true,
-    name: `Reserva legal ${input.percent.toFixed(0)}%`,
+    name: `${AREA_VERDE_LABEL} ${input.percent.toFixed(0)}%`,
   };
   const next: CadProject = {
     ...project,
@@ -1148,22 +1381,18 @@ export function applyAreaUtilToProject(
   if (reservaLegal.length === 0) {
     throw new LoteamentoError(AREA_UTIL_NEED_RESERVA);
   }
-  const viasM2 = vias.reduce((sum, ring) => sum + computePolygonMetrics(
-    ring.map(([x, y]) => ({ x, y, z: 0 })),
-    true,
-  ).areaM2, 0);
-  const alvoM2 = areaUtilFromStreetsM2(totalM2, viasM2, input.percent);
+  const alvoM2 = totalM2 * (input.percent / 100);
   if (!(alvoM2 > 4)) {
     throw new LoteamentoError(AREA_UTIL_NEED_AREA);
   }
   const placed = placeAreaUtilBesideReserva(glebaCoords, reservaLegal, alvoM2, canto, [...apps, ...vias]);
   if (placed.length === 0) {
-    throw new LoteamentoError("Não foi possível colar a área útil na reserva legal nesse canto.");
+    throw new LoteamentoError("Não foi possível colar a área útil na área verde nesse canto.");
   }
   if (reservaLegal.length > 0) {
     const shares = placed.some((poly) => reservaLegal.some((rl) => ringsShareBoundary(poly[0] ?? [], rl)));
     if (!shares) {
-      throw new LoteamentoError("A área útil precisa compartilhar uma aresta com a reserva legal.");
+      throw new LoteamentoError("A área útil precisa compartilhar uma aresta com a área verde.");
     }
   }
   const z0 = gleba.vertices[0]?.z ?? 0;
@@ -1318,6 +1547,10 @@ export type LoteamentoQuadraRow = {
   areaMediaM2: number;
   internoCount: number;
   esquinaCount: number;
+  areaMinM2: number;
+  areaMaxM2: number;
+  desvioPadraoM2: number;
+  coeficienteVariacao: number;
 };
 
 export type LoteamentoLotRow = {
@@ -1366,15 +1599,19 @@ function newId(prefix: string) {
 function ensureLayer(project: CadProject, layer: CadLayer): CadLayer[] {
   const idx = project.layers.findIndex((l) => l.id === layer.id);
   if (idx < 0) {
-    return [...project.layers, layer.id === LOTEAMENTO_LOTES_LAYER_ID ? applyLoteamentoLotesGrassStyle(layer) : { ...layer }];
+    return [
+      ...project.layers,
+      layer.id === LOTEAMENTO_LOTES_LAYER_ID ? applyLoteamentoLotesDisplayStyle(layer) : { ...layer },
+    ];
   }
   if (layer.id !== LOTEAMENTO_LOTES_LAYER_ID) return project.layers;
   return project.layers.map((existing, i) =>
     i === idx
-      ? applyLoteamentoLotesGrassStyle({
+      ? applyLoteamentoLotesDisplayStyle({
           ...existing,
           ...layer,
           visible: existing.visible,
+          hatchPattern: existing.hatchPattern ?? layer.hatchPattern,
         })
       : existing,
   );
@@ -1396,6 +1633,19 @@ export function parseLoteamentoLotName(name: string | undefined): { quadra: stri
   return { quadra: "Quadra", numero: raw || "01" };
 }
 
+function displayLotIdentity(lot: CadPolylineEntity): { quadra: string; numero: string } {
+  const parsed = parseLoteamentoLotName(lot.name);
+  const quadra = lot.lote?.quadra ? `Quadra ${lot.lote.quadra}` : parsed.quadra;
+  const numero =
+    typeof lot.lote?.numero === "number" ? formatLotDisplayNumber(lot.lote.numero) : parsed.numero;
+  return { quadra, numero };
+}
+
+function lotNumeroSortValue(numero: string): number {
+  const n = Number(String(numero).replace(/\D/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
 function polygonAreaPerimeter(poly: CadPolylineEntity): { areaM2: number; perimeterM: number } {
   const metrics = computePolygonMetrics(poly.vertices, true);
   return { areaM2: metrics.areaM2, perimeterM: metrics.perimeterM };
@@ -1410,12 +1660,13 @@ export function summarizeLoteamento(project: CadProject): LoteamentoSummary {
 
   const streets = collectStreetRingsFromProject(project);
   const quadraMap = new Map<string, LoteamentoQuadraRow>();
+  const quadraAreas = new Map<string, number[]>();
   const lotRows: LoteamentoLotRow[] = [];
   let lotAreaM2 = 0;
   for (const lot of lots) {
     const { areaM2 } = polygonAreaPerimeter(lot);
     lotAreaM2 += areaM2;
-    const { quadra, numero } = parseLoteamentoLotName(lot.name);
+    const { quadra, numero } = displayLotIdentity(lot);
     const tipo = lot.lote?.tipo ?? "INTERNO";
     const dims =
       streets.length > 0 ? measureLotFrontAndDepth(polylineToRing(lot), streets) : { testadaM: 0, profundidadeM: 0 };
@@ -1434,6 +1685,9 @@ export function summarizeLoteamento(project: CadProject): LoteamentoSummary {
       ruas: lot.lote?.ruas ?? [],
     });
     const prev = quadraMap.get(quadra);
+    const areas = quadraAreas.get(quadra) ?? [];
+    areas.push(areaM2);
+    quadraAreas.set(quadra, areas);
     if (prev) {
       prev.areaM2 += areaM2;
       prev.lotCount += 1;
@@ -1448,6 +1702,10 @@ export function summarizeLoteamento(project: CadProject): LoteamentoSummary {
         areaMediaM2: areaM2,
         internoCount: tipo === "INTERNO" ? 1 : 0,
         esquinaCount: tipo === "ESQUINA" ? 1 : 0,
+        areaMinM2: areaM2,
+        areaMaxM2: areaM2,
+        desvioPadraoM2: 0,
+        coeficienteVariacao: 0,
       });
     }
   }
@@ -1501,11 +1759,33 @@ export function summarizeLoteamento(project: CadProject): LoteamentoSummary {
     percent: total > 0 ? 100 : 0,
   });
 
+  lotRows.sort((a, b) => lotNumeroSortValue(a.numero) - lotNumeroSortValue(b.numero) || a.quadra.localeCompare(b.quadra));
+  for (const row of quadraMap.values()) {
+    const areas = quadraAreas.get(row.name) ?? [];
+    if (areas.length === 0) continue;
+    const media = areas.reduce((s, a) => s + a, 0) / areas.length;
+    let erro = 0;
+    let menor = areas[0]!;
+    let maior = areas[0]!;
+    for (const area of areas) {
+      const d = area - media;
+      erro += d * d;
+      if (area < menor) menor = area;
+      if (area > maior) maior = area;
+    }
+    const desvio = Math.sqrt(erro / areas.length);
+    row.areaMinM2 = menor;
+    row.areaMaxM2 = maior;
+    row.desvioPadraoM2 = desvio;
+    row.coeficienteVariacao = media > 1e-9 ? desvio / media : 0;
+  }
+  const quadras = [...quadraMap.values()].sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { numeric: true }));
+
   return {
     title,
     lots,
     lotRows,
-    quadras: [...quadraMap.values()],
+    quadras,
     areas,
     lotAreaM2,
     viaAreaM2,
@@ -1526,7 +1806,7 @@ export type AreaUtilBreakdown = {
   areaUtilM2: number;
 };
 
-/** Conta: A = max(0, percent% × T − ruas). RL alvo = 20% de T. */
+/** Área útil loteável = max(0, T − RL − ruas). RL alvo = 20% de T. */
 export function computeLoteamentoAreaUtilBreakdown(
   project: CadProject,
   glebaVertices: { x: number; y: number; z?: number }[],
@@ -1546,9 +1826,9 @@ export function computeLoteamentoAreaUtilBreakdown(
     (s, p) => s + polygonAreaPerimeter(p).areaM2,
     0,
   );
-  const orcamentoM2 = totalM2 * (Math.max(0, percent) / 100);
-  const alvoM2 = areaUtilFromStreetsM2(totalM2, viasM2, percent);
   const reservaTargetM2 = totalM2 * (DEFAULT_PERCENT_RESERVA_LEGAL / 100);
+  const orcamentoM2 = Math.max(0, totalM2 - (reservaM2 > 0 ? reservaM2 : reservaTargetM2) - viasM2);
+  const alvoM2 = orcamentoM2;
   const pct = (area: number) => (totalM2 > 0 ? (area / totalM2) * 100 : 0);
   return {
     totalM2,
@@ -1687,7 +1967,7 @@ function buildQuadraTableText(summary: LoteamentoSummary): string {
 
 function buildAreaTableText(summary: LoteamentoSummary): string {
   const lines = [
-    "Tabela de Áreas",
+    "Quadro de Áreas",
     "Tipo                     Área m²      %",
     ...summary.areas.map((row) => {
       const tipo = row.tipo.slice(0, 22).padEnd(22, " ");
@@ -1704,7 +1984,7 @@ function buildLotListText(summary: LoteamentoSummary): string {
   const source = summary.lotRows.length > 0
     ? summary.lotRows
     : summary.lots.map((lot, index) => {
-        const { quadra, numero } = parseLoteamentoLotName(lot.name);
+        const { quadra, numero } = displayLotIdentity(lot);
         return {
           name: lot.name?.trim() || `Lote ${String(index + 1).padStart(2, "0")}`,
           numero,
@@ -1754,8 +2034,9 @@ export function applyLoteamentoTables(
       prevInterno ??
       resolveAreaMinimaInterno({ testadaM: 10, profundidadeM: 25 }),
   });
-  const summary = summarizeLoteamento(classified);
-  if (summary.lots.length === 0) return { project: classified, lotCount: 0 };
+  const named = applyLoteamentoNomenclature(classified).project;
+  const summary = summarizeLoteamento(named);
+  if (summary.lots.length === 0) return { project: named, lotCount: 0 };
 
   const extent = drawingExtent(project);
   const width = extent ? Math.max(extent.maxX - extent.minX, 40) : 80;
@@ -1766,7 +2047,7 @@ export function applyLoteamentoTables(
   const botY = topY - height * 0.76;
   const z = 0;
 
-  const kept = classified.entities.filter((e) => e.layerId !== LOTEAMENTO_TABELAS_LAYER.id);
+  const kept = named.entities.filter((e) => e.layerId !== LOTEAMENTO_TABELAS_LAYER.id);
   const tables: CadEntity[] = [
     {
       id: newId("tab_q"),
@@ -1799,8 +2080,8 @@ export function applyLoteamentoTables(
 
   return {
     project: {
-      ...classified,
-      layers: ensureLayer(classified, LOTEAMENTO_TABELAS_LAYER),
+      ...named,
+      layers: ensureLayer(named, LOTEAMENTO_TABELAS_LAYER),
       entities: [...kept, ...tables],
     },
     lotCount: summary.lots.length,
@@ -1827,12 +2108,16 @@ export function buildLoteamentoTablesBlob(project: CadProject): Blob {
     ]),
   ];
   const quadras: (string | number)[][] = [
-    ["Quadra", "Área m²", "Lotes", "Área média m²"],
+    ["Quadra", "Área m²", "Lotes", "Área média m²", "Menor m²", "Maior m²", "Desvio padrão m²", "CV %"],
     ...summary.quadras.map((row) => [
       row.name,
       Number(row.areaM2.toFixed(2)),
       row.lotCount,
       Number(row.areaMediaM2.toFixed(2)),
+      Number(row.areaMinM2.toFixed(2)),
+      Number(row.areaMaxM2.toFixed(2)),
+      Number(row.desvioPadraoM2.toFixed(2)),
+      Number((row.coeficienteVariacao * 100).toFixed(2)),
     ]),
   ];
   return buildOdsBlob(
@@ -2179,19 +2464,32 @@ export function applyLoteamentoLotSize(
     ...project,
     entities: extras.length > 0 ? [...withoutUnused, ...extras] : withoutUnused,
   };
+  next = applyLoteamentoNomenclature(next).project;
   const labeled = applyReurbLotLabels(next, { includeCotas: true, includeArea: true });
   if (labeled.lotCount > 0) next = labeled.project;
   const prevInterno = host.lots.find((lot) => lot.lote?.tipo === "INTERNO")?.lote?.areaMinimaM2;
   const prevAny = host.lots.find((lot) => lot.lote?.areaMinimaM2 != null)?.lote?.areaMinimaM2;
-  next = applyLoteamentoLotClassification(next, {
-    percentualEsquina: DEFAULT_PERCENTUAL_ESQUINA,
-    areaMinimaInterno:
-      prevInterno ??
-      (prevAny != null && prevAny > 0 ? prevAny / 1.2 : resolveAreaMinimaInterno({
-        testadaM: input.testadaM ?? 10,
-        profundidadeM: input.profundidadeM ?? 25,
-      })),
-  });
+  const areaMinimaInterno =
+    prevInterno ??
+    (prevAny != null && prevAny > 0
+      ? prevAny / 1.2
+      : resolveAreaMinimaInterno({
+          testadaM: input.testadaM ?? 10,
+          profundidadeM: input.profundidadeM ?? 25,
+        }));
+  const hadTables = project.entities.some((e) => e.layerId === LOTEAMENTO_TABELAS_LAYER.id);
+  if (hadTables) {
+    next = applyLoteamentoTables(next, {
+      percentualEsquina: DEFAULT_PERCENTUAL_ESQUINA,
+      areaMinimaInterno,
+    }).project;
+  } else {
+    next = applyLoteamentoLotClassification(next, {
+      percentualEsquina: DEFAULT_PERCENTUAL_ESQUINA,
+      areaMinimaInterno,
+    });
+    next = applyLoteamentoNomenclature(next).project;
+  }
 
   const selectedId =
     input.mode === "lote"

@@ -1,17 +1,6 @@
-import {
-  DigitalTwinSectionPage,
-  digitalTwinViewerUrl,
-} from "@/components/digital-twin/section-page";
-import { digitalTwinSection } from "@/lib/digital-twin-page";
+import { redirect } from "next/navigation";
 
+/** Validação RTK foi retirada do produto; bookmarks antigos vão para o CAD. */
 export default function DigitalTwinGnssRtkPage() {
-  const s = digitalTwinSection("gnss-rtk");
-  return (
-    <DigitalTwinSectionPage
-      title={s.label}
-      description={s.description ?? ""}
-      icon={s.icon}
-      viewerUrl={digitalTwinViewerUrl()}
-    />
-  );
+  redirect("/cad");
 }

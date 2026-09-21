@@ -70,6 +70,7 @@ export const CAD_AI_ACTION_ALIASES: Record<string, CadAiAction> = {
   criar_rua: "criar_rua_existente",
   area_institucional: "reservar_area",
   reserva_legal: "reservar_area",
+  area_verde: "reservar_area",
   reservar_faixa: "reservar_area",
   subdividir: "subdividir_quadra",
   dividir_quadra: "subdividir_quadra",
@@ -77,10 +78,34 @@ export const CAD_AI_ACTION_ALIASES: Record<string, CadAiAction> = {
   cota_curva: "cota_curva",
   inserir_id_pontos: "mostrar_cotas_pontos",
   id_ponto: "alterar_id",
+  selecionar_objetos: "selecionar",
+  consultar_area: "consultar_quadra",
+  area_da_quadra: "consultar_quadra",
+  otimizar_lotes: "otimizar_quadra",
+  redimensionar_quadra: "otimizar_quadra",
+  refazer_quadra: "otimizar_quadra",
+  ajustar_lotes: "otimizar_quadra",
+  redistribuir_quadra: "redistribuir_lotes",
+  analisar_loteamento: "validar_loteamento",
+  area_remanescente: "calcular_area_remanescente",
+  zoom: "zoom_objeto",
+  aplicar: "aplicar_alteracao",
+  desfazer: "desfazer_alteracao",
+  alterar_area_verde: "reservar_area",
+  alterar_area_institucional: "reservar_area",
+  reprojetar_loteamento: "otimizar_quadra",
+  reprojetar: "otimizar_quadra",
+  completar_quadra: "redistribuir_lotes",
+  completar_loteamento: "otimizar_quadra",
+  nomear_quadra: "renomear_quadra",
+  nomear_quadras: "renomear_quadra",
+  identificar_quadras: "renomear_quadra",
+  dar_nome_quadras: "renomear_quadra",
 };
 
 export function normalizeCadAiCommand(raw: CadAiCommand): CadAiCommand {
-  const acao = CAD_AI_ACTION_ALIASES[raw.acao] ?? raw.acao;
+  const original = String(raw.acao ?? "");
+  const acao = CAD_AI_ACTION_ALIASES[original] ?? raw.acao;
   const intervalo = raw.intervalo ?? raw.equidistancia ?? raw.equidistancia_m;
   const conteudo = raw.conteudo ?? raw.csv_conteudo;
   const arquivo = raw.arquivo?.toLowerCase();
@@ -92,7 +117,14 @@ export function normalizeCadAiCommand(raw: CadAiCommand): CadAiCommand {
   const distancia_quadra_m = raw.distancia_quadra_m;
   const texto = raw.texto ?? raw.nome;
   const visivel =
-    acao === "trocar_camada" && (raw.acao as string) === "ocultar_camada" ? false : raw.visivel;
+    acao === "trocar_camada" && original === "ocultar_camada" ? false : raw.visivel;
+  let tipo = raw.tipo;
+  if (!tipo) {
+    if (original === "alterar_area_verde" || original === "area_verde") tipo = "reserva_legal";
+    if (original === "alterar_area_institucional" || original === "area_institucional") {
+      tipo = "institucional";
+    }
+  }
 
   return {
     ...raw,
@@ -108,6 +140,7 @@ export function normalizeCadAiCommand(raw: CadAiCommand): CadAiCommand {
     distancia_quadra_m,
     texto,
     visivel,
+    tipo,
   };
 }
 
@@ -156,7 +189,7 @@ export const CAD_AI_ACTION_CATALOG: Array<{ acao: CadAiAction; descricao: string
   {
     acao: "gerar_loteamento",
     descricao: "Divide a gleba em lotes com vias internas",
-    params: "largura_via_m, profundidade_quadra_m, testada_minima_m, area_minima_quadra_m2?, largura_quadra_m?, distancia_quadra_m?, largura_calcada_m?, eixo_rua?, raio_esquina_m?, vias_existentes_extremidades?, entidade_ids?",
+    params: "largura_via_m, profundidade_quadra_m, testada_minima_m, area_minima_quadra_m2?, largura_quadra_m?, distancia_quadra_m?, largura_calcada_m?, eixo_rua?, raio_esquina_m?, vias_existentes_extremidades?, largura_via_existente_m?, lados_aresta?, entidade_ids?",
   },
   {
     acao: "alterar_eixo",
@@ -202,7 +235,7 @@ export const CAD_AI_ACTION_CATALOG: Array<{ acao: CadAiAction; descricao: string
   { acao: "criar_rua_existente", descricao: "Marca a polilinha como via pública existente", params: "nome?, largura?, entidade_id?" },
   {
     acao: "reservar_area",
-    descricao: "Reserva uma faixa da gleba (institucional ou reserva legal)",
+    descricao: "Reserva uma faixa da gleba (institucional ou área verde)",
     params: "tipo, percentual, lado?",
   },
   { acao: "inserir_sondagem", descricao: "Sondagem (em desenvolvimento)", params: "—" },
@@ -210,6 +243,21 @@ export const CAD_AI_ACTION_CATALOG: Array<{ acao: CadAiAction; descricao: string
   { acao: "secao_spt", descricao: "Seção SPT (em desenvolvimento)", params: "—" },
   { acao: "poco_monitoramento", descricao: "Poço monitoramento (em desenvolvimento)", params: "—" },
   { acao: "selecionar", descricao: "Selecionar entidade", params: "entidade_id" },
+  { acao: "consultar_projeto", descricao: "Resumo do projeto e do loteamento", params: "—" },
+  { acao: "consultar_quadras", descricao: "Listar quadras e áreas", params: "—" },
+  { acao: "consultar_quadra", descricao: "Consultar uma quadra", params: "quadra" },
+  { acao: "consultar_lotes", descricao: "Listar/filtrar lotes", params: "quadra?, filtro_area_max_m2?" },
+  { acao: "consultar_lote", descricao: "Consultar um lote", params: "lote" },
+  { acao: "calcular_testada", descricao: "Testada de um lote", params: "lote" },
+  { acao: "calcular_area_remanescente", descricao: "Área remanescente do loteamento", params: "quadra?" },
+  { acao: "otimizar_quadra", descricao: "Reempacota lotes da quadra pelo motor geométrico", params: "quadra, area_alvo_m2, excecoes?" },
+  { acao: "ajustar_lote", descricao: "Ajusta SOMENTE o lote informado (scope=single_lot). Não reempacota a quadra.", params: "lote, area_alvo_m2, scope" },
+  { acao: "redistribuir_lotes", descricao: "Redistribui lotes da quadra fechando a área", params: "quadra?" },
+  { acao: "validar_loteamento", descricao: "Analisa problemas do loteamento", params: "—" },
+  { acao: "aplicar_alteracao", descricao: "Aplica a prévia pendente", params: "—" },
+  { acao: "desfazer_alteracao", descricao: "Desfaz a última alteração aplicada", params: "—" },
+  { acao: "zoom_objeto", descricao: "Enquadra quadra ou lote", params: "quadra? | lote?" },
+  { acao: "renomear_quadra", descricao: "Renomeia rótulos de quadras (sem alterar geometria)", params: "quadra?, novo_id?, nomes?" },
   { acao: "desconhecido", descricao: "Comando não reconhecido", params: "resposta com sugestões" },
 ];
 
@@ -273,6 +321,21 @@ export const CAD_AI_IMPLEMENTED_ACTIONS = [
   "criar_rua_existente",
   "reservar_area",
   "selecionar",
+  "consultar_projeto",
+  "consultar_quadras",
+  "consultar_quadra",
+  "consultar_lotes",
+  "consultar_lote",
+  "calcular_testada",
+  "calcular_area_remanescente",
+  "otimizar_quadra",
+  "ajustar_lote",
+  "redistribuir_lotes",
+  "validar_loteamento",
+  "aplicar_alteracao",
+  "desfazer_alteracao",
+  "zoom_objeto",
+  "renomear_quadra",
 ] as const satisfies readonly CadAiAction[];
 
 export type CadAiImplementedAction = (typeof CAD_AI_IMPLEMENTED_ACTIONS)[number];
@@ -360,7 +423,7 @@ const SCHEMA_PROPS = {
   profundidade_quadra_m: {
     type: "number",
     description:
-      "Profundidade do lote em metros, da testada ao fundo (ex.: 50). A malha espaça vias paralelas em ~2× este valor (duas fileiras). Quadras com rua na frente e nos fundos são sempre partidas ao meio.",
+      "Profundidade do lote em metros, da testada ao fundo (ex.: 25). A malha espaça vias paralelas em ~2× este valor (duas fileiras). A quadra só parte ao meio se couberem duas fileiras com essa profundidade.",
   },
   testada_minima_m: {
     type: "number",
@@ -368,7 +431,7 @@ const SCHEMA_PROPS = {
   },
   area_minima_m2: {
     type: "number",
-    description: "Ignorado. Os lotes dimensionam pela testada e pela profundidade restantes.",
+    description: "Área mínima do lote interno em m². Se omitida, usa testada × profundidade (ex.: 12×25 = 300).",
   },
   area_minima_quadra_m2: {
     type: "number",
@@ -414,13 +477,29 @@ const SCHEMA_PROPS = {
   vias_existentes_extremidades: {
     type: "boolean",
     description:
-      "true = não gera rua nova na borda da gleba (via pública já existente nas extremidades). Os lotes fazem testada no limite. Combine com lados_aresta para indicar só alguns lados. Padrão: false.",
+      "true = a via pública já existe fora da gleba. Gera o corredor do lado de fora (não come o terreno) e une as vias do loteamento a ele na borda. Combine com lados_aresta e largura_via_existente_m. Padrão: false.",
+  },
+  largura_via_existente_m: {
+    type: "number",
+    description:
+      "Largura (m) da via existente gerada fora da gleba. Omitir = mesma largura_via_m das ruas do loteamento.",
   },
   lados_aresta: {
     type: "array",
     items: { type: "number" },
     description:
-      "Índices das arestas da gleba (0 = primeiro lado) onde já existe via pública. Só nesses lados não se abre rua nova. Clique no desenho para marcar.",
+      "Índices das arestas da gleba (0 = primeiro lado) onde a via pública já passa por fora. Só nesses lados se gera a via fora do polígono e as ruas internas se unem a ela. Clique no desenho para marcar.",
+  },
+  lados_faixa_dominio: {
+    type: "array",
+    items: { type: "number" },
+    description:
+      "Índices das arestas da gleba voltadas à rodovia. A faixa de domínio entra para DENTRO da gleba (não é rua). Lotes e vias não ocupam essa faixa.",
+  },
+  largura_faixa_dominio_m: {
+    type: "number",
+    description:
+      "Largura (m) da faixa de domínio recuada para dentro da gleba no lado da rodovia. Ex.: 15 ou 20.",
   },
   ferramenta: {
     type: "string",
@@ -450,12 +529,87 @@ const SCHEMA_PROPS = {
   },
   tipo: {
     type: "string",
-    enum: ["institucional", "reserva_legal"],
-    description: "Tipo da área reservada.",
+    enum: ["institucional", "reserva_legal", "area_verde"],
+    description: "Tipo da área reservada: institucional ou área verde.",
   },
   nome: {
     type: "string",
     description: "Nome da via pública existente.",
+  },
+  quadra: {
+    type: "string",
+    description: 'Identificador da quadra no loteamento (ex.: "G", "H", "Quadra G").',
+  },
+  lote: {
+    type: "string",
+    description: 'Identificador do lote: "01", "lote 1", "G-01" ou "H-05". Normalize "lote 1" → "01".',
+  },
+  lotes: {
+    type: "array",
+    items: { type: "string" },
+    description: "Lista de lotes (ex.: G-01, G-02).",
+  },
+  area_alvo_m2: {
+    type: "number",
+    description: "Área alvo de cada lote em m² (ex.: 300).",
+  },
+  area_maxima_m2: {
+    type: "number",
+    description: "Área máxima em m².",
+  },
+  preservar_ruas: {
+    type: "boolean",
+    description: "true = não alterar eixos/vias. Padrão: true.",
+  },
+  preservar_limites: {
+    type: "boolean",
+    description: "true = manter o contorno da quadra. Padrão: true.",
+  },
+  minimizar_remanescente: {
+    type: "boolean",
+    description: "true = fechar a quadra e reduzir sobras. Padrão: true.",
+  },
+  lotes_esquina_maiores: {
+    type: "boolean",
+    description: "true = lotes de esquina com área maior que os internos.",
+  },
+  objetivo: {
+    type: "string",
+    enum: ["maximizar_equidade"],
+    description:
+      'Use "maximizar_equidade" quando o usuário pedir lotes mais iguais / mesma área. NÃO calcule geometria — o motor CAD otimiza.',
+  },
+  excecoes: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        lote: { type: "string" },
+        area_alvo_m2: { type: "number" },
+      },
+      required: ["lote", "area_alvo_m2"],
+      additionalProperties: false,
+    },
+    description: "Lotes com área diferente da área alvo da quadra.",
+  },
+  filtro_area_max_m2: {
+    type: "number",
+    description: "Filtrar lotes com área abaixo deste valor (m²).",
+  },
+  filtro_area_min_m2: {
+    type: "number",
+    description: "Filtrar lotes com área acima deste valor (m²).",
+  },
+  nomes: {
+    type: "array",
+    items: { type: "string" },
+    description: "Novos nomes das quadras na ordem (ex.: QA, QB). Sem nomes: pergunte, não execute.",
+  },
+  scope: {
+    type: "string",
+    enum: ["single_lot", "quad", "local_redistribution"],
+    description:
+      "single_lot = só o lote informado (padrão de ajustar_lote). quad = quadra inteira. local_redistribution = lote + vizinhos autorizados pelo usuário.",
   },
 } as const;
 
@@ -494,6 +648,75 @@ function tool(
       },
     },
   };
+}
+
+const CAD_AI_RESPONSE_ALIASES: Array<{
+  name: string;
+  from: CadAiImplementedAction;
+  description: string;
+}> = [
+  {
+    name: "calcular_area",
+    from: "medir_area",
+    description: "Calcular a área de um lote, quadra ou polígono. Somente leitura. Equivale a medir_area / consultar_lote.",
+  },
+  {
+    name: "ajustar_lotes",
+    from: "otimizar_quadra",
+    description:
+      "Ajusta o conjunto de lotes da quadra/seleção (ex.: todos para 250 m²). Se várias quadras e nenhuma selecionada, pergunte qual. Equivale a otimizar_quadra.",
+  },
+  {
+    name: "reprojetar_loteamento",
+    from: "otimizar_quadra",
+    description:
+      "Reprojeta o loteamento com o motor CAD (preservar ruas, maximizar aproveitamento, acesso viário). Exige confirmação. Equivale a otimizar_quadra.",
+  },
+  {
+    name: "alterar_area_verde",
+    from: "reservar_area",
+    description: "Altera a área verde para o percentual informado (ex.: 10). O CAD calcula a geometria. tipo=reserva_legal.",
+  },
+  {
+    name: "alterar_area_institucional",
+    from: "reservar_area",
+    description: "Altera a área institucional para o percentual informado. O CAD calcula a geometria. tipo=institucional.",
+  },
+];
+
+/**
+ * Tools no formato Responses API (`type: "function"` no topo).
+ * Reutiliza o catálogo canônico — aliases apontam para as mesmas funções do motor.
+ */
+export function cadAiResponsesTools(): Array<{
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  strict: boolean;
+}> {
+  const canonical = cadAiTools.map((item) => ({
+    type: "function" as const,
+    name: item.function.name,
+    description: item.function.description,
+    parameters: item.function.parameters as unknown as Record<string, unknown>,
+    strict: false,
+  }));
+  const byName = new Map(cadAiTools.map((item) => [item.function.name, item]));
+  const aliases = CAD_AI_RESPONSE_ALIASES.flatMap((alias) => {
+    const source = byName.get(alias.from);
+    if (!source) return [];
+    return [
+      {
+        type: "function" as const,
+        name: alias.name,
+        description: alias.description,
+        parameters: source.function.parameters as unknown as Record<string, unknown>,
+        strict: false,
+      },
+    ];
+  });
+  return [...canonical, ...aliases];
 }
 
 /**
@@ -539,7 +762,7 @@ export const cadAiTools: CadAiTool[] = [
   tool("exportar_sigef", "Exportar ODS SIGEF da poligonal fechada selecionada (vértices, E/N, lat/lon e confrontantes) para conferência no INCRA.", ["entidade_id", "usarSelecao", "resposta"]),
   tool(
     "gerar_loteamento",
-    "Divide uma área/gleba selecionada em lotes com vias internas. area_minima_quadra_m2 (ex. 2000) é a área alvo de cada quadra — o motor parte a gleba em quadras desse tamanho com vias entre elas. Alternativa: largura_quadra_m + distancia_quadra_m define a quadra por largura e profundidade. Quadras profundas partem ao meio (divisória de fundos) mesmo sem rua no interior; laterais ortogonais à testada de cada fileira. Restos nas bordas viram lotes (sem vazios). Reserva legal é recortada — lotes e vias não sobrepõem. vias_existentes_extremidades=true não abre rua nova na borda (via pública já encostada). lados_aresta = índices das arestas da gleba com via já existente (só esses lados). entidade_ids = polilinhas de eixo existentes para inserir. Use quando o usuário pedir para lotear, parcelar a gleba, dividir o terreno em lotes ou criar um loteamento.",
+    "Divide uma área/gleba selecionada em lotes com vias internas. area_minima_quadra_m2 (ex. 2000) é a área alvo de cada quadra — o motor parte a gleba em quadras desse tamanho com vias entre elas. Alternativa: largura_quadra_m + distancia_quadra_m define a quadra por largura e profundidade. Quadras profundas partem ao meio (divisória de fundos) mesmo sem rua no interior; laterais ortogonais à testada de cada fileira. Restos nas bordas viram lotes (sem vazios). Área verde é recortada — lotes e vias não sobrepõem. vias_existentes_extremidades=true: a via pública já existe FORA da gleba — gera o corredor do lado de fora (não come o terreno) e as vias do loteamento se unem a ela na borda. largura_via_existente_m define a largura dessa rua externa. lados_aresta = índices das arestas com via já existente (só esses lados). Faixa de domínio (rodovia): lados_faixa_dominio + largura_faixa_dominio_m recua a faixa PARA DENTRO da gleba; não recebe lote nem via. entidade_ids = polilinhas de eixo existentes para inserir. Use quando o usuário pedir para lotear, parcelar a gleba, dividir o terreno em lotes ou criar um loteamento.",
     [
       "entidade_id",
       "usarSelecao",
@@ -555,7 +778,10 @@ export const cadAiTools: CadAiTool[] = [
       "eixo_rua",
       "raio_esquina_m",
       "vias_existentes_extremidades",
+      "largura_via_existente_m",
       "lados_aresta",
+      "lados_faixa_dominio",
+      "largura_faixa_dominio_m",
       "entidade_ids",
       "orientacao",
       "prefixo_quadra",
@@ -597,11 +823,74 @@ export const cadAiTools: CadAiTool[] = [
   ),
   tool(
     "reservar_area",
-    "Corta uma faixa da gleba selecionada para área institucional ou reserva legal, no percentual informado. Ação destrutiva: substitui o polígono pela gleba restante + a faixa reservada.",
+    "Ajusta área verde (tipo=reserva_legal ou area_verde) ou institucional (tipo=institucional) para o percentual informado. Use para 'mudar área verde para 10%', 'quero aumentar a área verde', 'reduza a área institucional'. O CAD calcula a geometria.",
     ["entidade_id", "usarSelecao", "tipo", "percentual", "lado", "resposta"],
     ["tipo", "percentual"],
   ),
   tool("selecionar", "Selecionar uma entidade pelo ID.", ["entidade_id", "usarSelecao", "resposta"]),
+  tool("consultar_projeto", "Resumo do projeto e do loteamento atual (quadras, lotes, ruas). Somente leitura.", ["resposta"]),
+  tool("consultar_quadras", "Listar todas as quadras com área, quantidade de lotes e área média. Somente leitura.", ["resposta"]),
+  tool(
+    "consultar_quadra",
+    "Consultar uma quadra pelo identificador (G, H, Quadra G): área, quantidade de lotes e média. Use para 'qual a área da quadra G' ou 'quantos lotes na H'.",
+    ["quadra", "usarSelecao", "resposta"],
+  ),
+  tool(
+    "consultar_lotes",
+    "Listar lotes, opcionalmente filtrando por quadra ou área. Use para 'mostre os lotes abaixo de 250 m²' ou 'qual o menor lote'.",
+    ["quadra", "lote", "lotes", "filtro_area_max_m2", "filtro_area_min_m2", "resposta"],
+  ),
+  tool("consultar_lote", "Consultar um lote específico (área, testada, profundidade).", ["lote", "resposta"], ["lote"]),
+  tool("calcular_testada", "Calcular a testada (frente) de um lote.", ["lote", "quadra", "resposta"]),
+  tool(
+    "calcular_area_remanescente",
+    "Calcular a área remanescente do loteamento ou de uma quadra. Somente leitura.",
+    ["quadra", "resposta"],
+  ),
+  tool(
+    "otimizar_quadra",
+    "Reempacota os lotes de uma ou mais quadras com o motor geométrico existente. NÃO calcule coordenadas. Use para reprojetar loteamento, refazer quadra, ajustar todos os lotes, completar a quadra, aproveitar remanescente, lotes sem acesso à rua. preservar_ruas=true se o usuário pedir para manter as ruas. A alteração exige confirmação no CAD.",
+    [
+      "quadra",
+      "area_alvo_m2",
+      "area_minima_m2",
+      "area_maxima_m2",
+      "testada_minima_m",
+      "preservar_ruas",
+      "preservar_limites",
+      "minimizar_remanescente",
+      "lotes_esquina_maiores",
+      "objetivo",
+      "excecoes",
+      "usarSelecao",
+      "scope",
+      "resposta",
+    ],
+  ),
+  tool(
+    "ajustar_lote",
+    "Ajusta SOMENTE um lote (scope=single_lot). NUNCA chame otimizar_quadra, redistribuir_lotes ou gerar_loteamento no mesmo turno. Use para 'alterar lote 01 para 500m²' (lote='01', area_alvo_m2=500, scope='single_lot'). Só use scope=local_redistribution se o usuário autorizar vizinhos. Não invente coordenadas.",
+    ["lote", "area_alvo_m2", "testada_minima_m", "scope", "resposta"],
+    ["lote"],
+  ),
+  tool(
+    "redistribuir_lotes",
+    "Redistribui os lotes da quadra para fechar a área (aproveitar melhor / eliminar remanescente).",
+    ["quadra", "minimizar_remanescente", "preservar_ruas", "usarSelecao", "resposta"],
+  ),
+  tool(
+    "validar_loteamento",
+    "Analisa o loteamento: área mínima, testada, sobreposição, remanescente, conflito com ruas e áreas verdes. Use para 'analise esse loteamento'.",
+    ["resposta"],
+  ),
+  tool("aplicar_alteracao", "Confirma e aplica a prévia pendente. Use quando o usuário disser sim/aplicar.", ["resposta"]),
+  tool("desfazer_alteracao", "Desfaz a última alteração geométrica aplicada. Use quando o usuário disser desfaz.", ["resposta"]),
+  tool("zoom_objeto", "Enquadrar no desenho uma quadra ou lote.", ["quadra", "lote", "entidade_id", "usarSelecao", "resposta"]),
+  tool(
+    "renomear_quadra",
+    "Renomeia o rótulo das quadras. NÃO altera geometria nem lotes. Use para 'dar nome às quadras', 'renomear a quadra A', 'chamar a quadra A de QA'. Se faltar o nome novo, pergunte. NUNCA use ajustar_lote para isso.",
+    ["quadra", "novo_id", "nomes", "resposta"],
+  ),
 ];
 
 export function buildCadAiSystemPrompt(): string {
@@ -609,35 +898,107 @@ export function buildCadAiSystemPrompt(): string {
     .map((t) => `- ${t.function.name}: ${t.function.description}`)
     .join("\n");
 
-  return `Você é o assistente IA do ambiente CAD DataGeo (topografia, agrimensura, geotecnia).
-Interprete comandos naturais em português (voz ou texto) e execute-os chamando as ferramentas (tools) disponíveis.
+  return `Você é o interpretador principal de linguagem natural do ambiente CAD DataGeo.
+O usuário fala em português, com paráfrases e frases que NÃO estão cadastradas. Entenda a INTENÇÃO e chame as tools.
 Nunca invente o nome de uma ferramenta. Só existem as tools listadas abaixo.
+NUNCA invente coordenadas, vértices ou geometria — o motor CAD calcula.
 
-Comando composto (ex.: "importe o KMZ, gere TIN e curvas de 1 m"): chame várias tools na ordem de execução.
-Se faltar um parâmetro obrigatório (coordenadas, distância, ângulo, dois pontos, etc.), NÃO chame a tool — pergunte em português o que falta.
-Não há ferramenta de círculo, arco ou elipse. Se o usuário pedir isso, explique educadamente que o CAD ainda não cria círculos; não chame uma tool inventada.
-Não há ferramenta para apagar/arredondar um único vértice ou aresta. contexto.selecao.verticeIndex e arestaIndex descrevem o que está destacado no desenho; use isso só como referência. Para apagar, a tool "apagar" remove a entidade inteira.
+Você interpreta. As tools consultam e alteram o desenho. Operações geométricas geram prévia; o usuário confirma com Aplicar.
+Memória: use o histórico. "os de esquina", "agora a H", "mas não mexa na rua" referem-se à operação anterior.
+Se faltar um dado obrigatório e não houver seleção/contexto, PERGUNTE em português. Não invente.
+Se houver uma única quadra no contexto ou uma selecionada, use-a. Se houver várias e o pedido for ambíguo, pergunte qual quadra.
 
-Flags:
-- usarSelecao: true — usa pontos/entidade selecionada (contexto.selecao)
-- posicao: "centro" — texto/área no centróide do polígono selecionado
+Comando composto: chame várias tools na ordem.
+Não há círculo/arco/elipse. Explique; não invente tool.
+Não há tool para apagar um único vértice; "apagar" remove a entidade inteira.
 
-Regras:
-- Use rótulos exatos dos pontos do contexto. Normalize "ponto 1" → P1, "vértice 1" → V1.
-- "Crie um polígono com P1, P2, P3 e P4" / "gerar polígonos do ponto até o quatro" → criar_poligono, pontos: ["P1","P2","P3","P4"]
-- "Ligue todos os pontos" → criar_polilinha com todos os pontos do contexto em ordem
-- "Numere os vértices" → renumerar_pontos. "Coloque as distâncias" → inserir_cota_automatica
-- "Calcule a área e coloque texto no centro" → medir_area e inserir_area (duas tools)
-- "Quanto mede a área?" / "Qual o tamanho do terreno?" → medir_area
-- "Gerar memorial" → memorial_descritivo. "Exportar SIGEF" / "gerar planilha SIGEF" → exportar_sigef. "Perfil longitudinal P1 P2" → perfil_longitudinal
-- "Lotear essa área" / "divide esse terreno em lotes" / "cria um loteamento" / "parcela essa gleba" → gerar_loteamento (peça largura da via, profundidade do lote e testada se faltarem; area_minima_quadra_m2 é a área alvo de cada quadra, ex. 2000, com vias entre elas; ou largura_quadra_m + distancia_quadra_m para definir a quadra por medidas; largura_calcada_m, eixo_rua, raio_esquina_m, vias_existentes_extremidades e entidade_ids de eixos existentes são opcionais). Não peça área mínima de lote. A quadra é partida no meio (divisória de fundos) mesmo sem rua no interior; lotes ortogonais à testada da fileira; raio só na esquina verdadeira. Restos nas bordas viram lotes. Reserva legal não recebe lote nem via. Se o usuário disser que já há via/rodovia na borda, use vias_existentes_extremidades=true.
-- "Alterar eixo da rua em 2 pontos" / "alterar eixo de uma quadra até a outra" → alterar_eixo (o usuário clica dois pontos no eixo, nas faces das quadras).
-- "Gerar REURB" / "numerar lotes e cotas" / "aplicar regularização urbana" → gerar_reurb. "Memorial tabular REURB" / "planilha da regularização" → exportar_reurb_tabular. "Plantas individuais dos lotes" → gerar_plantas_reurb
-- "Gerar MDT" / "modelo digital do terreno" → gerar_mdt. "Volume de corte" / "calcular volume" / "calcular volumetria" → volume_corte (informe z do platô). "Volume de aterro" → volume_aterro. "Seções-tipo" / "notas de serviço no eixo" → secoes
-- "Ferramenta polilinha" / "ativar selecionar" → ativar_ferramenta. "Mostrar/ocultar camada curvas de nível" → trocar_camada
-- "Subdividir a quadra com testada de 12 m" → subdividir_quadra. "Marcar essa polilinha como rua existente" → criar_rua_existente. "Reservar 20% institucional no fundo" → reservar_area
-- Considere camadas, CRS, objetosSelecionados, verticeIndex e arestaIndex do contexto.
+Você é um interpretador de comandos CAD.
+Primeiro identifique a ENTIDADE principal mencionada pelo usuário.
+Entidades possíveis: lote, quadra, rua, área verde, área institucional, gleba, projeto.
+Nunca assuma que uma operação sobre uma quadra é uma operação sobre um lote.
+Nunca confunda 'loteamento' com 'lote'.
+A entidade deve ser determinada pelo significado da frase.
+'dar nome / nomear / identificar / trocar nomes das quadras' → renomear_quadra. Sem nomes: pergunte. NUNCA ajustar_lote.
+
+Intenções de loteamento (paráfrases livres):
+- alterar/aumentar um lote (lote 01, lote 1, uns 500 metros) → ajustar_lote(lote, area_alvo_m2, scope=single_lot). Uma tool só. NUNCA otimizar_quadra.
+- "quero o lote 01 maior" sem número: pergunte a área alvo, salvo se o histórico já tiver.
+- ajustar todos os lotes / dessa quadra / próximos de 250 → otimizar_quadra(area_alvo_m2, preservar_ruas=true).
+- lotes mais iguais / mesma área / uniformizar áreas → otimizar_quadra(objetivo="maximizar_equidade", preservar_ruas=true). NÃO calcule áreas, vértices nem iterações.
+- área verde para X% / aumentar área verde → reservar_area(tipo="reserva_legal", percentual).
+- reduzir área institucional → reservar_area(tipo="institucional", percentual); peça o % se faltar.
+- reprojetar loteamento / refazer essa quadra / complete a quadra / aproveite a área que sobrou → otimizar_quadra ou redistribuir_lotes, preservar_ruas=true, minimizar_remanescente=true. Peça "Deseja aplicar?" na resposta.
+- não quero lotes sem acesso à rua / mantenha as ruas e reorganize → otimizar_quadra(preservar_ruas=true).
+- área do lote 01 → consultar_lote. Área/quantidade da quadra G → consultar_quadra.
+- desfaz → desfazer_alteracao. sim/aplicar → aplicar_alteracao.
+
+Consulta: execute direto. Geometria: descreva e peça confirmação na resposta.
+
+Flags: usarSelecao=true usa a seleção; preservar_ruas=true não altera vias.
+Normalize "ponto 1"→P1, "lote 1"/"lote 01"→"01".
+Lotear gleba nova → gerar_loteamento (peça via, profundidade e testada se faltarem).
+Loteamento já gerado (contexto.loteamento): você decide O QUE fazer; o motor decide COMO.
+Considere camadas, CRS, seleção, histórico e contexto.loteamento.
 
 Tools:
 ${actions}`;
+}
+
+const COMPACT_TOOL_NAMES = new Set([
+  "consultar_projeto",
+  "consultar_quadras",
+  "consultar_quadra",
+  "consultar_lotes",
+  "consultar_lote",
+  "calcular_area",
+  "calcular_testada",
+  "calcular_area_remanescente",
+  "ajustar_lote",
+  "ajustar_lotes",
+  "otimizar_quadra",
+  "reprojetar_loteamento",
+  "redistribuir_lotes",
+  "gerar_loteamento",
+  "alterar_area_verde",
+  "alterar_area_institucional",
+  "reservar_area",
+  "validar_loteamento",
+  "aplicar_alteracao",
+  "desfazer_alteracao",
+  "zoom_objeto",
+  "selecionar",
+  "renomear_quadra",
+]);
+
+const LOTEAMENTO_INTENT_RE =
+  /lote|quadra|loteamento|gleba|área verde|area verde|institucional|reprojet|reporjet|testada|remanescente|vi[aá]rio|ruas?/i;
+
+/** Tools enxutas para linguagem natural de loteamento — menos tokens. */
+export function cadAiCompactResponsesTools() {
+  return cadAiResponsesTools().filter((item) => COMPACT_TOOL_NAMES.has(item.name));
+}
+
+export function buildCadAiCompactSystemPrompt(): string {
+  return `Você é um interpretador de comandos CAD. Primeiro identifique a ENTIDADE: lote, quadra, rua, área verde, área institucional, gleba, projeto.
+Nunca trate quadra como lote. Nunca confunda loteamento com lote.
+Saída principal: tool call. Texto curto.
+NUNCA invente coordenadas, vértices, GeoJSON, JavaScript, SQL ou shell.
+NUNCA altere geometria direto — só tools. O motor CAD calcula.
+dar nome / nomear / identificar quadras → renomear_quadra. Sem nomes: pergunte. NUNCA ajustar_lote.
+ajustar_lote só com lote explícito (lote 01), área e scope=single_lot. Uma tool. otimizar_quadra/reprojetar_loteamento para lotes da quadra ou o loteamento.
+Normalize lote 1 → 01. Operação grande: peça confirmação na resposta curta.`;
+}
+
+export function selectCadAiOpenAiToolkit(command: string): {
+  tools: ReturnType<typeof cadAiResponsesTools>;
+  instructions: string;
+} {
+  if (LOTEAMENTO_INTENT_RE.test(command)) {
+    return { tools: cadAiCompactResponsesTools(), instructions: buildCadAiCompactSystemPrompt() };
+  }
+  return {
+    tools: cadAiResponsesTools(),
+    instructions: `${buildCadAiCompactSystemPrompt()}
+Desenho: use as tools do catálogo (criar_ponto, medir_*, importar). Sem executar código.`,
+  };
 }

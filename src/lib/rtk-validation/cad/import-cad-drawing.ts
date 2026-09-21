@@ -204,13 +204,24 @@ export async function importCadDrawingFile(
       }
     }
 
+    if (ext === "tif" || ext === "tiff" || ext === "ecw") {
+      return {
+        project,
+        importedEntities: [],
+        count: 0,
+        enableSatellite: false,
+        warnings: [],
+        error: "GeoTIFF e ECW georreferenciados entram como ortofoto, não como desenho CAD.",
+      };
+    }
+
     return {
       project,
       importedEntities: [],
       count: 0,
       enableSatellite: false,
       warnings: [],
-      error: "Formato não suportado. Use DWG, DXF, KMZ ou KML.",
+      error: "Formato não suportado. Use DWG, DXF, KMZ, KML, GeoTIFF ou ECW.",
     };
   } catch (err) {
     return {

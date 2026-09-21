@@ -1,6 +1,7 @@
+import { parseLoteamentoAssistantCommand } from "@/lib/cad-ai/parse";
 import { normalizeCadAiCommand } from "./ai-command-catalog";
 import { parseLabeledPointToken, parsePointReferenceList } from "./ai-point-utils";
-import type { CadAiCommand, CadAiProjectContext } from "./ai-command-types";
+import type { CadAiCommand, CadAiHistoryMessage, CadAiProjectContext } from "./ai-command-types";
 
 function defaultPointPrefix(context?: CadAiProjectContext): string {
   const labels = context?.pontos?.length
@@ -20,10 +21,13 @@ function norm(s: string) {
 export function parseLocalCadCommand(
   text: string,
   context?: CadAiProjectContext,
+  history?: CadAiHistoryMessage[],
 ): CadAiCommand | null {
   const raw = norm(text)
     .replace(/^(?:ia|assistente|chat)[,:\s-]+/i, "")
     .trim();
+  const loteamento = parseLoteamentoAssistantCommand(raw, context, history);
+  if (loteamento?.length === 1) return normalizeCadAiCommand(loteamento[0]);
   const lower = raw.toLowerCase();
   const renamePatterns = [
     /^(?:renomear|alterar\s+(?:id|nome|identifica[cç][aã]o))\s+(?:ponto\s+)?(.+?)\s+(?:para|em|como)\s+(.+)$/i,
@@ -310,7 +314,11 @@ export function parseLocalCadCommand(
     return normalizeCadAiCommand({ acao: "secoes", usarSelecao: true });
   }
 
-  if (/^(?:gerar|criar)\s+(?:um\s+)?loteamento$/i.test(lower)) {
+  if (
+    /^(?:gerar|criar|regerar|reprojetar|reporjetar|refazer)\s+(?:todo\s+)?(?:o\s+)?(?:um\s+)?loteamento$/i.test(
+      lower,
+    )
+  ) {
     return normalizeCadAiCommand({
       acao: "gerar_loteamento",
       entidade_id: context?.selectedEntityId ?? undefined,
@@ -393,16 +401,16 @@ export function parseLocalCadCommand(
   }
 
   const reserveMatch = raw.match(
-    /^reservar\s+([\d.,]+)\s*%?\s+(institucional|reserva\s+legal)(?:\s+(?:no|na)\s+(frente|fundo|esquerda|direita))?$/i,
+    /^reservar\s+([\d.,]+)\s*%?\s+(institucional|reserva\s+legal|[aá]rea\s+verde)(?:\s+(?:no|na)\s+(frente|fundo|esquerda|direita|superior_direita|superior_esquerda|inferior_direita|inferior_esquerda))?$/i,
   );
   if (reserveMatch) {
     const percentual = Number(reserveMatch[1].replace(",", "."));
-    const tipo = /reserva/i.test(reserveMatch[2]) ? "reserva_legal" : "institucional";
+    const tipo = /institucional/i.test(reserveMatch[2]) ? "institucional" : "reserva_legal";
     return normalizeCadAiCommand({
       acao: "reservar_area",
       tipo,
       percentual: Number.isFinite(percentual) ? percentual : undefined,
-      lado: reserveMatch[3]?.toLowerCase(),
+      lado: reserveMatch[3]?.toLowerCase() ?? (tipo === "reserva_legal" ? "superior_direita" : undefined),
       entidade_id: context?.selectedEntityId ?? undefined,
       usarSelecao: true,
     });
@@ -415,8 +423,11 @@ export function parseLocalCadCommand(
 export function parseLocalCadCommandChain(
   text: string,
   context?: CadAiProjectContext,
+  history?: CadAiHistoryMessage[],
 ): CadAiCommand[] | null {
-  const single = parseLocalCadCommand(text, context);
+  const loteamento = parseLoteamentoAssistantCommand(text, context, history);
+  if (loteamento && loteamento.length > 1) return loteamento.map((cmd) => normalizeCadAiCommand(cmd));
+  const single = parseLocalCadCommand(text, context, history);
   if (single) return [single];
 
   const parts = text

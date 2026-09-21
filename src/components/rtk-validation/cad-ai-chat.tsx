@@ -1,6 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  isApplyIntentAction,
+  isCancelPhrase,
+  isConfirmPhrase,
+  isDestructiveAssistantAction,
+  isMutatingAssistantAction,
+  isUndoIntentAction,
+  isUndoPhrase,
+  logCadAi,
+  paramsFromCommand,
+  cloneCadProject,
+  popUndo,
+  pushUndo,
+  validateCadCommand,
+  type CadAssistantPending,
+  type CadAssistantUndoEntry,
+} from "@/lib/cad-ai";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import { buildCadAiContext } from "@/lib/rtk-validation/cad/ai-context";
 import { resolveCadAiCommands } from "@/lib/rtk-validation/cad/ai-command-resolver";
@@ -30,6 +47,7 @@ export interface CadAiChatProps {
   onProjectChange: (project: CadProject) => void;
   onSelectedIdChange: (id: string | null) => void;
   onSideEffect: (effect: CadAiSideEffect) => void;
+  hideLauncher?: boolean;
 }
 
 interface ChatMessage {
@@ -83,6 +101,7 @@ export function CadAiChat({
   onProjectChange,
   onSelectedIdChange,
   onSideEffect,
+  hideLauncher = false,
 }: CadAiChatProps) {
   const t = useTranslations("rtkCad.ai");
   const [input, setInput] = useState("");
@@ -94,6 +113,12 @@ export function CadAiChat({
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileBinary, setFileBinary] = useState<ArrayBuffer | null>(null);
+  const [pending, setPending] = useState<CadAssistantPending | null>(null);
+  const [redistributionOffer, setRedistributionOffer] = useState<{ lote: string; areaAlvo: number } | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const undoStackRef = useRef<CadAssistantUndoEntry[]>([]);
+  const lastOptimizeRef = useRef<ReturnType<typeof paramsFromCommand> | null>(null);
+  const pendingRef = useRef<CadAssistantPending | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -167,18 +192,155 @@ export function CadAiChat({
     [onProjectChange, onSelectedIdChange, onSideEffect, pushMessage, appendHistory, speak, ttsEnabled],
   );
 
+  const applyPending = useCallback(() => {
+    const current = pendingRef.current;
+    if (!current) {
+      pushMessage("assistant", "Não há alteração pendente para aplicar.");
+      return;
+    }
+    pushUndo(undoStackRef.current, { project, selectedId });
+    setCanUndo(true);
+    onProjectChange(current.nextProject);
+    if (current.selectedId) onSelectedIdChange(current.selectedId);
+    pendingRef.current = null;
+    setPending(null);
+    const text = "Alteração aplicada. Use Desfazer se precisar voltar.";
+    pushMessage("assistant", text);
+    appendHistory("Aplicar", text);
+    speak(text, ttsEnabled);
+    logCadAi({ intencao: "aplicar", tool: current.commands.map((cmd) => cmd.acao).join(","), resultado: text });
+  }, [project, selectedId, onProjectChange, onSelectedIdChange, pushMessage, appendHistory, speak, ttsEnabled]);
+
+  const cancelPending = useCallback(() => {
+    if (!pendingRef.current) {
+      pushMessage("assistant", "Não há prévia para cancelar.");
+      return;
+    }
+    pendingRef.current = null;
+    setPending(null);
+    const text = "Alteração cancelada. O desenho não foi modificado.";
+    pushMessage("assistant", text);
+    speak(text, ttsEnabled);
+  }, [pushMessage, speak, ttsEnabled]);
+
+  const undoLast = useCallback(() => {
+    const prev = popUndo(undoStackRef.current);
+    setCanUndo(undoStackRef.current.length > 0);
+    if (!prev) {
+      pushMessage("assistant", "Não há alteração para desfazer.");
+      return;
+    }
+    pendingRef.current = null;
+    setPending(null);
+    onProjectChange(prev.project);
+    onSelectedIdChange(prev.selectedId);
+    const text = "Última alteração desfeita.";
+    pushMessage("assistant", text);
+    appendHistory("Desfazer", text);
+    speak(text, ttsEnabled);
+    logCadAi({ intencao: "desfazer", resultado: text });
+  }, [onProjectChange, onSelectedIdChange, pushMessage, appendHistory, speak, ttsEnabled]);
+
   const executeResolved = useCallback(
     (commands: CadAiCommand[], context: ReturnType<typeof buildCadAiContext>, userText: string) => {
-      const resolved = resolveCadAiCommands(commands, context);
-      const actionLabels = resolved.map((c) => c.acao);
-      const result = executeCadAiCommandChain(project, resolved, {
-        selectedId,
-        memorialForm,
-        pendingProfileStart,
-      });
-      applyResult(result, userText, actionLabels);
+      const hydrated = validateCadCommand(commands.map((cmd) => {
+        if (cmd.acao !== "otimizar_quadra" || cmd.area_alvo_m2 != null) return cmd;
+        const last = lastOptimizeRef.current;
+        if (!last?.areaAlvo) return cmd;
+        return { ...cmd, area_alvo_m2: last.areaAlvo, preservar_ruas: cmd.preservar_ruas ?? last.preservarRuas ?? true };
+      }));
+      if (hydrated.some((cmd) => isApplyIntentAction(cmd.acao)) || isConfirmPhrase(userText)) {
+        applyPending();
+        return;
+      }
+      if (hydrated.some((cmd) => isUndoIntentAction(cmd.acao)) || isUndoPhrase(userText)) {
+        undoLast();
+        return;
+      }
+      if (isCancelPhrase(userText)) {
+        cancelPending();
+        return;
+      }
+
+      const resolved = resolveCadAiCommands(hydrated, context);
+      const actionLabels = resolved.map((cmd) => cmd.acao);
+      logCadAi({ usuario: userText, intencao: actionLabels.join(","), tool: actionLabels.join(","), parametros: resolved });
+      const mutating = resolved.filter((cmd) => isMutatingAssistantAction(cmd.acao) && !isApplyIntentAction(cmd.acao));
+      const readonly = resolved.filter((cmd) => !mutating.includes(cmd));
+
+      if (readonly.length) {
+        const readResult = executeCadAiCommandChain(project, readonly, {
+          selectedId,
+          memorialForm,
+          pendingProfileStart,
+          selectedSegmentIndex,
+        });
+        if (!mutating.length) {
+          applyResult(readResult, userText, actionLabels);
+          return;
+        }
+        pushMessage("assistant", readResult.message, readonly.map((cmd) => cmd.acao));
+      }
+
+      if (mutating.length) {
+        const result = executeCadAiCommandChain(project, mutating, {
+          selectedId,
+          memorialForm,
+          pendingProfileStart,
+          selectedSegmentIndex,
+        });
+        if (result.ok === false) {
+          if (result.redistributionOffer) {
+            setRedistributionOffer(result.redistributionOffer);
+            pushMessage("assistant", result.message);
+          } else {
+            pushMessage("error", result.message);
+          }
+          appendHistory(userText, result.message);
+          speak(result.message, ttsEnabled);
+          return;
+        }
+        setRedistributionOffer(null);
+        for (const cmd of mutating) {
+          if (cmd.acao === "otimizar_quadra") lastOptimizeRef.current = paramsFromCommand(cmd, selectedId);
+        }
+        const iaReply = mutating.map((cmd) => cmd.resposta?.trim()).find(Boolean);
+        const previewText = iaReply
+          ? iaReply.includes("Deseja aplicar")
+            ? iaReply
+            : `${iaReply} Deseja aplicar?`
+          : `${result.message} Deseja aplicar?`;
+        const nextPending: CadAssistantPending = {
+          snapshot: cloneCadProject(project),
+          nextProject: result.project,
+          selectedId: result.selectedId ?? null,
+          commands: mutating,
+          preview: previewText,
+          destructive: mutating.some((cmd) => isDestructiveAssistantAction(cmd.acao)),
+        };
+        pendingRef.current = nextPending;
+        setPending(nextPending);
+        pushMessage("assistant", previewText, mutating.map((cmd) => cmd.acao));
+        appendHistory(userText, previewText);
+        speak(result.message, ttsEnabled);
+        logCadAi({ tool: mutating.map((cmd) => cmd.acao).join(","), resultado: "prévia aguardando confirmação" });
+      }
     },
-    [project, selectedId, memorialForm, pendingProfileStart, applyResult],
+    [
+      project,
+      selectedId,
+      memorialForm,
+      pendingProfileStart,
+      selectedSegmentIndex,
+      applyResult,
+      applyPending,
+      undoLast,
+      cancelPending,
+      pushMessage,
+      appendHistory,
+      speak,
+      ttsEnabled,
+    ],
   );
 
   const runCommands = useCallback(
@@ -216,6 +378,18 @@ export function CadAiChat({
       setProcessing(true);
 
       try {
+        if (pendingRef.current && isConfirmPhrase(trimmed)) {
+          applyPending();
+          return;
+        }
+        if (isUndoPhrase(trimmed)) {
+          undoLast();
+          return;
+        }
+        if (pendingRef.current && isCancelPhrase(trimmed)) {
+          cancelPending();
+          return;
+        }
         if (fileBinary && fileName?.toLowerCase().endsWith(".kmz") && /import/i.test(trimmed)) {
           const result = importKmzIntoProject(project, fileBinary);
           applyResult(result, trimmed, ["importar"]);
@@ -223,41 +397,24 @@ export function CadAiChat({
         }
 
         const context = makeContext();
+        const conversationId =
+          typeof window === "undefined"
+            ? "cad-ai"
+            : sessionStorage.getItem("datageo:cad-ai-conversation") ??
+              (() => {
+                const id = `cad_${Date.now().toString(36)}`;
+                sessionStorage.setItem("datageo:cad-ai-conversation", id);
+                return id;
+              })();
 
-        const localChain = parseLocalCadCommandChain(trimmed, context);
-        if (localChain?.length) {
-          const commands = localChain.map((cmd) =>
-            fileContent && cmd.acao === "importar"
-              ? {
-                  ...cmd,
-                  conteudo: fileContent,
-                  arquivo: cmd.arquivo ?? fileName?.split(".").pop()?.toLowerCase(),
-                }
-              : cmd,
-          );
-          executeResolved(commands, context, trimmed);
-          return;
-        }
-
-        const localCommand = parseLocalCadCommand(trimmed, context);
-        if (localCommand) {
-          const cmd =
-            fileContent && localCommand.acao === "importar"
-              ? {
-                  ...localCommand,
-                  conteudo: fileContent,
-                  arquivo: localCommand.arquivo ?? fileName?.split(".").pop()?.toLowerCase(),
-                }
-              : localCommand;
-          executeResolved([cmd], context, trimmed);
-          return;
-        }
-
-        const res = await fetch("/api/assistente-ia", {
+        const res = await fetch("/api/cad/ai", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            message: trimmed,
             command: trimmed,
+            conversationId,
+            cadContext: context,
             context,
             history: conversationHistory,
             fileContent: fileContent ?? undefined,
@@ -269,13 +426,41 @@ export function CadAiChat({
           commands?: CadAiCommand[];
           error?: string;
           resposta?: string;
+          source?: string;
+        };
+
+        const tryLocalFallback = () => {
+          const localChain = parseLocalCadCommandChain(trimmed, context, conversationHistory);
+          const localCommand = localChain?.length
+            ? localChain
+            : parseLocalCadCommand(trimmed, context, conversationHistory);
+          return Array.isArray(localCommand) ? localCommand : localCommand ? [localCommand] : [];
         };
 
         if (!res.ok) {
-          throw new Error(data.error || t("interpretError"));
+          const openaiDown = res.status >= 500 || res.status === 408 || res.status === 429;
+          if (openaiDown) {
+            const fallback = tryLocalFallback();
+            if (fallback.length) {
+              executeResolved(fallback, context, trimmed);
+              return;
+            }
+          }
+          const raw = data.error || "";
+          if (res.status === 503 || /OPENAI_API_KEY/i.test(raw)) {
+            throw new Error(raw || "Assistente IA indisponível: OPENAI_API_KEY não configurada.");
+          }
+          throw new Error(raw || t("interpretError"));
         }
 
         if (!data.commands?.length) {
+          if (data.source !== "openai") {
+            const fallback = tryLocalFallback();
+            if (fallback.length) {
+              executeResolved(fallback, context, trimmed);
+              return;
+            }
+          }
           const text = data.resposta?.trim() || t("interpretError");
           pushMessage(data.resposta?.trim() ? "assistant" : "error", text);
           speak(text, ttsEnabled);
@@ -313,6 +498,9 @@ export function CadAiChat({
       fileName,
       fileBinary,
       applyResult,
+      applyPending,
+      undoLast,
+      cancelPending,
       executeResolved,
       makeContext,
       appendHistory,
@@ -412,6 +600,7 @@ export function CadAiChat({
   };
 
   if (!open) {
+    if (hideLauncher) return null;
     return (
       <button
         type="button"
@@ -430,10 +619,10 @@ export function CadAiChat({
       <header className="flex shrink-0 items-center justify-between border-b border-[#1e293b] px-4 py-3">
         <div>
           <div className="flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#7c3aed]/20 text-xs text-[#c4b5fd]">✦</span>
-            <h2 className="text-sm font-semibold text-[#e2e8f0]">{t("title")}</h2>
+            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#7c3aed]/20 text-xs text-[#c4b5fd]">✨</span>
+            <h2 className="text-sm font-semibold text-[#e2e8f0]">Assistente CAD</h2>
           </div>
-          <p className="mt-1 text-[10px] text-[#64748b]">{t("subtitle")}</p>
+          <p className="mt-1 text-[10px] text-[#64748b]">Linguagem natural · loteamento e desenho</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -467,13 +656,13 @@ export function CadAiChat({
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
           <div className="space-y-3 text-xs text-[#64748b]">
-            <p>{t("welcome")}</p>
-            <p className="text-[10px] text-[#475569]">{t("contextHint")}</p>
+            <p className="text-sm text-[#cbd5e1]">🤖 Olá! O que você deseja fazer?</p>
+            <p>Fale em português: consultar áreas, otimizar quadras, validar o loteamento ou desfazer.</p>
             <ul className="space-y-1.5">
-              <li className="rounded-lg bg-[#1a1d27] px-3 py-2 text-[#94a3b8]">{t("example1")}</li>
-              <li className="rounded-lg bg-[#1a1d27] px-3 py-2 text-[#94a3b8]">{t("example2")}</li>
-              <li className="rounded-lg bg-[#1a1d27] px-3 py-2 text-[#94a3b8]">{t("example3")}</li>
-              <li className="rounded-lg bg-[#1a1d27] px-3 py-2 text-[#94a3b8]">{t("example4")}</li>
+              <li className="rounded-lg bg-[#1a1d27] px-3 py-2 text-[#94a3b8]">Na quadra G quero lotes com 300 m².</li>
+              <li className="rounded-lg bg-[#1a1d27] px-3 py-2 text-[#94a3b8]">Qual a área da quadra G?</li>
+              <li className="rounded-lg bg-[#1a1d27] px-3 py-2 text-[#94a3b8]">Mostre os lotes abaixo de 250 m².</li>
+              <li className="rounded-lg bg-[#1a1d27] px-3 py-2 text-[#94a3b8]">Analise esse loteamento.</li>
             </ul>
           </div>
         ) : (
@@ -534,13 +723,85 @@ export function CadAiChat({
         {fileName ? (
           <p className="mb-2 truncate text-[10px] text-emerald-400">{t("fileReady", { name: fileName })}</p>
         ) : null}
+        {redistributionOffer ? (
+          <div className="mb-2 space-y-2 rounded-lg border border-amber-500/30 bg-amber-950/30 px-3 py-2 text-[11px] text-amber-100">
+            <p>O ajuste individual não cabe sem mexer em outros lotes.</p>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const offer = redistributionOffer;
+                  setRedistributionOffer(null);
+                  runCommands(
+                    [
+                      {
+                        acao: "ajustar_lote",
+                        lote: offer.lote,
+                        area_alvo_m2: offer.areaAlvo,
+                        scope: "local_redistribution",
+                        resposta: `Redistribuir lotes afetados para ajustar o lote ${offer.lote} para ${offer.areaAlvo} m². Deseja aplicar?`,
+                      },
+                    ],
+                    "Permitir redistribuição",
+                  );
+                }}
+                className="rounded-lg bg-amber-600 px-2 py-1.5 text-[11px] font-semibold text-white"
+              >
+                Permitir redistribuição
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRedistributionOffer(null);
+                  pushMessage("assistant", "Operação cancelada. Nenhum lote foi alterado.");
+                }}
+                className="rounded-lg border border-[#334155] px-2 py-1.5 text-[11px] text-[#cbd5e1]"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {pending ? (
+          <div className="mb-2 rounded-lg border border-amber-500/30 bg-amber-950/30 px-3 py-2 text-[11px] text-amber-100">
+            {pending.destructive
+              ? "Operação destrutiva. Confirme para aplicar no desenho."
+              : "Prévia pronta. Confirme para aplicar no desenho."}
+          </div>
+        ) : null}
+        <div className="mb-2 grid grid-cols-3 gap-1.5">
+          <button
+            type="button"
+            disabled={!pending}
+            onClick={applyPending}
+            className="rounded-lg bg-emerald-600 px-2 py-1.5 text-[11px] font-semibold text-white disabled:opacity-35"
+          >
+            Aplicar
+          </button>
+          <button
+            type="button"
+            disabled={!pending}
+            onClick={cancelPending}
+            className="rounded-lg border border-[#334155] px-2 py-1.5 text-[11px] text-[#cbd5e1] disabled:opacity-35"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={!canUndo}
+            onClick={undoLast}
+            className="rounded-lg border border-[#334155] px-2 py-1.5 text-[11px] text-[#cbd5e1] disabled:opacity-35"
+          >
+            Desfazer
+          </button>
+        </div>
         <form onSubmit={handleSubmit} className="space-y-2">
           <textarea
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={t("placeholder")}
+            placeholder="💬 Digite um comando..."
             rows={3}
             disabled={processing}
             className="w-full resize-none rounded-lg border border-[#334155] bg-[#1a1d27] px-3 py-2 text-xs text-[#e2e8f0] placeholder:text-[#64748b] focus:border-[#7c3aed] focus:outline-none disabled:opacity-50"

@@ -94,6 +94,10 @@ export interface CadLoteProps {
   testadaM: number;
   profundidadeM: number;
   ruas: string[];
+  /** Número exibido. Não é o id interno da geometria. */
+  numero?: number;
+  /** Letra/id exibido da quadra (A, B, C…). */
+  quadra?: string;
 }
 
 export interface CadPolylineEntity {
@@ -113,7 +117,7 @@ export interface CadPolylineEntity {
 
 export type CadEntity = CadPointEntity | CadLineEntity | CadPolylineEntity;
 
-export type CadHatchPattern = "diagonal" | "cross" | "grass";
+export type CadHatchPattern = "diagonal" | "cross" | "grass" | "none";
 export type CadLineType = "solid" | "dashed";
 
 export interface CadLayer {
@@ -180,7 +184,16 @@ export type CadTool =
   | "editPolygon"
   | "confrontacao"
   | "deletePoint"
-  | "editElevation";
+  | "editElevation"
+  | "trim"
+  | "aparar"
+  | "offset"
+  | "scale"
+  | "extend"
+  | "mirror"
+  | "stretch"
+  | "break"
+  | "breakPoint";
 
 export const CAD_IMPORT_STORAGE_KEY = "datageo:rtk-cad-import";
 

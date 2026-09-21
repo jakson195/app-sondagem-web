@@ -206,6 +206,8 @@ export function classifyLot(input: ClassifyLotInput): CadLoteProps {
     testadaM,
     profundidadeM,
     ruas: frontages.map((f) => f.streetName),
+    numero: input.lot.lote?.numero,
+    quadra: input.lot.lote?.quadra,
   };
 }
 

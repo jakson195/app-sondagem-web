@@ -128,11 +128,11 @@ export function CadPointObservations({
   if (points.length === 0) return null;
 
   return (
-    <section className="shrink-0 rounded-xl border border-[#e5e7eb] bg-white shadow-sm">
+    <section className="rounded-md border border-[#e5e7eb] bg-white/95 shadow-sm">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+        className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left"
       >
         <div>
           <h2 className="text-sm font-semibold text-[#0f2848]">{t("title")}</h2>

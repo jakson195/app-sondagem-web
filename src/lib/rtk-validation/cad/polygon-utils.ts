@@ -373,6 +373,30 @@ export function distancePointToSegment(
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
+/** Aresta mais próxima do clique (distância em px de tela). */
+export function nearestPolylineSegmentIndex(
+  sx: number,
+  sy: number,
+  vertices: CadVertex[],
+  closed: boolean,
+  worldToScreenFn: (x: number, y: number) => { sx: number; sy: number },
+): { index: number; dist: number } | null {
+  const count = closed ? vertices.length : Math.max(0, vertices.length - 1);
+  let best: number | null = null;
+  let bestDist = Infinity;
+  for (let i = 0; i < count; i++) {
+    const j = (i + 1) % vertices.length;
+    const a = worldToScreenFn(vertices[i].x, vertices[i].y);
+    const b = worldToScreenFn(vertices[j].x, vertices[j].y);
+    const dist = distancePointToSegment(sx, sy, a.sx, a.sy, b.sx, b.sy);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = i;
+    }
+  }
+  return best == null ? null : { index: best, dist: bestDist };
+}
+
 /** Índice da aresta mais próxima do clique (em coordenadas de tela). */
 export function hitTestPolylineSegmentIndex(
   sx: number,
@@ -382,20 +406,9 @@ export function hitTestPolylineSegmentIndex(
   worldToScreenFn: (x: number, y: number) => { sx: number; sy: number },
   thresholdPx = 10,
 ): number | null {
-  const count = closed ? vertices.length : vertices.length - 1;
-  let best: number | null = null;
-  let bestDist = thresholdPx;
-  for (let i = 0; i < count; i++) {
-    const j = (i + 1) % vertices.length;
-    const a = worldToScreenFn(vertices[i].x, vertices[i].y);
-    const b = worldToScreenFn(vertices[j].x, vertices[j].y);
-    const dist = distancePointToSegment(sx, sy, a.sx, a.sy, b.sx, b.sy);
-    if (dist <= bestDist) {
-      bestDist = dist;
-      best = i;
-    }
-  }
-  return best;
+  const nearest = nearestPolylineSegmentIndex(sx, sy, vertices, closed, worldToScreenFn);
+  if (!nearest || nearest.dist > thresholdPx) return null;
+  return nearest.index;
 }
 
 function pointInScreenRing(

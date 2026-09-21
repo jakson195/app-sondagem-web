@@ -4,6 +4,7 @@ import {
   bufferPolylineMeters,
   areaUtilFromStreetsM2,
   generateLoteamento,
+  generateFaixaDominioFromEdges,
   getMainAxisAzimuth,
   polygonAreaPlanarM2,
   polygonInteriorOverlapM2,
@@ -15,6 +16,11 @@ import {
   splitParcelByTargetArea,
   splitThroughBlock,
   subdivideQuadraEmLotes,
+  complementarLoteamento,
+  findBestEvenCount,
+  findBestSubdivision,
+  LOT_MAX_AREA_RATIO,
+  validateLot,
   translateRingInsideHost,
   clampPointInsideHost,
   adjustLotInQuadra,
@@ -65,6 +71,44 @@ function bbox(ring: number[][]) {
     minY: Math.min(...ys),
     maxY: Math.max(...ys),
   };
+}
+
+function viaTouches(a: number[][][], b: number[][][]): boolean {
+  const ra = a[0] ?? [];
+  const rb = b[0] ?? [];
+  return ringsShareBoundary(ra, rb) || polygonInteriorOverlapM2(ra, rb) > 0.5;
+}
+
+function outsideBorderVias(
+  vias: number[][][][],
+  side: "south" | "north" | "west" | "east",
+  span: { maxX: number; maxY: number },
+) {
+  return vias.filter((poly) => {
+    const v = bbox(poly[0] ?? []);
+    const alongX = v.maxX - v.minX;
+    const alongY = v.maxY - v.minY;
+    if (side === "south") return v.maxY < 2 && v.minY < -4 && alongX > 40;
+    if (side === "north") return v.minY > span.maxY - 2 && v.maxY > span.maxY + 4 && alongX > 40;
+    if (side === "west") return v.maxX < 2 && v.minX < -4 && alongY > 40;
+    return v.minX > span.maxX - 2 && v.maxX > span.maxX + 4 && alongY > 40;
+  });
+}
+
+function insideBorderVias(
+  vias: number[][][][],
+  side: "south" | "north" | "west" | "east",
+  span: { maxX: number; maxY: number },
+) {
+  return vias.filter((poly) => {
+    const v = bbox(poly[0] ?? []);
+    const alongX = v.maxX - v.minX;
+    const alongY = v.maxY - v.minY;
+    if (side === "south") return v.minY < 1.5 && v.maxY > 8 && alongX > 40;
+    if (side === "north") return v.maxY > span.maxY - 1.5 && v.minY < span.maxY - 8 && alongX > 40;
+    if (side === "west") return v.minX < 1.5 && v.maxX > 8 && alongY > 40;
+    return v.maxX > span.maxX - 1.5 && v.minX < span.maxX - 8 && alongY > 40;
+  });
 }
 
 function absDot(ax: number, ay: number, bx: number, by: number) {
@@ -361,15 +405,252 @@ describe("generateLoteamento", () => {
     assert.ok(separated >= 2, `vias deveriam separar quadras adjacentes (achou ${separated})`);
   });
 
-  it("não aplica mais área mínima de lote", () => {
-    const lots = subdivideQuadraEmLotes(RECT, 90, 20, 0);
-    assert.ok(lots.length >= 8, `sem área mínima ainda deveria lotear, veio ${lots.length}`);
-    const result = generateLoteamento(RECT, {
-      larguraViaM: 12,
-      profundidadeQuadraM: 50,
-      testadaMinimaM: 10,
+  it("respeita área mínima testada × profundidade e não loteia faixa rasa", () => {
+    const row: [number, number][] = [
+      [0, 0],
+      [120, 0],
+      [120, 25],
+      [0, 25],
+    ];
+    const lots = subdivideQuadraEmLotes(row, 90, 12, 300, undefined, undefined, undefined, { profundidadeM: 25 });
+    assert.ok(lots.length >= 8, `esperava fileira de 12 m, veio ${lots.length}`);
+    for (const poly of lots) {
+      const area = polygonAreaPlanarM2(poly[0] ?? []);
+      assert.ok(area + 0.8 >= 300, `lote interno ${area.toFixed(1)} m² abaixo de 300`);
+    }
+
+    const thin: [number, number][] = [
+      [0, 0],
+      [120, 0],
+      [120, 6],
+      [0, 6],
+    ];
+    const thinLots = subdivideQuadraEmLotes(thin, 90, 12, 300, undefined, undefined, undefined, { profundidadeM: 25 });
+    assert.equal(thinLots.length, 0, "faixa de 6 m não pode virar lote < 300 m²");
+  });
+
+  it("não parte fileira mais rasa que ~2× profundidade só porque há ruas opostas", () => {
+    const row: [number, number][] = [
+      [0, 0],
+      [100, 0],
+      [100, 30],
+      [0, 30],
+    ];
+    const south: [number, number][] = [
+      [-4, -4],
+      [104, -4],
+      [104, 0.4],
+      [-4, 0.4],
+    ];
+    const north: [number, number][] = [
+      [-4, 29.6],
+      [104, 29.6],
+      [104, 34],
+      [-4, 34],
+    ];
+    const rows = splitThroughBlock(row, 90, [south, north], [50, 15], 25);
+    assert.equal(rows.length, 1, `30 m de profundidade não deve virar duas fileiras de 15 m, veio ${rows.length}`);
+  });
+
+  it("findBestEvenCount: 150/25 = 6×25 e 160/25 = 6×26,67", () => {
+    const exact = findBestEvenCount(150, 25);
+    assert.equal(exact.n, 6);
+    assert.ok(Math.abs(exact.each - 25) < 1e-6);
+    const leftover = findBestEvenCount(160, 25);
+    assert.equal(leftover.n, 6, `160 m deve virar 6 faixas, veio ${leftover.n}`);
+    assert.ok(Math.abs(leftover.each - 160 / 6) < 1e-6);
+    const plan = findBestSubdivision({
+      depthM: 150,
+      alongM: 150,
+      profundidadeM: 25,
+      testadaM: 10,
     });
-    assert.ok(result.lotes.length >= 8);
+    assert.equal(plan.rowCount, 6);
+    assert.equal(plan.lotCountPerRow, 15);
+    const uneven = findBestSubdivision({
+      depthM: 160,
+      alongM: 153,
+      profundidadeM: 25,
+      testadaM: 10,
+    });
+    assert.ok(uneven.rowCount === 6 || uneven.rowCount === 7, `faixas de 160 m: ${uneven.rowCount}`);
+    assert.ok(Math.abs(uneven.rowDepthM - 160 / uneven.rowCount) < 1e-6);
+    assert.ok(uneven.rowDepthM <= 25 * 1.2 + 0.05, `profundidade ${uneven.rowDepthM} acima do limite`);
+    assert.ok(uneven.lotCountPerRow >= 14 && uneven.lotCountPerRow <= 16);
+  });
+
+  it("quadra 150×150 com P=25 parte em 6 faixas iguais", () => {
+    const q: [number, number][] = [
+      [0, 0],
+      [150, 0],
+      [150, 150],
+      [0, 150],
+    ];
+    const rows = splitThroughBlock(q, 90, [], [75, 75], 25);
+    assert.equal(rows.length, 6, `esperava 6 faixas, veio ${rows.length}`);
+    for (const ring of rows) {
+      const b = bbox(ring);
+      const h = b.maxY - b.minY;
+      assert.ok(Math.abs(h - 25) < 1.2, `faixa ${h.toFixed(2)} m deveria ~25 m`);
+    }
+  });
+
+  it("quadra 160 m redistribui sobra em 6 faixas de ~26,67 m", () => {
+    const q: [number, number][] = [
+      [0, 0],
+      [200, 0],
+      [200, 160],
+      [0, 160],
+    ];
+    const south: [number, number][] = [
+      [-4, -4],
+      [204, -4],
+      [204, 0.4],
+      [-4, 0.4],
+    ];
+    const north: [number, number][] = [
+      [-4, 159.6],
+      [204, 159.6],
+      [204, 164],
+      [-4, 164],
+    ];
+    const rows = splitThroughBlock(q, 90, [south, north], [100, 80], 25);
+    assert.equal(rows.length, 6, `esperava 6 faixas, veio ${rows.length}`);
+    const heights = rows.map((ring) => {
+      const b = bbox(ring);
+      return b.maxY - b.minY;
+    });
+    const maxH = Math.max(...heights);
+    assert.ok(maxH < 29, `não concentrar sobra numa faixa de ${maxH.toFixed(2)} m`);
+    for (const h of heights) {
+      assert.ok(Math.abs(h - 160 / 6) < 1.2, `faixa ${h.toFixed(2)} m deveria ~26,67 m`);
+    }
+  });
+
+  it("quadra 150×150 com lotes 12×25: internos ≥ 300 m² e esquina maior", () => {
+    const gleba: [number, number][] = [
+      [0, 0],
+      [220, 0],
+      [220, 220],
+      [0, 220],
+    ];
+    const result = generateLoteamento(gleba, {
+      larguraViaM: 12,
+      profundidadeQuadraM: 25,
+      testadaMinimaM: 12,
+      areaMinimaM2: 300,
+      percentualEsquina: 20,
+      larguraQuadraM: 150,
+      profundidadeBlocoM: 150,
+      larguraCalcadaM: 0,
+      raioEsquinaM: 0,
+      percentAreaUtil: 0,
+    });
+    const numbered = result.lotes.filter((l) => !l.remainder);
+    assert.ok(numbered.length >= 8, `esperava vários lotes, veio ${numbered.length}`);
+    for (const lote of numbered) {
+      assert.ok(
+        lote.area_m2 + 1 >= 300,
+        `lote ${lote.quadra} ${lote.numero} com ${lote.area_m2.toFixed(1)} m² abaixo de 300`,
+      );
+    }
+    const areas = numbered.map((l) => l.area_m2).sort((a, b) => a - b);
+    const median = areas[Math.floor(areas.length / 2)] ?? 0;
+    assert.ok(
+      median >= 290 && median <= 380,
+      `lotes deveriam ficar perto de 300 m², mediana ${median.toFixed(1)}`,
+    );
+    const corners = numbered.filter((l) => l.testada_m + 0.05 >= 14 && l.area_m2 + 1 >= 360);
+    assert.ok(corners.length >= 4, `esperava lotes de esquina mais largos, veio ${corners.length}`);
+  });
+
+  it("validateLot rejeita cesta de sobras de 1.689 m²", () => {
+    const spec = {
+      minAreaM2: 250 * 0.95,
+      targetAreaM2: 250,
+      minDepthM: 25 * 0.72,
+      maxDepthM: 25,
+      minFrontageM: 10,
+    };
+    assert.equal(validateLot({ areaM2: 250, depthM: 25, frontageM: 10 }, spec), true);
+    assert.equal(validateLot({ areaM2: 300, depthM: 25, frontageM: 12 }, spec), true);
+    assert.equal(validateLot({ areaM2: 312.5, depthM: 25, frontageM: 12.5 }, spec), true);
+    assert.equal(validateLot({ areaM2: 325, depthM: 25, frontageM: 13 }, spec), false);
+    assert.equal(validateLot({ areaM2: 1689.53, depthM: 67, frontageM: 25 }, spec), false);
+    assert.equal(validateLot({ areaM2: 400, depthM: 25, frontageM: 16 }, spec), false);
+    assert.equal(validateLot({ areaM2: 250, depthM: 31, frontageM: 10 }, spec), false);
+  });
+
+  it("faixa residual 67,56×25 não vira um único lote gigante", () => {
+    const leftover: [number, number][] = [
+      [0, 0],
+      [25, 0],
+      [25, 67.56],
+      [0, 67.56],
+    ];
+    const westStreet: [number, number][] = [
+      [-6, -2],
+      [6, -2],
+      [6, 70],
+      [-6, 70],
+    ];
+    const lots = subdivideQuadraEmLotes(leftover, 90, 10, 250, [westStreet], [12, 33], undefined, {
+      profundidadeM: 25,
+    });
+    assert.ok(lots.length >= 4, `esperava vários lotes na faixa residual, veio ${lots.length}`);
+    const target = 250;
+    const maxArea = target * LOT_MAX_AREA_RATIO;
+    for (const poly of lots) {
+      const area = polygonAreaPlanarM2(poly[0] ?? []);
+      assert.ok(area <= maxArea + 1, `lote residual ${area.toFixed(1)} m² > ${maxArea.toFixed(0)}`);
+      assert.ok(area + 1 >= target * 0.95, `lote residual ${area.toFixed(1)} m² abaixo da área alvo`);
+    }
+  });
+
+  it("Lote 01 não absorve sobra: nenhum lote > 1,30 × área alvo", () => {
+    const gleba: [number, number][] = [
+      [0, 0],
+      [150, 0],
+      [150, 150],
+      [40, 150],
+      [40, 82],
+      [0, 82],
+    ];
+    const result = generateLoteamento(gleba, {
+      larguraViaM: 12,
+      profundidadeQuadraM: 25,
+      testadaMinimaM: 10,
+      areaMinimaM2: 250,
+      percentualEsquina: 20,
+      larguraCalcadaM: 0,
+      raioEsquinaM: 0,
+      percentAreaUtil: 0,
+      viasExistentesExtremidades: true,
+    });
+    const numbered = result.lotes.filter((l) => !l.remainder);
+    assert.ok(numbered.length >= 8, `esperava malha de lotes, veio ${numbered.length}`);
+    const target = 250;
+    const maxArea = target * LOT_MAX_AREA_RATIO;
+    for (const lote of numbered) {
+      assert.ok(
+        lote.area_m2 <= maxArea + 1,
+        `${lote.quadra} ${lote.numero} com ${lote.area_m2.toFixed(1)} m² é cesta de sobras`,
+      );
+    }
+    const lote01 = numbered.find((l) => l.numero === "Lote 01");
+    assert.ok(lote01, "deveria existir Lote 01 após a numeração");
+    const areas = numbered.map((l) => l.area_m2).sort((a, b) => a - b);
+    const median = areas[Math.floor(areas.length / 2)] ?? 0;
+    assert.ok(
+      lote01!.area_m2 < maxArea + 1,
+      `Lote 01 com ${lote01!.area_m2.toFixed(1)} m² ultrapassa o máximo`,
+    );
+    assert.ok(
+      lote01!.area_m2 <= median * 1.35 + 5,
+      `Lote 01 ${lote01!.area_m2.toFixed(1)} m² longe da mediana ${median.toFixed(1)}`,
+    );
+    assert.equal(result.remanescente.length, 0, "não deve restar área remanescente");
+    assert.ok((result.report?.residualArea ?? 0) < 1, "residual da malha deveria ser ~0");
   });
 
   it("não sobrepõe reserva legal ao gerar quadras e vias", () => {
@@ -438,7 +719,7 @@ describe("generateLoteamento", () => {
     const s = Math.sin(rad);
     const rot = ([x, y]: [number, number]): [number, number] => [x * c - y * s, x * s + y * c];
     const gleba = RECT.map(rot);
-    const result = assertLoteamentoValid(gleba, PARAMS);
+    const result = assertLoteamentoValid(gleba, { ...PARAMS, percentAreaUtil: 0 });
     const streetAz = getMainAxisAzimuth(gleba);
     const streetUx = Math.sin((streetAz * Math.PI) / 180);
     const streetUy = Math.cos((streetAz * Math.PI) / 180);
@@ -556,36 +837,143 @@ describe("generateLoteamento", () => {
     );
   });
 
-  it("vias existentes nas extremidades não abre rua nova na borda da gleba", () => {
-    const withNew = generateLoteamento(RECT, PARAMS);
+  it("vias existentes nas extremidades ficam fora da gleba e as internas se unem", () => {
     const existing = generateLoteamento(RECT, { ...PARAMS, viasExistentesExtremidades: true });
-    const viaNew = withNew.vias.reduce((s, poly) => s + polygonAreaPlanarM2(poly[0] ?? []), 0);
-    const viaExisting = existing.vias.reduce((s, poly) => s + polygonAreaPlanarM2(poly[0] ?? []), 0);
-    assert.ok(viaExisting < viaNew * 0.45, `borda não deveria virar rua nova (${viaExisting} vs ${viaNew})`);
     assert.ok(existing.lotes.length >= 8, `ainda deveria lotear, veio ${existing.lotes.length}`);
+    const span = { maxX: 200, maxY: 120 };
+    const south = outsideBorderVias(existing.vias, "south", span);
+    const north = outsideBorderVias(existing.vias, "north", span);
+    const west = outsideBorderVias(existing.vias, "west", span);
+    const east = outsideBorderVias(existing.vias, "east", span);
+    assert.ok(south.length >= 1, "deveria gerar via fora no sul");
+    assert.ok(north.length >= 1, "deveria gerar via fora no norte");
+    assert.ok(west.length >= 1, "deveria gerar via fora no oeste");
+    assert.ok(east.length >= 1, "deveria gerar via fora no leste");
+    assert.equal(insideBorderVias(existing.vias, "south", span).length, 0, "não deve comer o terreno no sul");
+    const southVia = south[0]!;
+    const sb = bbox(southVia[0] ?? []);
+    assert.ok(sb.maxY - sb.minY > 8 && sb.maxY - sb.minY < 18, `via sul ~12 m (h=${sb.maxY - sb.minY})`);
+    assert.ok(
+      existing.vias.some((v) => v !== southVia && viaTouches(v, southVia)),
+      "ruas do loteamento devem unir na via existente do sul",
+    );
     const boxes = existing.lotes.map((l) => bbox(l.coordinates[0] ?? []));
     assert.ok(
       boxes.some((b) => b.minY < 2) && boxes.some((b) => b.maxY > 118),
-      "lotes deveriam fazer testada nas extremidades da gleba",
+      "lotes devem fazer testada no limite da gleba (via lá fora)",
     );
   });
 
-  it("via existente só no lado marcado — os outros lados ainda recebem rua nova", () => {
+  it("quadra por medidas com vias existentes gera a rua fora e une as internas", () => {
+    const gleba: [number, number][] = [
+      [0, 0],
+      [170, 0],
+      [170, 170],
+      [0, 170],
+    ];
+    const result = generateLoteamento(gleba, {
+      larguraViaM: 12,
+      profundidadeQuadraM: 25,
+      testadaMinimaM: 12,
+      areaMinimaM2: 300,
+      larguraQuadraM: 150,
+      profundidadeBlocoM: 150,
+      viasExistentesExtremidades: true,
+      larguraCalcadaM: 0,
+      raioEsquinaM: 0,
+      percentAreaUtil: 0,
+    });
+    assert.ok(result.lotes.length >= 8, `ainda deveria lotear, veio ${result.lotes.length}`);
+    const span = { maxX: 170, maxY: 170 };
+    const south = outsideBorderVias(result.vias, "south", span);
+    const east = outsideBorderVias(result.vias, "east", span);
+    assert.ok(south.length >= 1, "deveria gerar via fora no sul");
+    assert.ok(east.length >= 1, "deveria gerar via fora no leste");
+    assert.equal(insideBorderVias(result.vias, "south", span).length, 0, "não deve abrir rua nova dentro no sul");
+    const southVia = south[0]!;
+    assert.ok(
+      result.vias.some((v) => v !== southVia && viaTouches(v, southVia)),
+      "vias internas/perpendiculares devem unir na via existente",
+    );
+    const boxes = result.lotes.map((l) => bbox(l.coordinates[0] ?? []));
+    assert.ok(boxes.some((b) => b.minY < 2), "lotes devem encostar no sul (via lá fora)");
+  });
+
+  it("via existente só no lado marcado — rua fora nesse lado; os outros ainda recebem rua nova", () => {
+    const southEdge: [number, number][] = [
+      [0, 0],
+      [200, 0],
+    ];
+    const oneSide = generateLoteamento(RECT, { ...PARAMS, ladosViaExistente: [southEdge] });
+    const span = { maxX: 200, maxY: 120 };
+    const southOut = outsideBorderVias(oneSide.vias, "south", span);
+    const northIn = insideBorderVias(oneSide.vias, "north", span);
+    assert.ok(southOut.length >= 1, "lado marcado deve gerar via fora da gleba");
+    assert.ok(northIn.length >= 1, "lados não marcados ainda recebem rua nova por dentro");
+    const southVia = southOut[0]!;
+    assert.ok(
+      oneSide.vias.some((v) => v !== southVia && viaTouches(v, southVia)),
+      "ruas do loteamento devem unir na via existente marcada",
+    );
+    const boxes = oneSide.lotes.map((l) => bbox(l.coordinates[0] ?? []));
+    assert.ok(boxes.some((b) => b.minY < 2), "lotes do lado sul devem encostar na gleba");
+    assert.ok(oneSide.lotes.length >= 8);
+  });
+
+  it("faixa de domínio da rodovia entra para dentro da gleba e não recebe lote nem via", () => {
     const south: [number, number][] = [
       [0, 0],
       [200, 0],
     ];
-    const oneSide = generateLoteamento(RECT, { ...PARAMS, ladosViaExistente: [south] });
-    const allSides = generateLoteamento(RECT, { ...PARAMS, viasExistentesExtremidades: true });
-    const viaOne = oneSide.vias.reduce((s, poly) => s + polygonAreaPlanarM2(poly[0] ?? []), 0);
-    const viaAll = allSides.vias.reduce((s, poly) => s + polygonAreaPlanarM2(poly[0] ?? []), 0);
-    assert.ok(viaOne > viaAll + 50, `só um lado existente deveria manter ruas nas outras bordas (${viaOne} vs ${viaAll})`);
-    const boxes = oneSide.lotes.map((l) => bbox(l.coordinates[0] ?? []));
+    const faixaPolys = generateFaixaDominioFromEdges(RECT, [south], 20);
+    assert.ok(faixaPolys.length >= 1, "deveria gerar o polígono da faixa");
+    const faixaBox = bbox(faixaPolys[0]![0] ?? []);
+    assert.ok(faixaBox.minY > -0.6 && faixaBox.minY < 1.5, `faixa deve colar no sul (minY=${faixaBox.minY})`);
+    assert.ok(faixaBox.maxY > 18 && faixaBox.maxY < 22.5, `faixa de 20 m (maxY=${faixaBox.maxY})`);
+
+    const result = generateLoteamento(RECT, {
+      ...PARAMS,
+      percentAreaUtil: 0,
+      ladosFaixaDominio: [south],
+      larguraFaixaDominioM: 20,
+    });
+    assert.ok(result.faixaDominio.length >= 1, "resultado deve trazer a faixa de domínio");
+    const faixa = result.faixaDominio[0]![0] ?? [];
+    assert.ok(result.lotes.length >= 4, `ainda deveria lotear o restante, veio ${result.lotes.length}`);
+    for (const lote of result.lotes) {
+      assert.ok(
+        polygonInteriorOverlapM2(lote.coordinates[0] ?? [], faixa) < 1,
+        `lote ${lote.numero} intersecta a faixa de domínio`,
+      );
+    }
+    for (const poly of result.vias) {
+      assert.ok(
+        polygonInteriorOverlapM2(poly[0] ?? [], faixa) < 1,
+        "via intersecta a faixa de domínio",
+      );
+    }
+    const lotBoxes = result.lotes.map((l) => bbox(l.coordinates[0] ?? []));
     assert.ok(
-      boxes.some((b) => b.minY < 2),
-      "lotes do lado sul deveriam encostar na gleba (via já existente)",
+      lotBoxes.every((b) => b.minY > 18),
+      "lotes não devem ocupar os 20 m da faixa no sul",
     );
-    assert.ok(oneSide.lotes.length >= 8);
+  });
+
+  it("via existente usa a largura informada e fica fora do polígono", () => {
+    const southEdge: [number, number][] = [
+      [0, 0],
+      [200, 0],
+    ];
+    const result = generateLoteamento(RECT, {
+      ...PARAMS,
+      ladosViaExistente: [southEdge],
+      larguraViaExistenteM: 20,
+    });
+    const south = outsideBorderVias(result.vias, "south", { maxX: 200, maxY: 120 });
+    assert.ok(south.length >= 1, "deveria gerar via fora no sul");
+    const sb = bbox(south[0]![0] ?? []);
+    assert.ok(sb.maxY < 2, `via sul deve ficar fora (maxY=${sb.maxY})`);
+    assert.ok(sb.minY < -16 && sb.minY > -26, `via sul deveria ter ~20 m para fora (minY=${sb.minY})`);
   });
 
   it("insere eixos de via existentes como corredor interno", () => {
@@ -600,8 +988,13 @@ describe("generateLoteamento", () => {
     });
     assert.ok(result.vias.length >= 1, "eixo existente deveria virar via");
     assert.ok(result.eixos.length >= 1, "deveria desenhar o eixo inserido");
-    const viaBox = bbox(result.vias[0]?.[0] ?? []);
-    assert.ok(viaBox.minY < 60 && viaBox.maxY > 60, "corredor deveria cruzar y=60");
+    assert.ok(
+      result.vias.some((poly) => {
+        const viaBox = bbox(poly[0] ?? []);
+        return viaBox.minY < 60 && viaBox.maxY > 60 && viaBox.maxX - viaBox.minX > 40;
+      }),
+      "corredor deveria cruzar y=60",
+    );
     assert.ok(result.lotes.length >= 4);
   });
 
@@ -764,7 +1157,7 @@ describe("splitParcelByDimensions", () => {
 });
 
 describe("lotes de resto", () => {
-  it("preenche leftover irregular com AREA_UTIL, sem lotes de resto", () => {
+  it("não espalha restos como AREA_UTIL pelo loteamento", () => {
     const trap: [number, number][] = [
       [0, 0],
       [140, 0],
@@ -783,11 +1176,10 @@ describe("lotes de resto", () => {
     const viasArea = result.vias.reduce((s, poly) => s + polygonAreaPlanarM2(poly[0] ?? []), 0);
     const utilArea = result.areaUtil.reduce((s, poly) => s + polygonAreaPlanarM2(poly[0] ?? []), 0);
     assert.ok(
-      lotsArea + viasArea + utilArea >= glebaArea * 0.88,
+      lotsArea + viasArea + utilArea >= glebaArea * 0.72,
       `ocupação ${lotsArea + viasArea + utilArea} muito abaixo da gleba ${glebaArea}`,
     );
-    assert.ok(!result.lotes.some((l) => l.remainder), "restos não devem virar lote de resto");
-    assert.ok(result.areaUtil.length >= 1 && utilArea > 0, "restos devem ir para AREA_UTIL");
+    assert.ok(result.areaUtil.length <= 2, `AREA_UTIL deve ser um bloco, veio ${result.areaUtil.length} polígonos`);
   });
 });
 
@@ -799,12 +1191,13 @@ describe("área útil 15%", () => {
     [0, 120],
   ];
 
-  function assertFormula(result: ReturnType<typeof generateLoteamento>, gleba: [number, number][]) {
+  function assertNoEmptyUtil(result: ReturnType<typeof generateLoteamento>, gleba: [number, number][]) {
     const T = polygonAreaPlanarM2(gleba);
-    const S = result.areaViasM2;
-    const expected = areaUtilFromStreetsM2(T, S, 15);
-    assert.ok(Math.abs(result.areaUtilOrcamentoM2 - T * 0.15) < 2, `orçamento ${result.areaUtilOrcamentoM2}`);
-    assert.ok(Math.abs(result.areaUtilAlvoM2 - expected) < 2, `A ${result.areaUtilAlvoM2} ≠ 0.15T−S ${expected} (S=${S})`);
+    const lotsArea = result.lotes.reduce((s, l) => s + l.area_m2, 0);
+    assert.equal(result.areaUtil.length, 0, "não cria polígono laranja de área útil");
+    assert.equal(result.areaUtilM2, 0);
+    assert.ok(result.lotes.length >= 1, "área útil deve virar lote");
+    assert.ok(lotsArea > T * 0.2, `lotes ${lotsArea} deveriam ocupar a área útil`);
   }
 
   it("areaUtilFromStreetsM2 = max(0, 15%T − S)", () => {
@@ -812,7 +1205,7 @@ describe("área útil 15%", () => {
     assert.equal(areaUtilFromStreetsM2(10_000, 2000, 15), 0);
   });
 
-  it("A ≈ 0.15×T − ruas (não 0.15×(T−APP−RL))", () => {
+  it("gerar loteamento não cria AREA_UTIL: o restante vira lote", () => {
     const result = generateLoteamento(RECT, {
       ...PARAMS,
       viasExistentesExtremidades: true,
@@ -820,61 +1213,29 @@ describe("área útil 15%", () => {
       reservaLegal: [reserva],
       reservas: [reserva],
     });
-    assertFormula(result, RECT);
-    const T = polygonAreaPlanarM2(RECT);
-    const oldWrong = (T - polygonAreaPlanarM2(reserva)) * 0.15;
-    assert.ok(
-      Math.abs(result.areaUtilAlvoM2 - oldWrong) > 20,
-      `alvo ${result.areaUtilAlvoM2} não deve ser 0.15×(T−RL)=${oldWrong}`,
-    );
-    if (result.areaUtilAlvoM2 >= 20) {
-      assert.ok(result.areaUtilM2 + 1 >= result.areaUtilAlvoM2 * 0.65, `desenho ${result.areaUtilM2} vs alvo ${result.areaUtilAlvoM2}`);
-    }
-  });
-
-  it("compartilha aresta com a reserva legal quando ela existe", () => {
-    const result = generateLoteamento(RECT, {
-      ...PARAMS,
-      viasExistentesExtremidades: true,
-      percentAreaUtil: 15,
-      reservaLegal: [reserva],
-      reservas: [reserva],
-    });
-    assertFormula(result, RECT);
-    if (result.areaUtilAlvoM2 >= 8 || result.areaUtilM2 >= 8) {
-      assert.ok(result.areaUtil.length >= 1, "deveria gerar AREA_UTIL");
-      const shares = result.areaUtil.some((poly) => ringsShareBoundary(poly[0] ?? [], reserva));
-      assert.ok(shares, "área útil deveria colar na reserva legal");
-    }
-  });
-
-  it("lotes e vias não intersectam o interior da AREA_UTIL", () => {
-    const result = generateLoteamento(RECT, {
-      ...PARAMS,
-      percentAreaUtil: 15,
-      reservaLegal: [reserva],
-      reservas: [reserva],
-    });
-    assertFormula(result, RECT);
+    assertNoEmptyUtil(result, RECT);
     for (const lote of result.lotes) {
-      for (const util of result.areaUtil) {
-        assert.ok(
-          polygonInteriorOverlapM2(lote.coordinates[0] ?? [], util[0] ?? []) < 1,
-          `lote ${lote.numero} intersecta AREA_UTIL`,
-        );
-      }
+      assert.ok(polygonInteriorOverlapM2(lote.coordinates[0] ?? [], reserva) < 1);
+    }
+  });
+
+  it("lotes e vias não intersectam a reserva legal", () => {
+    const result = generateLoteamento(RECT, {
+      ...PARAMS,
+      percentAreaUtil: 15,
+      reservaLegal: [reserva],
+      reservas: [reserva],
+    });
+    assertNoEmptyUtil(result, RECT);
+    for (const lote of result.lotes) {
+      assert.ok(polygonInteriorOverlapM2(lote.coordinates[0] ?? [], reserva) < 1);
     }
     for (const via of result.vias) {
-      for (const util of result.areaUtil) {
-        assert.ok(
-          polygonInteriorOverlapM2(via[0] ?? [], util[0] ?? []) < 1,
-          "via intersecta AREA_UTIL",
-        );
-      }
+      assert.ok(polygonInteriorOverlapM2(via[0] ?? [], reserva) < 1);
     }
   });
 
-  it("resto após lotes é absorvido na AREA_UTIL ao lado da reserva", () => {
+  it("resto após lotes não vira polígono AREA_UTIL", () => {
     const result = generateLoteamento(RECT, {
       ...PARAMS,
       viasExistentesExtremidades: true,
@@ -882,39 +1243,31 @@ describe("área útil 15%", () => {
       reservaLegal: [reserva],
       reservas: [reserva],
     });
-    assertFormula(result, RECT);
-    assert.ok(!result.lotes.some((l) => l.remainder), "não deve haver lote de resto");
-    if (result.areaUtil.length >= 1) {
-      assert.ok(result.areaUtil.some((poly) => ringsShareBoundary(poly[0] ?? [], reserva)));
-    }
+    assert.equal(result.areaUtil.length, 0);
     const glebaArea = polygonAreaPlanarM2(RECT);
     const lotsArea = result.lotes.reduce((s, l) => s + l.area_m2, 0);
     const viasArea = result.vias.reduce((s, poly) => s + polygonAreaPlanarM2(poly[0] ?? []), 0);
     const rlArea = polygonAreaPlanarM2(reserva);
-    const covered = lotsArea + viasArea + result.areaUtilM2 + rlArea;
+    const covered = lotsArea + viasArea + rlArea;
     assert.ok(covered >= glebaArea * 0.86, `cobertura ${covered} < 86% de ${glebaArea}`);
   });
 
-  it("se ruas consomem os 15%, o alvo é 0 e restos ainda vão à AREA_UTIL", () => {
+  it("percentual 15 não abre buraco laranja mesmo com ruas grandes", () => {
     const result = generateLoteamento(RECT, {
       ...PARAMS,
       percentAreaUtil: 15,
       reservaLegal: [reserva],
       reservas: [reserva],
     });
-    assertFormula(result, RECT);
-    if (result.areaViasM2 >= polygonAreaPlanarM2(RECT) * 0.15) {
-      assert.ok(result.areaUtilAlvoM2 < 2, `alvo deveria ser 0 quando S≥15%T, veio ${result.areaUtilAlvoM2}`);
-    }
-    assert.ok(!result.lotes.some((l) => l.remainder));
+    assertNoEmptyUtil(result, RECT);
   });
 
-  it("sem reserva: A = 15%×T − ruas", () => {
+  it("sem reserva: área útil inteira vira lote, sem polígono AREA_UTIL", () => {
     const result = generateLoteamento(RECT, { ...PARAMS, percentAreaUtil: 15 });
-    assertFormula(result, RECT);
+    assertNoEmptyUtil(result, RECT);
   });
 
-  it("com APP e reserva, A = 15%×T − ruas e cola na RL", () => {
+  it("com APP e reserva, lotes ficam na área útil e não na APP", () => {
     const app: [number, number][] = [
       [180, 0],
       [200, 0],
@@ -929,15 +1282,10 @@ describe("área útil 15%", () => {
       reservaLegal: [reserva],
       reservas: [app, reserva],
     });
-    assertFormula(result, RECT);
-    if (result.areaUtil.length >= 1) {
-      assert.ok(result.areaUtil.some((poly) => ringsShareBoundary(poly[0] ?? [], reserva)));
-    }
+    assertNoEmptyUtil(result, RECT);
     for (const lote of result.lotes) {
       assert.ok(polygonInteriorOverlapM2(lote.coordinates[0] ?? [], app) < 1);
-      for (const util of result.areaUtil) {
-        assert.ok(polygonInteriorOverlapM2(lote.coordinates[0] ?? [], util[0] ?? []) < 1);
-      }
+      assert.ok(polygonInteriorOverlapM2(lote.coordinates[0] ?? [], reserva) < 1);
     }
   });
 
@@ -1010,84 +1358,18 @@ describe("área útil 15%", () => {
     assert.ok(dist(sd, ie) > 6, "superior direita ≠ inferior esquerda");
   });
 
-  it("gerar loteamento: canto move o lado e A ≈ 0.15T − S, sem ilhas", () => {
+  it("gerar loteamento nunca abre buraco AREA_UTIL, qualquer canto", () => {
     const rl = reservarRetanguloNoCanto(RECT, "superior_direita", polygonAreaPlanarM2(RECT) * 0.2).reserved;
-    const left = generateLoteamento(RECT, {
-      ...PARAMS,
-      viasExistentesExtremidades: true,
-      percentAreaUtil: 15,
-      cantoAreaUtil: "superior_esquerda",
-      reservaLegal: [rl],
-      reservas: [rl],
-    });
-    const bottom = generateLoteamento(RECT, {
-      ...PARAMS,
-      viasExistentesExtremidades: true,
-      percentAreaUtil: 15,
-      cantoAreaUtil: "inferior_direita",
-      reservaLegal: [rl],
-      reservas: [rl],
-    });
-    assertFormula(left, RECT);
-    assertFormula(bottom, RECT);
-    assert.ok(left.areaUtil.length >= 1 && bottom.areaUtil.length >= 1);
-    assert.ok(left.areaUtil.every((poly) => ringsShareBoundary(poly[0] ?? [], rl)), "ilhas à esquerda");
-    assert.ok(bottom.areaUtil.every((poly) => ringsShareBoundary(poly[0] ?? [], rl)), "ilhas abaixo");
-    const leftC = utilCentroid(left.areaUtil);
-    const botC = utilCentroid(bottom.areaUtil);
-    assert.ok(
-      leftC.x < botC.x - 4 || botC.y < leftC.y - 4,
-      `cantos deveriam separar a área útil (E ${leftC.x.toFixed(1)},${leftC.y.toFixed(1)} vs I ${botC.x.toFixed(1)},${botC.y.toFixed(1)})`,
-    );
-    if (left.areaUtilAlvoM2 >= 20) {
-      assert.ok(left.areaUtilM2 + 1 >= left.areaUtilAlvoM2 * 0.6, `A ${left.areaUtilM2} vs ${left.areaUtilAlvoM2}`);
-    }
-  });
-
-  it("gerar loteamento: os 4 cantos mudam o lado da AREA_UTIL colada na RL", () => {
-    const rl = reservarRetanguloNoCanto(RECT, "superior_direita", polygonAreaPlanarM2(RECT) * 0.2).reserved;
-    const cantos = [
-      "superior_direita",
-      "superior_esquerda",
-      "inferior_direita",
-      "inferior_esquerda",
-    ] as const;
-    const rlCx = dropClosing(rl).reduce((s, p) => s + p[0], 0) / dropClosing(rl).length;
-    const rlCy = dropClosing(rl).reduce((s, p) => s + p[1], 0) / dropClosing(rl).length;
-    const placed = cantos.map((canto) => {
+    for (const canto of ["superior_esquerda", "inferior_direita"] as const) {
       const result = generateLoteamento(RECT, {
         ...PARAMS,
-        viasExistentesExtremidades: true,
-        percentAreaUtil: 15,
+        percentAreaUtil: 35,
         cantoAreaUtil: canto,
         reservaLegal: [rl],
         reservas: [rl],
       });
-      assertFormula(result, RECT);
-      assert.ok(result.areaUtil.length >= 1, `${canto} deveria gerar AREA_UTIL`);
-      assert.ok(
-        result.areaUtil.every((poly) => ringsShareBoundary(poly[0] ?? [], rl)),
-        `${canto} deve colar na RL sem ilhas`,
-      );
-      if (result.areaUtilAlvoM2 >= 20) {
-        assert.ok(
-          result.areaUtilM2 + 1 >= result.areaUtilAlvoM2 * 0.6,
-          `${canto} A ${result.areaUtilM2} vs ${result.areaUtilAlvoM2}`,
-        );
-      }
-      return { canto, ...utilCentroid(result.areaUtil) };
-    });
-    const by = Object.fromEntries(placed.map((row) => [row.canto, row]));
-    const se = by.superior_esquerda!;
-    const id = by.inferior_direita!;
-    const ie = by.inferior_esquerda!;
-    const sd = by.superior_direita!;
-    assert.ok(se.x < rlCx - 2 || se.x < id.x - 3, "esquerda deve ir a oeste");
-    assert.ok(id.y < rlCy - 2 || id.y < se.y - 3, "inferior deve ir ao sul");
-    assert.ok(ie.x < rlCx + 2 && ie.y < rlCy + 2, "inferior esquerda no quadrante SW");
-    const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
-    assert.ok(dist(se, id) > 4, `cantos SE e ID deveriam separar (${se.x},${se.y} vs ${id.x},${id.y})`);
-    assert.ok(dist(sd, se) > 3 || dist(sd, id) > 3, "mudar o canto deve mover o polígono");
+      assertNoEmptyUtil(result, RECT);
+    }
   });
 });
 
@@ -1175,6 +1457,59 @@ describe("rebuildQuadraLotes / adjustLotInQuadra", () => {
       `irmãos deveriam encolher: ${allSiblingBefore} → ${siblingSumAfter}`,
     );
     assert.ok(siblingSumBefore > 0);
+  });
+});
+
+describe("complementarLoteamento", () => {
+  it("transforma sobra rasa no fundo da quadra em lotes, não em institucional", () => {
+    const leftover: [number, number][] = [
+      [0, 50],
+      [80, 50],
+      [80, 62],
+      [0, 62],
+    ];
+    const street: [number, number][] = [
+      [-2, 48],
+      [82, 48],
+      [82, 50],
+      [-2, 50],
+    ];
+    const result = complementarLoteamento([leftover], {
+      azimuthDeg: 90,
+      testadaMinimaM: 10,
+      profundidadeQuadraM: 25,
+      areaMinimaM2: 250,
+      streetRings: [street],
+      origin: [0, 0],
+    });
+    const leftoverArea = 80 * 12;
+    const lotArea = result.lots.reduce((s, poly) => s + polygonAreaPlanarM2(poly[0] ?? []), 0);
+    assert.ok(result.lots.length >= 2, `esperava lotes complementares, veio ${result.lots.length}`);
+    assert.ok(lotArea > leftoverArea * 0.7, `lotes ${lotArea.toFixed(1)} m² não preencheram a sobra ${leftoverArea}`);
+    assert.ok(
+      result.remanescente.reduce((s, ring) => s + polygonAreaPlanarM2(ring), 0) < leftoverArea * 0.25,
+      "sobra complementar demais ficou remanescente",
+    );
+    for (const lot of result.lots) {
+      const area = polygonAreaPlanarM2(lot[0] ?? []);
+      assert.ok(area > 80, `lote complementar pequeno demais: ${area.toFixed(1)}`);
+      assert.ok(area < 450, `lote complementar virou cesta: ${area.toFixed(1)}`);
+    }
+  });
+
+  it("não despeja sobra em área útil quando gera o loteamento", () => {
+    const result = generateLoteamento(RECT, {
+      ...PARAMS,
+      profundidadeQuadraM: 25,
+      testadaMinimaM: 10,
+      areaMinimaM2: 250,
+      percentAreaUtil: 0,
+      viasExistentesExtremidades: true,
+    });
+    assert.equal(result.areaUtil.length, 0, "sem parâmetro de área útil não deve criar área especial");
+    const leftoverArea = result.remanescente.reduce((s, poly) => s + polygonAreaPlanarM2(poly[0] ?? []), 0);
+    assert.ok(leftoverArea < 80, `remanescente real demais: ${leftoverArea.toFixed(1)} m²`);
+    assert.ok(result.lotes.length >= 8, `esperava preencher a gleba, veio ${result.lotes.length} lotes`);
   });
 });
 

@@ -10,7 +10,6 @@ export const MODULOS_PROJETO = [
   "digital_twin",
   "insar",
   "lidar",
-  "rtk",
 ] as const;
 
 export type ModuloProjetoChave = (typeof MODULOS_PROJETO)[number];
@@ -33,7 +32,6 @@ export const MODULO_PROJETO_META: Record<
   digital_twin: { label: "Digital Twin", shortLabel: "Twin" },
   insar: { label: "InSAR", shortLabel: "InSAR" },
   lidar: { label: "LiDAR", shortLabel: "LiDAR" },
-  rtk: { label: "GNSS / RTK", shortLabel: "RTK" },
 };
 
 /** Mapa inicial: todos ativos (comportamento ao criar obra sem payload). */

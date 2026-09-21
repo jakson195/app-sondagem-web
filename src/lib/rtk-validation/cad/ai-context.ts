@@ -1,3 +1,4 @@
+import { buildCadContext } from "@/lib/cad-ai/context";
 import { CONTOUR_LAYER, extractSurveyElevationPoints } from "./contour";
 import { TIN_LAYER } from "./tin";
 import { listPointEntities } from "./viewport";
@@ -185,5 +186,6 @@ export function buildCadAiContext(
     },
     elevationPointCount: extractSurveyElevationPoints(project.entities).length,
     pendingProfileStart: pendingProfileStart ?? null,
+    loteamento: buildCadContext(project),
   };
 }

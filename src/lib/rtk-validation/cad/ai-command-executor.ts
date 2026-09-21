@@ -74,22 +74,29 @@ import {
   type ReservaAreaLado,
 } from "./lot-subdivision";
 import {
-  applyLoteamentoLotClassification,
   DEFAULT_PERCENTUAL_ESQUINA,
   resolveAreaMinimaInterno,
 } from "./lot-corner-classification";
 import {
+  applyLoteamentoNomenclature,
   applyLoteamentoTables,
   applyReservaLegalToProject,
   AREA_RESERVA_LEGAL_LAYER,
+  AREA_VERDE_LABEL,
   AREA_UTIL_LAYER,
+  AREA_REMANESCENTE_LAYER_ID,
   appendAreaUtilToProject,
   collectAppRings,
+  collectFaixaDominioRings,
   collectLoteamentoExclusionRings,
   collectReservaLegalRings,
   EIXO_NEED_LOTEAMENTO,
   isLoteamentoEixoPolyline,
   stripPreviousAreaUtil,
+  stripPreviousFaixaDominio,
+  stripPreviousRemanescente,
+  appendFaixaDominioToProject,
+  appendRemanescenteToProject,
 } from "./loteamento-tools";
 import {
   applyReurbLotLabels,
@@ -97,6 +104,22 @@ import {
   listReurbLots,
   reurbTabularFilename,
 } from "./reurb";
+import {
+  ajustarLote,
+  analisarLoteamento,
+  calcularAreaRemanescente,
+  calcularTestada,
+  consultarLote,
+  consultarLotes,
+  consultarProjeto,
+  consultarQuadra,
+  consultarQuadras,
+  otimizarQuadra,
+  paramsFromCommand,
+  redistribuirLotes,
+  renomearQuadra,
+} from "@/lib/cad-ai/execute";
+import { resolveLotRef, resolveQuadraRef } from "@/lib/cad-ai/resolve";
 import { formatStreetPlanName } from "./plan-annotation-labels";
 import {
   computeEarthworkVolume,
@@ -731,6 +754,12 @@ export function executeCadAiCommand(
 
     case "medir_area":
     case "area_geodesica": {
+      if (command.quadra || command.lote) {
+        const named = command.lote
+          ? consultarLote(nextProject, command.lote)
+          : consultarQuadra(nextProject, command.quadra, selectedId);
+        return named;
+      }
       const polygon = findClosedPolygonStrict(nextProject, command.entidade_id, selectedId);
       if (!polygon) return fail(project, "Selecione um polígono fechado no desenho ou na lista.");
       const metrics = computePolygonMetrics(polygon.vertices, true, vertexLabelsPn(polygon.vertices.length));
@@ -1225,6 +1254,10 @@ export function executeCadAiCommand(
           : 0;
       const eixoRua = command.eixo_rua !== false;
       const viasExistentesExtremidades = command.vias_existentes_extremidades === true;
+      const larguraViaExistenteM =
+        command.largura_via_existente_m != null && Number.isFinite(command.largura_via_existente_m)
+          ? Math.max(0, command.largura_via_existente_m)
+          : undefined;
       const nVerts = gleba.vertices.length;
       const ladosViaExistente = (command.lados_aresta ?? [])
         .map((i) => Math.trunc(i))
@@ -1237,6 +1270,21 @@ export function executeCadAiCommand(
             [b.x, b.y],
           ] as [number, number][];
         });
+      const ladosFaixaDominio = (command.lados_faixa_dominio ?? [])
+        .map((i) => Math.trunc(i))
+        .filter((i) => i >= 0 && i < nVerts)
+        .map((i) => {
+          const a = gleba.vertices[i];
+          const b = gleba.vertices[(i + 1) % nVerts];
+          return [
+            [a.x, a.y],
+            [b.x, b.y],
+          ] as [number, number][];
+        });
+      const larguraFaixaDominioM =
+        command.largura_faixa_dominio_m != null && Number.isFinite(command.largura_faixa_dominio_m)
+          ? Math.max(0, command.largura_faixa_dominio_m)
+          : 0;
       const pickedEixoIds = new Set(command.entidade_ids ?? []);
       const eixosExistentes = nextProject.entities
         .filter((entity): entity is Extract<(typeof nextProject.entities)[number], { type: "polyline" }> => {
@@ -1245,9 +1293,12 @@ export function executeCadAiCommand(
         })
         .map((entity) => entity.vertices.map((v) => [v.x, v.y] as [number, number]));
       nextProject = stripPreviousAreaUtil(nextProject);
+      if (ladosFaixaDominio.length > 0 && larguraFaixaDominioM > 0) {
+        nextProject = stripPreviousFaixaDominio(nextProject);
+      }
       const reservas = collectLoteamentoExclusionRings(nextProject);
       const reservaLegal = collectReservaLegalRings(nextProject);
-      const apps = collectAppRings(nextProject);
+      const apps = [...collectAppRings(nextProject), ...collectFaixaDominioRings(nextProject)];
       const percentAreaUtil =
         command.percentual_area_util != null && Number.isFinite(command.percentual_area_util)
           ? Math.max(0, Math.min(99.9, command.percentual_area_util))
@@ -1266,6 +1317,8 @@ export function executeCadAiCommand(
           larguraViaM,
           profundidadeQuadraM,
           testadaMinimaM,
+          areaMinimaM2: command.area_minima_m2,
+          percentualEsquina: command.percentual_esquina,
           areaMinimaQuadraM2,
           larguraQuadraM: larguraQuadraM > 0 ? larguraQuadraM : undefined,
           profundidadeBlocoM: profundidadeBlocoM > 0 ? profundidadeBlocoM : undefined,
@@ -1275,8 +1328,11 @@ export function executeCadAiCommand(
           eixoRua,
           raioEsquinaM,
           viasExistentesExtremidades: viasExistentesExtremidades || ladosViaExistente.length > 0,
-          eixosExistentes: eixosExistentes.length > 0 ? eixosExistentes : undefined,
+          larguraViaExistenteM: larguraViaExistenteM != null && larguraViaExistenteM > 0 ? larguraViaExistenteM : undefined,
           ladosViaExistente: ladosViaExistente.length > 0 ? ladosViaExistente : undefined,
+          ladosFaixaDominio: ladosFaixaDominio.length > 0 ? ladosFaixaDominio : undefined,
+          larguraFaixaDominioM: larguraFaixaDominioM > 0 ? larguraFaixaDominioM : undefined,
+          eixosExistentes: eixosExistentes.length > 0 ? eixosExistentes : undefined,
           reservas: reservas.length > 0 ? reservas : undefined,
           reservaLegal: reservaLegal.length > 0 ? reservaLegal : undefined,
           apps: apps.length > 0 ? apps : undefined,
@@ -1349,6 +1405,7 @@ export function executeCadAiCommand(
         const kept = nextProject.entities.filter((e) => {
           if (LOTEAMENTO_LAYER_IDS.has(e.layerId)) return false;
           if (e.layerId === AREA_UTIL_LAYER.id) return false;
+          if (e.layerId === AREA_REMANESCENTE_LAYER_ID) return false;
           return true;
         });
         let layers = ensureLayer(nextProject, viasLayer);
@@ -1375,16 +1432,25 @@ export function executeCadAiCommand(
             z0,
           );
         }
+        nextProject = stripPreviousRemanescente(nextProject);
+        if (result.remanescente.length > 0) {
+          nextProject = appendRemanescenteToProject(
+            nextProject,
+            result.remanescente.map((poly) => poly[0] ?? []),
+            z0,
+          );
+        }
+        if (result.faixaDominio.length > 0 && larguraFaixaDominioM > 0) {
+          nextProject = appendFaixaDominioToProject(
+            nextProject,
+            result.faixaDominio.map((poly) => poly[0] ?? []),
+            larguraFaixaDominioM,
+            z0,
+          );
+        }
+        nextProject = applyLoteamentoNomenclature(nextProject).project;
         const labeledLots = applyReurbLotLabels(nextProject, { includeCotas: true, includeArea: true });
         if (labeledLots.lotCount > 0) nextProject = labeledLots.project;
-        nextProject = applyLoteamentoLotClassification(nextProject, {
-          percentualEsquina: command.percentual_esquina ?? DEFAULT_PERCENTUAL_ESQUINA,
-          areaMinimaInterno: resolveAreaMinimaInterno({
-            areaMinimaM2: command.area_minima_m2,
-            testadaM: testadaMinimaM,
-            profundidadeM: profundidadeQuadraM,
-          }),
-        });
         nextProject = applyLoteamentoTables(nextProject, {
           percentualEsquina: command.percentual_esquina ?? DEFAULT_PERCENTUAL_ESQUINA,
           areaMinimaInterno: resolveAreaMinimaInterno({
@@ -1400,7 +1466,7 @@ export function executeCadAiCommand(
         const rlShow = rlM2 > 0 ? rlM2 : result.areaGlebaM2 * 0.2;
         message =
           message ||
-          `Loteamento gerado: ${result.lotes.length} lotes em ${result.quadras} quadras, lotes ${formatAreaBr(areaLotes)}. Total ${formatAreaBr(result.areaGlebaM2)}. RL 20% ${formatAreaBr(rlShow)}. Ruas ${formatAreaBr(result.areaViasM2)}. ${percentAreaUtil.toFixed(0)}% − ruas = área útil ${formatAreaBr(result.areaUtilAlvoM2)}.`;
+          `Loteamento gerado: ${result.lotes.length} lotes em ${result.quadras} quadras, lotes ${formatAreaBr(areaLotes)}. Total ${formatAreaBr(result.areaGlebaM2)}. RL 20% ${formatAreaBr(rlShow)}. Ruas ${formatAreaBr(result.areaViasM2)}. Área útil loteada ${formatAreaBr(areaLotes)}.`;
       } catch (err) {
         const text = err instanceof LoteamentoError || err instanceof Error ? err.message : "Falha ao gerar loteamento.";
         return fail(project, text);
@@ -1667,6 +1733,7 @@ export function executeCadAiCommand(
         layers,
         entities: [...nextProject.entities.filter((e) => e.id !== gleba.id), ...loteEntities],
       };
+      nextProject = applyLoteamentoNomenclature(nextProject).project;
       selectedId = loteEntities[0]?.id ?? null;
       sideEffects.push({ type: "fit_view", entities: nextProject.entities });
       message = message || `Quadra subdividida em ${loteEntities.length} lote(s) com testada de ${testadaM} m.`;
@@ -1698,8 +1765,9 @@ export function executeCadAiCommand(
         return fail(project, "Selecione um polígono fechado (gleba) para reservar a faixa.");
       }
       const tipo = (command.tipo ?? "").trim().toLowerCase();
-      if (tipo !== "institucional" && tipo !== "reserva_legal") {
-        return fail(project, "Informe o tipo da reserva: institucional ou reserva_legal.");
+      const tipoVerde = tipo === "reserva_legal" || tipo === "area_verde" || tipo === "área verde";
+      if (tipo !== "institucional" && !tipoVerde) {
+        return fail(project, "Informe o tipo da reserva: institucional ou área verde.");
       }
       const pct = command.percentual ?? 0;
       if (!(pct > 0) || pct >= 100) {
@@ -1715,11 +1783,21 @@ export function executeCadAiCommand(
       const alvo = (pct / 100) * areaTotal;
       try {
         const z0 = gleba.vertices[0]?.z ?? 0;
-        const reserveLayer = tipo === "institucional" ? AREA_INSTITUCIONAL_LAYER : AREA_RESERVA_LEGAL_LAYER;
+        const reserveLayer =
+          tipo === "institucional"
+            ? AREA_INSTITUCIONAL_LAYER
+            : {
+                id: AREA_RESERVA_LEGAL_LAYER.id,
+                name: AREA_RESERVA_LEGAL_LAYER.name,
+                color: AREA_RESERVA_LEGAL_LAYER.color,
+                fillColor: AREA_RESERVA_LEGAL_LAYER.fillColor ?? "#86efac",
+                visible: AREA_RESERVA_LEGAL_LAYER.visible,
+                locked: AREA_RESERVA_LEGAL_LAYER.locked,
+              };
         const layers = ensureLayer(nextProject, reserveLayer);
         const glebaCoords = gleba.vertices.map((v) => [v.x, v.y] as [number, number]);
 
-        if (tipo === "reserva_legal" && canto) {
+        if (tipoVerde && canto) {
           const applied = applyReservaLegalToProject(nextProject, {
             glebaId: gleba.id,
             percent: pct,
@@ -1730,7 +1808,7 @@ export function executeCadAiCommand(
           sideEffects.push({ type: "set_tool", tool: "select" });
           message =
             message ||
-            `Reservados ${formatAreaBr(applied.reservedM2)} (${pct}%) para reserva legal no canto ${canto.replace(/_/g, " ")}. Arraste o polígono para reposicionar.`;
+            `Reservados ${formatAreaBr(applied.reservedM2)} (${pct}%) para área verde no canto ${canto.replace(/_/g, " ")}. Arraste o polígono para reposicionar.`;
         } else if (canto) {
           const placed = reservarRetanguloNoCanto(glebaCoords, canto, alvo);
           const reserved = coordsToPolyline(
@@ -1761,7 +1839,7 @@ export function executeCadAiCommand(
           const reserved = coordsToPolyline(
             cut.reserved,
             reserveLayer.id,
-            tipo === "institucional" ? "Área institucional" : "Reserva legal",
+            tipo === "institucional" ? "Área institucional" : AREA_VERDE_LABEL,
             tipo === "institucional" ? "inst" : "rl",
             z0,
           );
@@ -1775,7 +1853,7 @@ export function executeCadAiCommand(
           sideEffects.push({ type: "fit_view", entities: nextProject.entities });
           message =
             message ||
-            `Reservados ${formatAreaBr(cut.reservedM2)} (${pct}%) para ${tipo === "institucional" ? "área institucional" : "reserva legal"} no ${lado}. Gleba restante: ${formatAreaBr(cut.remainderM2)}.`;
+            `Reservados ${formatAreaBr(cut.reservedM2)} (${pct}%) para ${tipo === "institucional" ? "área institucional" : "área verde"} no ${lado}. Gleba restante: ${formatAreaBr(cut.remainderM2)}.`;
         }
       } catch (err) {
         const text = err instanceof LoteamentoError || err instanceof Error ? err.message : "Falha ao reservar a faixa.";
@@ -1785,6 +1863,18 @@ export function executeCadAiCommand(
     }
 
     case "selecionar": {
+      if (command.lote || command.lotes?.length || command.quadra) {
+        const listed = consultarLotes(nextProject, {
+          quadra: command.quadra,
+          areaMax: command.filtro_area_max_m2,
+          areaMin: command.filtro_area_min_m2,
+        });
+        if (command.lote) {
+          const one = consultarLote(nextProject, command.lote);
+          return one;
+        }
+        return listed;
+      }
       const targetId = command.entidade_id;
       if (!targetId) return fail(project, "Informe entidade_id.");
       if (!nextProject.entities.some((e) => e.id === targetId)) return fail(project, `Entidade ${targetId} não encontrada.`);
@@ -1792,6 +1882,59 @@ export function executeCadAiCommand(
       message = message || "Entidade selecionada.";
       break;
     }
+
+    case "consultar_projeto":
+      return consultarProjeto(nextProject);
+    case "consultar_quadras":
+      return consultarQuadras(nextProject);
+    case "consultar_quadra":
+      return consultarQuadra(nextProject, command.quadra, selectedId);
+    case "consultar_lotes":
+      return consultarLotes(nextProject, {
+        quadra: command.quadra,
+        areaMax: command.filtro_area_max_m2,
+        areaMin: command.filtro_area_min_m2,
+      });
+    case "consultar_lote":
+      return consultarLote(nextProject, command.lote ?? command.entidade_id ?? "", selectedId);
+    case "calcular_testada":
+      return calcularTestada(nextProject, command.lote ?? command.entidade_id);
+    case "calcular_area_remanescente":
+      return calcularAreaRemanescente(nextProject, command.quadra);
+    case "validar_loteamento":
+      return analisarLoteamento(nextProject);
+    case "otimizar_quadra":
+      return otimizarQuadra(nextProject, paramsFromCommand(command, selectedId));
+    case "ajustar_lote":
+      return ajustarLote(
+        nextProject,
+        command.lote,
+        command.area_alvo_m2,
+        command.testada_minima_m ?? command.testada_m,
+        selectedId,
+        command.scope ?? "single_lot",
+      );
+    case "redistribuir_lotes":
+      return redistribuirLotes(nextProject, command.quadra, selectedId);
+    case "renomear_quadra":
+      return renomearQuadra(nextProject, command);
+    case "zoom_objeto": {
+      const lot = command.lote ? resolveLotRef(nextProject, command.lote) : null;
+      const quadra = !lot && command.quadra ? resolveQuadraRef(nextProject, command.quadra) : null;
+      const entityId = lot?.entity.id ?? quadra?.entityId ?? command.entidade_id;
+      const entity = entityId ? nextProject.entities.find((e) => e.id === entityId) : null;
+      if (!entity) return fail(project, "Não encontrei o objeto para enquadrar.");
+      selectedId = entity.id;
+      sideEffects.push({ type: "fit_view", entities: [entity] });
+      message = message || "Objeto enquadrado.";
+      break;
+    }
+    case "aplicar_alteracao":
+      message = message || "Não há alteração pendente. Peça a operação e confirme com Aplicar.";
+      break;
+    case "desfazer_alteracao":
+      message = message || "Não há alteração para desfazer.";
+      break;
 
     case "desconhecido":
     default:

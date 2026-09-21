@@ -1,5 +1,5 @@
 import { extractSurveyElevationPoints, type ElevationSample } from "./contour";
-import { AREA_APP_LAYER_ID, AREA_RESERVA_LEGAL_LAYER_ID, AREA_UTIL_LAYER_ID } from "./loteamento-tools";
+import { AREA_APP_LAYER_ID, AREA_FAIXA_DOMINIO_LAYER_ID, AREA_REMANESCENTE_LAYER_ID, AREA_RESERVA_LEGAL_LAYER_ID, AREA_UTIL_LAYER_ID } from "./loteamento-tools";
 import {
   CAD_PLAN_BLUE,
   extractDrainageCodeFromLabel,
@@ -275,7 +275,9 @@ export function listReservaRings(project: CadProject): CadVertex[][] {
         Boolean(e.closed) &&
         (e.layerId === AREA_RESERVA_LEGAL_LAYER_ID ||
           e.layerId === AREA_APP_LAYER_ID ||
-          e.layerId === AREA_UTIL_LAYER_ID) &&
+          e.layerId === AREA_FAIXA_DOMINIO_LAYER_ID ||
+          e.layerId === AREA_UTIL_LAYER_ID ||
+          e.layerId === AREA_REMANESCENTE_LAYER_ID) &&
         e.vertices.length >= 3,
     )
     .map((e) => e.vertices);
@@ -1604,7 +1606,7 @@ export function generateLoteamentoDrainage(
 
   const mains = bag.filter((p) => p.kind !== "inlet");
   if (mains.length < 2) {
-    throw new Error("Não foi possível posicionar PVs nas vias (verifique eixos, reserva legal e APP).");
+    throw new Error("Não foi possível posicionar PVs nas vias (verifique eixos, área verde e APP).");
   }
 
   const degree = new Map<string, number>();
@@ -1736,7 +1738,7 @@ export function insertDrainagePv(
   const cfg: DrainageParams = { ...DEFAULT_DRAINAGE_PARAMS, ...params };
   const reserva = listReservaRings(project);
   if (pointInAnyReserva(x, y, reserva)) {
-    throw new Error("Não insira PV sobre a reserva legal ou a APP.");
+    throw new Error("Não insira PV sobre a área verde ou a APP.");
   }
   const samples = extractSurveyElevationPoints(project.entities);
   const existing = listDrainagePvs(project);
@@ -1777,7 +1779,7 @@ export function insertDrainageInlet(
   const cfg: DrainageParams = { ...DEFAULT_DRAINAGE_PARAMS, ...params };
   const reserva = listReservaRings(project);
   if (pointInAnyReserva(x, y, reserva)) {
-    throw new Error("Não insira boca de lobo sobre a reserva legal ou a APP.");
+    throw new Error("Não insira boca de lobo sobre a área verde ou a APP.");
   }
   const samples = extractSurveyElevationPoints(project.entities);
   const existing = listDrainageInlets(project);
@@ -1853,7 +1855,7 @@ export function insertDrainagePipe(
   if (!from || !to) throw new Error("PV não encontrado.");
   const reserva = listReservaRings(project);
   if (pipeIntersectsReserva(from.x, from.y, to.x, to.y, reserva)) {
-    throw new Error("A tubulação não pode atravessar a reserva legal ou a APP.");
+    throw new Error("A tubulação não pode atravessar a área verde ou a APP.");
   }
   const already = listDrainagePipes(project).some((pipe) => {
     const a = pipe.drainage?.fromPvId;

@@ -20,10 +20,19 @@ import {
   cadastralLotFontSizePx,
   gridDataForViewport,
   formatGridLabel,
+  CAD_PAPER_STORAGE_KEY,
+  cadPaperFill,
+  cadPaperGridLabel,
+  cadPaperGridLine,
+  cadPaperScreenStroke,
+  cadPaperSelectStroke,
+  parseCadPaperTone,
   computePolygonMetrics,
   hitTestPolyline,
   hitTestPolylineVertexIndex,
   hitTestPolylineSegmentIndex,
+  nearestPolylineSegmentIndex,
+  distancePointToSegment,
   findPolylineEdgeInsert,
   normalizeConfrontations,
   insertConfrontationAt,
@@ -77,19 +86,20 @@ import {
   polygonCentroid,
   pointInPolygon,
   applyReservaLegalToProject,
-  applyAreaUtilToProject,
   applyAppBufferToProject,
   RESERVA_LEGAL_NEED_POLYGON,
-  AREA_UTIL_NEED_POLYGON,
-  AREA_UTIL_NEED_AREA,
-  AREA_UTIL_NEED_RESERVA,
   APP_NEED_LINE,
   translateRingInsideHost,
   clampPointInsideHost,
   parseReservaCanto,
   AREA_RESERVA_LEGAL_LAYER_ID,
   AREA_APP_LAYER_ID,
+  AREA_FAIXA_DOMINIO_LAYER_ID,
   AREA_UTIL_LAYER_ID,
+  displayAreaVerdeText,
+  isAreaVerdeLabel,
+  isFaixaDominioLabel,
+  cadLayerPublicName,
   computeLoteamentoAreaUtilBreakdown,
   EIXO_NEED_LOTEAMENTO,
   EIXO_TWO_POINT_NEED_DISTINCT,
@@ -148,9 +158,9 @@ import {
   resolvePointTextStyle,
   mergeLayerStyles,
   normalizeCadLayers,
-  parseEcwViaApi,
-  parseGeoTiffBuffer,
-  parseImageFileToRasterOverlay,
+  importGeoreferencedRasterFile,
+  isGeotiffOrEcwName,
+  pickRasterImportFiles,
   applyLoteamentoStakePoints,
   applyLoteamentoTables,
   buildLoteamentoTablesBlob,
@@ -207,6 +217,7 @@ import {
   isDrainagePvEntity,
   isDrainageStructureLayer,
   DRENAGEM_TUBOS_LAYER,
+  CAD_PLAN_AREA_BOX,
   CAD_PLAN_BLUE,
   CAD_PLAN_FONT,
   CAD_PLAN_INK,
@@ -217,7 +228,10 @@ import {
   isPlanTextOnlyPoint,
   isStoredLotPlanAnnotation,
   inferPlanTextRole,
+  isAreaQuadroLabel,
+  isLoteamentoTableEntity,
   planLotTitleCircleRadius,
+  planTableQuadroSize,
   planTextFillColor,
   planTextFontWeight,
   planTextHaloWidth,
@@ -260,6 +274,7 @@ import type {
   CadTool,
   CadVertex,
 } from "@/lib/rtk-validation/cad/types";
+import type { CadPaperTone } from "@/lib/rtk-validation/cad/paper";
 import { downloadOdsBlob } from "@/lib/rtk-validation/ods-writer";
 import { CadPrintLayout } from "@/components/rtk-validation/cad-print-layout";
 import type { PrintSheetContent } from "@/components/rtk-validation/cad-print-street-sheets";
@@ -272,7 +287,7 @@ import {
   type SigefLayerKey,
 } from "@/components/rtk-validation/cad-basemap-layer";
 import { CadRasterLegend, CadRasterSvgLayer } from "@/components/rtk-validation/cad-raster-overlay";
-import { CadAiChat } from "@/components/rtk-validation/cad-ai-chat";
+import { CadAiAssistant } from "@/components/rtk-validation/cad-ai-assistant";
 import { CadCommandsPanel } from "@/components/rtk-validation/cad-commands-panel";
 import { CadLayersPanel } from "@/components/rtk-validation/cad-layers-panel";
 import { CadPointObservations } from "@/components/rtk-validation/cad-point-observations";
@@ -280,9 +295,18 @@ import { CadConfrontationLabels } from "@/components/rtk-validation/cad-confront
 import { CadConfrontationTable } from "@/components/rtk-validation/cad-confrontation-table";
 import {
   CAD_TOOLS_PANEL_WIDTH_PX,
+  CAD_TOOLS_RAIL_WIDTH_PX,
   CadToolsSidebar,
   type CadToolsTab,
 } from "@/components/rtk-validation/cad-tools-sidebar";
+import { CadChromeHeader } from "@/components/rtk-validation/cad-chrome-header";
+import { CadChromeToolbar } from "@/components/rtk-validation/cad-chrome-toolbar";
+import {
+  CadIaLauncher,
+  CadLotInfoCard,
+  CadProjectsDialog,
+  CadStatusBar,
+} from "@/components/rtk-validation/cad-chrome-overlays";
 import { CadHatchDefs } from "@/components/rtk-validation/cad-hatch-defs";
 import { CadSvgMultilineText } from "@/components/rtk-validation/cad-svg-multiline-text";
 import { buildViabilidadeSessionPayload, writeViabilidadeSession } from "@/lib/viabilidade/cad-session";
@@ -297,7 +321,7 @@ const Cad3dView = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex min-h-[560px] items-center justify-center bg-[#0b1220] text-sm text-[#94a3b8]">
+      <div className="flex min-h-[100%] items-center justify-center bg-[#0b1220] text-sm text-[#94a3b8]">
         Carregando vista 3D…
       </div>
     ),
@@ -497,6 +521,9 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [cursor, setCursor] = useState<{ x: number; y: number; z: number } | null>(null);
   const [imported, setImported] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
+  const [paperTone, setPaperTone] = useState<CadPaperTone>(() =>
+    parseCadPaperTone(typeof window === "undefined" ? null : window.localStorage.getItem(CAD_PAPER_STORAGE_KEY)),
+  );
   const [coordLabelsVisible, setCoordLabelsVisible] = useState(false);
   const [memorialForm, setMemorialForm] = useState<MemorialFormDefaults>(() => defaultMemorialForm());
   const [memorialFooterOpen, setMemorialFooterOpen] = useState(true);
@@ -535,6 +562,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const projectFileRef = useRef<HTMLInputElement>(null);
   const drawingFileRef = useRef<HTMLInputElement>(null);
   const drenagemInpRef = useRef<HTMLInputElement>(null);
+  const loteamentoFaixaPanelRef = useRef<HTMLDivElement>(null);
   const [hoverSnapId, setHoverSnapId] = useState<string | null>(null);
   const [drawHint, setDrawHint] = useState<string | null>(null);
   const [pointSearch, setPointSearch] = useState("");
@@ -571,9 +599,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [loteamentoOrientacao, setLoteamentoOrientacao] = useState("");
   const [loteamentoPrefixo, setLoteamentoPrefixo] = useState("Quadra");
   const [loteamentoViasExistentes, setLoteamentoViasExistentes] = useState(false);
+  const [loteamentoLarguraViaExistente, setLoteamentoLarguraViaExistente] = useState("");
   const [loteamentoEixoIds, setLoteamentoEixoIds] = useState<string[]>([]);
   const [loteamentoLados, setLoteamentoLados] = useState<number[]>([]);
   const [loteamentoPickLado, setLoteamentoPickLado] = useState(false);
+  const [loteamentoFaixaDominio, setLoteamentoFaixaDominio] = useState(false);
+  const [loteamentoLarguraFaixaDominio, setLoteamentoLarguraFaixaDominio] = useState("15");
+  const [loteamentoLadosFaixa, setLoteamentoLadosFaixa] = useState<number[]>([]);
+  const [loteamentoPickFaixa, setLoteamentoPickFaixa] = useState(false);
   const [loteamentoAlterarEixo, setLoteamentoAlterarEixo] = useState<
     | null
     | { phase: "a" }
@@ -705,7 +738,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [profilePickIds, setProfilePickIds] = useState<string[]>([]);
   const [alignmentPickMode, setAlignmentPickMode] = useState(false);
   const [toolsTab, setToolsTab] = useState<CadToolsTab>("draw");
-  const [toolsSidebarOpen, setToolsSidebarOpen] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [lotCardMinimized, setLotCardMinimized] = useState(false);
+  useEffect(() => {
+    if (window.innerWidth < 1600) setSidebarCollapsed(true);
+  }, []);
   const [drawingChartsOpen, setDrawingChartsOpen] = useState(false);
   const [isCadFullscreen, setIsCadFullscreen] = useState(false);
   const [profilePickResult, setProfilePickResult] = useState<string | null>(null);
@@ -1104,23 +1141,25 @@ export function CadWorkspace({ userId }: { userId: string }) {
 
   const reurbLotCount = listReurbLots(project).length;
 
-  async function handleImportReurbOrtho(file: File) {
+  async function handleImportOrthoFiles(files: File[]) {
+    const picked = pickRasterImportFiles(files);
+    if (!picked) {
+      const msg = t("import.orthoFormat");
+      setReurbNotice(msg);
+      setImportNotice(msg);
+      return;
+    }
+
     setImportingOrtho(true);
+    setImportingDrawing(true);
     setReurbNotice(null);
+    setImportNotice(null);
     try {
-      const name = file.name.toLowerCase();
-      let raster;
-      if (name.endsWith(".ecw")) {
-        raster = await parseEcwViaApi(file, projectGeoref);
-      } else if (/\.(tif|tiff)$/i.test(name)) {
-        const buffer = await file.arrayBuffer();
-        raster = await parseGeoTiffBuffer(buffer, file.name, projectGeoref);
-      } else if (/\.(jpe?g|png)$/i.test(name)) {
-        raster = await parseImageFileToRasterOverlay(file, bounds);
-      } else {
-        setReurbNotice(t("import.orthoFormat"));
-        return;
-      }
+      const worldFileText = picked.worldFile ? await picked.worldFile.text() : undefined;
+      const raster = await importGeoreferencedRasterFile(picked.raster, projectGeoref, {
+        worldFileText,
+        viewBounds: bounds,
+      });
       setProject((prev) => ensureRasterLayerInProject(prev, "orthophoto"));
       setRasters((prev) => [...prev.filter((r) => r.kind !== "orthophoto"), raster]);
       setViewBounds({
@@ -1131,11 +1170,16 @@ export function CadWorkspace({ userId }: { userId: string }) {
       });
       setImported(true);
       setSnapToRtkPoints(false);
-      setReurbNotice(t("import.orthoOk", { name: raster.name }));
+      const ok = t("import.orthoOk", { name: raster.name });
+      setReurbNotice(ok);
+      setImportNotice(ok);
     } catch (err) {
-      setReurbNotice(err instanceof Error ? err.message : t("import.error"));
+      const msg = err instanceof Error ? err.message : t("import.error");
+      setReurbNotice(msg);
+      setImportNotice(msg);
     } finally {
       setImportingOrtho(false);
+      setImportingDrawing(false);
     }
   }
 
@@ -1258,8 +1302,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
         poly.layerId === "loteamento_lotes" ||
         poly.layerId === "loteamento_calcadas" ||
         poly.layerId === "loteamento_eixos" ||
+        poly.layerId === LOTEAMENTO_QUADRAS_LAYER_ID ||
         poly.layerId === AREA_RESERVA_LEGAL_LAYER_ID ||
         poly.layerId === AREA_APP_LAYER_ID ||
+        poly.layerId === AREA_FAIXA_DOMINIO_LAYER_ID ||
         poly.layerId === AREA_UTIL_LAYER_ID ||
         poly.layerId === "area_institucional"
       ) {
@@ -1279,6 +1325,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
       if (glebaIds.has(entity.id)) return false;
       if (entity.layerId.startsWith("loteamento_")) return false;
       if (entity.layerId === AREA_APP_LAYER_ID) return false;
+      if (entity.layerId === AREA_FAIXA_DOMINIO_LAYER_ID) return false;
       if (entity.layerId === AREA_UTIL_LAYER_ID) return false;
       if (locked.has(entity.layerId)) return false;
       return true;
@@ -1364,6 +1411,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
     const timer = window.setTimeout(() => setPolygonEditNotice(null), 4000);
     return () => window.clearTimeout(timer);
   }, [polygonEditNotice]);
+
+  useEffect(() => {
+    window.localStorage.setItem(CAD_PAPER_STORAGE_KEY, paperTone);
+  }, [paperTone]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1754,6 +1805,12 @@ export function CadWorkspace({ userId }: { userId: string }) {
   }, [projectNotice]);
 
   useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth < 1440) {
+      setSidebarCollapsed(true);
+    }
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (cursorRafRef.current != null) window.cancelAnimationFrame(cursorRafRef.current);
       if (loteamentoRebuildTimerRef.current != null) window.clearTimeout(loteamentoRebuildTimerRef.current);
@@ -1773,6 +1830,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     setAppPickMode(false);
     setAppApplyAfterPick(false);
     setLoteamentoPickLado(false);
+    setLoteamentoPickFaixa(false);
     setLoteamentoAlterarEixo(null);
     setLoteamentoAlterarEixoPreview(null);
     setDrenagemPick(null);
@@ -1848,7 +1906,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      if (areaPickMode || distancePickMode || profilePickMode || alignmentPickMode || appPickMode || loteamentoPickLado || loteamentoAlterarEixo || drenagemPick) {
+      if (areaPickMode || distancePickMode || profilePickMode || alignmentPickMode || appPickMode || loteamentoPickLado || loteamentoPickFaixa || loteamentoAlterarEixo || drenagemPick) {
         resetWorkspaceModes();
         return;
       }
@@ -1866,6 +1924,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     alignmentPickMode,
     appPickMode,
     loteamentoPickLado,
+    loteamentoPickFaixa,
     loteamentoAlterarEixo,
     drenagemPick,
     resetWorkspaceModes,
@@ -2373,7 +2432,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
         if (
           near &&
           ((target.layerId === AREA_APP_LAYER_ID && label.startsWith("APP ")) ||
-            (target.layerId === AREA_RESERVA_LEGAL_LAYER_ID && label.startsWith("Reserva legal")) ||
+            (target.layerId === AREA_FAIXA_DOMINIO_LAYER_ID && isFaixaDominioLabel(label)) ||
+            (target.layerId === AREA_RESERVA_LEGAL_LAYER_ID && isAreaVerdeLabel(label)) ||
             (target.layerId === AREA_UTIL_LAYER_ID && label.startsWith("Área útil")))
         ) {
           extraIds.add(other.id);
@@ -2625,29 +2685,48 @@ export function CadWorkspace({ userId }: { userId: string }) {
       setDrawHint(null);
       return;
     }
-    if (loteamentoPickLado) {
+    if (loteamentoPickLado || loteamentoPickFaixa) {
       const glebaId = loteamentoGlebaId.trim() || selectedId;
+      const fromList = loteamentoGlebas.find((poly) => poly.id === glebaId) ?? null;
       const gleba = glebaId
         ? project.entities.find((entity) => entity.id === glebaId)
         : null;
       const wts = (x: number, y: number) => worldToScreen(x, y, viewport);
-      const target =
-        gleba?.type === "polyline" && gleba.closed && gleba.vertices.length >= 3
-          ? gleba
-          : null;
-      const hitOn = (entity: CadPolylineEntity) =>
-        hitTestPolylineSegmentIndex(sx, sy, entity.vertices, true, wts, 14);
-
-      let poly = target;
-      let seg = poly ? hitOn(poly) : null;
-      if (seg === null) {
-        for (const entity of [...visibleEntities].reverse()) {
-          if (entity.type !== "polyline" || !entity.closed || entity.vertices.length < 3) continue;
-          const found = hitOn(entity);
-          if (found === null) continue;
-          poly = entity;
-          seg = found;
-          break;
+      const isGlebaPoly = (entity: CadPolylineEntity) =>
+        entity.closed &&
+        entity.vertices.length >= 3 &&
+        loteamentoGlebas.some((poly) => poly.id === entity.id);
+      let poly: CadPolylineEntity | null =
+        fromList ??
+        (gleba?.type === "polyline" && isGlebaPoly(gleba) ? gleba : null);
+      if (!poly) {
+        for (const entity of [...loteamentoGlebas].reverse()) {
+          if (hitTestPolyline(sx, sy, entity.vertices, true, wts, 36)) {
+            poly = entity;
+            break;
+          }
+        }
+      }
+      const hitOn = (entity: CadPolylineEntity, px: number) =>
+        hitTestPolylineSegmentIndex(sx, sy, entity.vertices, true, wts, px);
+      let seg = poly ? hitOn(poly, 36) : null;
+      if (poly && seg === null) {
+        const world = screenToWorld(sx, sy, viewport);
+        const inside = pointInPolygon(world.x, world.y, poly.vertices);
+        const nearest = nearestPolylineSegmentIndex(sx, sy, poly.vertices, true, wts);
+        const mpp = worldMetersPerPixel(viewport);
+        const bandM = Math.max(12, mpp * 40);
+        let nearestM = Infinity;
+        if (inside) {
+          for (let i = 0; i < poly.vertices.length; i++) {
+            const a = poly.vertices[i];
+            const b = poly.vertices[(i + 1) % poly.vertices.length];
+            const dist = distancePointToSegment(world.x, world.y, a.x, a.y, b.x, b.y);
+            if (dist < nearestM) nearestM = dist;
+          }
+        }
+        if (nearest && (nearest.dist <= 48 || (inside && nearestM <= bandM))) {
+          seg = nearest.index;
         }
       }
       if (!poly || seg === null) {
@@ -2657,10 +2736,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
       }
       setLoteamentoGlebaId(poly.id);
       setSelectedId(poly.id);
-      setLoteamentoViasExistentes(true);
-      setLoteamentoLados((prev) =>
-        prev.includes(seg) ? prev.filter((i) => i !== seg) : [...prev, seg].sort((a, b) => a - b),
-      );
+      if (loteamentoPickFaixa) {
+        setLoteamentoFaixaDominio(true);
+        setLoteamentoLadosFaixa((prev) =>
+          prev.includes(seg) ? prev.filter((i) => i !== seg) : [...prev, seg].sort((a, b) => a - b),
+        );
+      } else {
+        setLoteamentoViasExistentes(true);
+        setLoteamentoLados((prev) =>
+          prev.includes(seg) ? prev.filter((i) => i !== seg) : [...prev, seg].sort((a, b) => a - b),
+        );
+      }
       return;
     }
 
@@ -3183,6 +3269,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
     const raioEsquinaM = raioRaw === "" ? 0 : parseDrawNumber(raioRaw);
     const areaUtilRaw = loteamentoAreaUtil.trim();
     const percentAreaUtil = areaUtilRaw === "" ? 15 : parseDrawNumber(areaUtilRaw);
+    const existRaw = loteamentoLarguraViaExistente.trim();
+    const larguraViaExistenteM = existRaw === "" ? undefined : parseDrawNumber(existRaw);
     const medidasOk =
       loteamentoQuadraModo !== "medidas" ||
       (larguraQuadraM !== null && larguraQuadraM > 0 && distanciaQuadraM !== null && distanciaQuadraM > 0);
@@ -3202,6 +3290,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
       percentAreaUtil === null ||
       percentAreaUtil < 0 ||
       percentAreaUtil >= 100 ||
+      (existRaw !== "" && (larguraViaExistenteM == null || larguraViaExistenteM <= 0)) ||
       !medidasOk
     ) {
       return {
@@ -3217,6 +3306,15 @@ export function CadWorkspace({ userId }: { userId: string }) {
     if (orientacaoRaw !== "" && orientacao === null) {
       return { ok: false, error: t("loteamento.orientacaoInvalid") };
     }
+    const faixaOn = loteamentoFaixaDominio || loteamentoLadosFaixa.length > 0;
+    const faixaRaw = loteamentoLarguraFaixaDominio.trim();
+    const larguraFaixaDominioM = faixaRaw === "" ? (faixaOn ? 15 : undefined) : parseDrawNumber(faixaRaw);
+    if (faixaOn && loteamentoLadosFaixa.length === 0) {
+      return { ok: false, error: t("loteamento.pickFaixaNeedLado") };
+    }
+    if (faixaOn && (larguraFaixaDominioM == null || larguraFaixaDominioM <= 0)) {
+      return { ok: false, error: t("loteamento.paramsInvalid") };
+    }
     return {
       ok: true,
       input: {
@@ -3231,7 +3329,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
         eixoRua: loteamentoEixoRua,
         raioEsquinaM,
         viasExistentesExtremidades: loteamentoViasExistentes || loteamentoLados.length > 0,
+        larguraViaExistenteM: larguraViaExistenteM ?? undefined,
         ladosAresta: loteamentoLados.length > 0 ? loteamentoLados : undefined,
+        ladosFaixaDominio: loteamentoLadosFaixa.length > 0 ? loteamentoLadosFaixa : undefined,
+        larguraFaixaDominioM: faixaOn ? larguraFaixaDominioM ?? undefined : undefined,
         orientacao: orientacao ?? undefined,
         prefixoQuadra: loteamentoPrefixo.trim() || "Quadra",
         percentAreaUtil: percentAreaUtil ?? undefined,
@@ -3306,6 +3407,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
       return;
     }
     setLoteamentoPickLado(false);
+    setLoteamentoPickFaixa(false);
     setAppPickMode(false);
     setAppApplyAfterPick(false);
     setDrenagemPick(null);
@@ -3389,6 +3491,32 @@ export function CadWorkspace({ userId }: { userId: string }) {
     router.push(savedProjectId ? `/viabilidade/${savedProjectId}` : "/viabilidade/local");
   }
 
+  function startPickFaixaDominio(): boolean {
+    const glebaId = loteamentoGlebaId.trim() || selectedId;
+    const gleba = glebaId
+      ? project.entities.find((entity) => entity.id === glebaId)
+      : null;
+    if (
+      !gleba ||
+      gleba.type !== "polyline" ||
+      !gleba.closed ||
+      gleba.vertices.length < 3
+    ) {
+      setLoteamentoError(t("loteamento.needPolygon"));
+      loteamentoFaixaPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      return false;
+    }
+    setLoteamentoGlebaId(gleba.id);
+    setSelectedId(gleba.id);
+    setLoteamentoFaixaDominio(true);
+    setLoteamentoPickLado(false);
+    setLoteamentoPickFaixa(true);
+    setTool("select");
+    setLoteamentoError(null);
+    loteamentoFaixaPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return true;
+  }
+
   function generateLoteamentoFromPanel() {
     setLoteamentoNotice(null);
     setLoteamentoError(null);
@@ -3420,6 +3548,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
     const raioEsquinaM = raioRaw === "" ? 0 : parseDrawNumber(raioRaw);
     const areaUtilRaw = loteamentoAreaUtil.trim();
     const percentAreaUtil = areaUtilRaw === "" ? 15 : parseDrawNumber(areaUtilRaw);
+    const existRaw = loteamentoLarguraViaExistente.trim();
+    const larguraViaExistenteM = existRaw === "" ? undefined : parseDrawNumber(existRaw);
     const medidasOk =
       loteamentoQuadraModo !== "medidas" ||
       (larguraQuadraM !== null && larguraQuadraM > 0 && distanciaQuadraM !== null && distanciaQuadraM > 0);
@@ -3439,6 +3569,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
       percentAreaUtil === null ||
       percentAreaUtil < 0 ||
       percentAreaUtil >= 100 ||
+      (existRaw !== "" && (larguraViaExistenteM == null || larguraViaExistenteM <= 0)) ||
       !medidasOk
     ) {
       setLoteamentoError(
@@ -3453,6 +3584,19 @@ export function CadWorkspace({ userId }: { userId: string }) {
     const orientacao = orientacaoRaw === "" ? undefined : parseDrawNumber(orientacaoRaw);
     if (orientacaoRaw !== "" && orientacao === null) {
       setLoteamentoError(t("loteamento.orientacaoInvalid"));
+      return;
+    }
+
+    const faixaOn = loteamentoFaixaDominio || loteamentoLadosFaixa.length > 0;
+    const faixaRaw = loteamentoLarguraFaixaDominio.trim();
+    const larguraFaixaDominioM = faixaRaw === "" ? (faixaOn ? 15 : undefined) : parseDrawNumber(faixaRaw);
+    if (faixaOn && loteamentoLadosFaixa.length === 0) {
+      setLoteamentoError(t("loteamento.pickFaixaNeedLado"));
+      void startPickFaixaDominio();
+      return;
+    }
+    if (faixaOn && (larguraFaixaDominioM == null || larguraFaixaDominioM <= 0)) {
+      setLoteamentoError(t("loteamento.paramsInvalid"));
       return;
     }
 
@@ -3474,13 +3618,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
           eixo_rua: loteamentoEixoRua,
           raio_esquina_m: raioEsquinaM,
           vias_existentes_extremidades: loteamentoViasExistentes || loteamentoLados.length > 0,
+          largura_via_existente_m: larguraViaExistenteM ?? undefined,
           lados_aresta: loteamentoLados.length > 0 ? loteamentoLados : undefined,
+          lados_faixa_dominio: loteamentoLadosFaixa.length > 0 ? loteamentoLadosFaixa : undefined,
+          largura_faixa_dominio_m: faixaOn ? larguraFaixaDominioM ?? undefined : undefined,
           entidade_ids: loteamentoEixoIds.length > 0 ? loteamentoEixoIds : undefined,
           orientacao: orientacao ?? undefined,
           prefixo_quadra: loteamentoPrefixo.trim() || "Quadra",
           percentual_area_util: percentAreaUtil ?? undefined,
           canto_area_util: parseReservaCanto(areaUtilCanto) ?? areaUtilCanto,
           percentual_esquina: parseEsquinaPercent(),
+          area_minima_m2: resolveCurrentAreaMinimaInterno(),
         },
         { selectedId: gleba.id, memorialForm },
       );
@@ -3599,57 +3747,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   }
 
   function definirAreaUtil() {
-    setLoteamentoNotice(null);
-    setLoteamentoError(null);
-    const preferredGleba = loteamentoGlebaId.trim() || selectedId;
-    const glebaId =
-      loteamentoGlebas.find((poly) => poly.id === preferredGleba)?.id ??
-      loteamentoGlebas.find((poly) => poly.id === loteamentoGlebaId.trim())?.id ??
-      loteamentoGlebas[0]?.id ??
-      preferredGleba;
-    const areaUtilRaw = loteamentoAreaUtil.trim();
-    const pct = areaUtilRaw === "" ? 15 : parseDrawNumber(areaUtilRaw);
-    if (pct === null || pct <= 0 || pct >= 100) {
-      setLoteamentoError(t("loteamento.areaUtilNeedPercent"));
-      return;
-    }
-    const canto = parseReservaCanto(areaUtilCanto) ?? areaUtilCanto;
-    try {
-      const result = applyAreaUtilToProject(project, {
-        glebaId,
-        percent: pct,
-        canto,
-      });
-      setProject(result.project);
-      setSelectedId(result.util.id);
-      setTool("select");
-      const gleba = project.entities.find((entity) => entity.id === glebaId);
-      const fitEntities = gleba ? [gleba, result.util] : [result.util];
-      const nextBounds = computeViewportBoundsSafe(fitEntities);
-      setViewBounds((prev) => {
-        if (!prev) return nextBounds;
-        const c = polygonCentroid(result.util.vertices);
-        const inside =
-          c.x >= prev.minX && c.x <= prev.maxX && c.y >= prev.minY && c.y <= prev.maxY;
-        return inside ? prev : nextBounds;
-      });
-      const done = t("loteamento.areaUtilDone", {
-        area: formatAreaBr(result.areaM2),
-        pct: String(pct.toFixed(0)),
-      });
-      setLoteamentoNotice(`${done} ${t("loteamento.areaUtilDragHint")}`);
-    } catch (err) {
-      const raw = err instanceof Error ? err.message : t("commands.error");
-      setLoteamentoError(
-        raw === AREA_UTIL_NEED_POLYGON
-          ? t("loteamento.areaUtilNeedPolygon")
-          : raw === AREA_UTIL_NEED_RESERVA
-            ? t("loteamento.areaUtilNeedReserva")
-            : raw === AREA_UTIL_NEED_AREA
-              ? t("loteamento.areaUtilNeedArea")
-              : raw,
-      );
-    }
+    generateLoteamentoFromPanel();
   }
 
   function aplicarAppBuffer(sourceId: string) {
@@ -4718,13 +4816,13 @@ export function CadWorkspace({ userId }: { userId: string }) {
           y1={top.sy}
           x2={bottom.sx}
           y2={bottom.sy}
-          stroke={major ? "#475569" : "#1e293b"}
+          stroke={major ? cadPaperGridLine(paperTone, true) : cadPaperGridLine(paperTone, false)}
           strokeWidth={major ? 1 : 0.5}
           opacity={major ? 0.6 : 0.35}
         />,
       );
       items.push(
-        <text key={`gel-${e}`} x={bottom.sx + 2} y={bottom.sy - 4} fill="#94a3b8" fontSize={9} fontFamily="monospace">
+        <text key={`gel-${e}`} x={bottom.sx + 2} y={bottom.sy - 4} fill={cadPaperGridLabel(paperTone)} fontSize={9} fontFamily="monospace">
           E {formatGridLabel(e, grid.stepE)}
         </text>,
       );
@@ -4741,13 +4839,13 @@ export function CadWorkspace({ userId }: { userId: string }) {
           y1={left.sy}
           x2={right.sx}
           y2={right.sy}
-          stroke={major ? "#475569" : "#1e293b"}
+          stroke={major ? cadPaperGridLine(paperTone, true) : cadPaperGridLine(paperTone, false)}
           strokeWidth={major ? 1 : 0.5}
           opacity={major ? 0.6 : 0.35}
         />,
       );
       items.push(
-        <text key={`gnl-${n}`} x={left.sx + 4} y={left.sy - 2} fill="#94a3b8" fontSize={9} fontFamily="monospace">
+        <text key={`gnl-${n}`} x={left.sx + 4} y={left.sy - 2} fill={cadPaperGridLabel(paperTone)} fontSize={9} fontFamily="monospace">
           N {formatGridLabel(n, grid.stepN)}
         </text>,
       );
@@ -4811,7 +4909,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
 
   function renderEntity(entity: CadEntity) {
     const layer = layerMap.get(entity.layerId);
-    const lineColor = getLayerLineColor(layer);
+    const lineColor = cadPaperScreenStroke(getLayerLineColor(layer), paperTone);
+    const selectStroke = cadPaperSelectStroke(paperTone);
     const layerTextColor = getLayerTextColor(layer);
     const layerTextSize = getLayerTextSize(layer);
     const selected = entity.id === selectedId;
@@ -4838,6 +4937,35 @@ export function CadWorkspace({ userId }: { userId: string }) {
         ? annotationFontSizePx(viewport, undefined, lotSpanM) * (pointTextSize / 10)
         : pointTextSize;
       const { sx, sy } = worldToScreen(entity.x, entity.y, viewport);
+      if (isLoteamentoTableEntity(entity) && entity.label) {
+        const areaQuadro = isAreaQuadroLabel(entity.label);
+        const font = areaQuadro ? 8.5 : 8;
+        const box = planTableQuadroSize(font, entity.label);
+        return (
+          <g key={entity.id} pointerEvents="none">
+            <rect
+              x={sx}
+              y={sy}
+              width={box.width}
+              height={box.height}
+              fill={CAD_PLAN_AREA_BOX}
+              stroke={CAD_PLAN_INK}
+              strokeWidth={areaQuadro ? 1.2 : 0.9}
+              rx={1.5}
+            />
+            <CadSvgMultilineText
+              x={sx + font * 0.7}
+              y={sy + font * 1.15}
+              label={entity.label}
+              fill={CAD_PLAN_INK}
+              fontSize={font}
+              fontFamily="ui-monospace, Consolas, monospace"
+              fontWeight={areaQuadro ? 700 : 600}
+              textAnchor="start"
+            />
+          </g>
+        );
+      }
       const isPickable = isDrawWithPoints && snapToRtkPoints;
       const isHovered = hoverSnapId === entity.id;
       const inDraft = draft.some(
@@ -4908,7 +5036,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
             <CadSvgMultilineText
               x={labelX}
               y={labelY}
-              label={entity.label}
+              label={displayAreaVerdeText(entity.label)}
               fill={planFill}
               fontSize={nodeFontSize}
               fontFamily={planFamily}
@@ -4935,7 +5063,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
           y1={a.sy}
           x2={b.sx}
           y2={b.sy}
-          stroke={selected ? "#fff" : lineColor}
+          stroke={selected ? selectStroke : lineColor}
           strokeWidth={getLayerLineWidth(layer, selected)}
           strokeDasharray={getLayerStrokeDasharray(layer)}
         />
@@ -4966,7 +5094,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
         maxVelocityMs: DRAINAGE_VELOCITY_MAX_MS,
         laminaMax: DRAINAGE_LAMINA_RELATIVA_MAX,
       });
-    const strokeColor = selected ? "#fff" : pipeFail ? "#dc2626" : isContour ? contourStroke : lineColor;
+    const strokeColor = selected ? selectStroke : pipeFail ? "#dc2626" : isContour ? contourStroke : lineColor;
     const strokeW = isContour ? (isMajorContour ? 1.6 : 1) : getLayerLineWidth(layer, selected) + (pipeFail ? 0.8 : 0);
     const fillColor = getLayerPolygonFill(layer, selected);
     const strokeDasharray = getLayerStrokeDasharray(layer);
@@ -5050,7 +5178,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
           const metrics = computePolygonMetrics(entity.vertices, true);
           const c = polygonCentroid(entity.vertices);
           const { sx, sy } = worldToScreen(c.x, c.y, viewport);
-          const polyName = entity.name ?? t("polygon.defaultName");
+          const polyName = displayAreaVerdeText(entity.name ?? t("polygon.defaultName"));
           return (
             <text
               x={sx}
@@ -5126,8 +5254,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
     selectedPolyline && isLoteamentoLotEntity(selectedPolyline)
       ? resolveLotEsquinaInfo(selectedPolyline)
       : null;
-  const hoverLotInfo = hoverLot && isLoteamentoLotEntity(hoverLot) ? resolveLotEsquinaInfo(hoverLot) : null;
-  const esquinaTooltip = hoverLotInfo?.tooltip ?? selectedLotInfo?.tooltip ?? null;
   const selectedConfrontationMetrics =
     selectedPolyline && selectedPolyline.closed && selectedPolyline.vertices.length >= 3
       ? computePolygonMetrics(
@@ -5144,19 +5270,46 @@ export function CadWorkspace({ userId }: { userId: string }) {
     : [];
   const canEditSelectedPolyline = selectedPolyline ? isEditablePolyline(selectedPolyline) : false;
 
-  const cadTabs: { id: CadTabId; label: string }[] = [
-    { id: "desenho", label: t("tabs.draw") },
-    { id: "planilha", label: t("tabs.planilha") },
-    { id: "layout", label: t("tabs.printLayout") },
-  ];
+  const lotCardEntity =
+    selectedPolyline && isLoteamentoLotEntity(selectedPolyline)
+      ? selectedPolyline
+      : hoverLot && isLoteamentoLotEntity(hoverLot)
+        ? hoverLot
+        : null;
+  const lotCardLote = lotCardEntity?.lote ?? null;
+  const orthophotoLayer = project.layers.find((l) => l.id === "orthophoto");
+  const reliefLayer = project.layers.find((l) => l.id === "hypsometric");
+  const showOrthophotoToggle = rasters.some((r) => r.kind === "orthophoto") || Boolean(orthophotoLayer);
+  const showReliefToggle = rasters.some((r) => r.kind === "hypsometric") || Boolean(reliefLayer);
+  const viewSpan = Math.max(bounds.maxX - bounds.minX, 1);
+  const zoomLabel = (1000 / viewSpan).toFixed(2);
+
+  function activateCadTool(id: CadTool) {
+    setTool(id);
+    setDraft([]);
+    setDrawHint(null);
+    setHoverSnapId(null);
+    setDrawPreview(null);
+    setKeyboardDistance("");
+    if (id !== "editPolygon") setSelectedVertexIndex(null);
+  }
+
+  function setRasterLayerVisible(layerId: "orthophoto" | "hypsometric", visible: boolean) {
+    const kind = layerId === "orthophoto" ? "orthophoto" : "hypsometric";
+    setProject((prev) => {
+      const withLayer = ensureRasterLayerInProject(prev, kind);
+      return {
+        ...withLayer,
+        layers: withLayer.layers.map((l) => (l.id === layerId ? { ...l, visible } : l)),
+      };
+    });
+  }
 
   return (
     <div
       ref={workspaceRootRef}
-      className={`cad-workspace relative flex min-h-0 flex-1 flex-col gap-2 text-[#111827] ${
-        isCadFullscreen
-          ? "h-full w-full overflow-hidden bg-[#f3f4f6] p-2"
-          : "overflow-y-auto xl:overflow-hidden"
+      className={`cad-workspace relative flex h-full min-h-0 flex-1 flex-col overflow-hidden text-[#111827] ${
+        isCadFullscreen ? "w-full bg-[#f3f4f6]" : ""
       }`}
     >
       {isCadFullscreen ? (
@@ -5185,14 +5338,112 @@ export function CadWorkspace({ userId }: { userId: string }) {
           onClose={() => setDrenagem3dOpen(false)}
         />
       ) : null}
-      <CadPointObservations
-        entities={project.entities}
-        layers={project.layers}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        onUpdatePoint={updatePoint}
+      <CadChromeHeader
+        projectName={project.name}
+        onProjectNameChange={(name) => setProject((prev) => ({ ...prev, name }))}
+        projectMeta={[
+          project.crs,
+          projectGeoref.isGeoreferenced && zoneDetection.coordMode === "utm"
+            ? t("meta.zoneDetected", {
+                zone: zoneDetection.zone,
+                epsg: zoneDetection.epsg,
+                confidence: Math.round(zoneDetection.confidence * 100),
+              })
+            : projectGeoref.isGeoreferenced && zoneDetection.coordMode === "wgs84"
+              ? t("meta.wgs84Detected", { zone: zoneDetection.zone })
+              : "",
+          projectGeoref.isGeoreferenced ? projectGeoref.utmProjectionLabel : "",
+          savedProjectId ? `ID ${savedProjectId.slice(-8)}` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        projectNotice={projectNotice}
+        projectNoticeError={projectNoticeError}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
+        savingLocal={savingLocal}
+        savingCloud={savingCloud}
+        exportingFormat={exportingFormat}
+        importingDrawing={importingDrawing}
+        aiChatOpen={aiChatOpen}
+        showGrid={showGrid}
+        paperTone={paperTone}
+        satelliteOn={basemapOverlays.satellite}
+        orthophotoOn={orthophotoLayer?.visible !== false}
+        showOrthophotoToggle={showOrthophotoToggle}
+        reliefOn={reliefLayer?.visible !== false}
+        showReliefToggle={showReliefToggle}
+        isCadFullscreen={isCadFullscreen}
+        cityQuery={cityQuery}
+        cityBusy={cityBusy}
+        cityHits={cityHits}
+        cityNotice={cityNotice}
+        onNewProject={handleNewProject}
+        onOpenProjects={() => {
+          void refreshSavedProjects();
+          setOpenProjectsPanel(true);
+        }}
+        onOpenFile={() => projectFileRef.current?.click()}
+        onSaveLocal={() => void handleSaveLocal()}
+        onSaveCloud={() => void handleSaveCloudDwg()}
+        onImportDrawing={() => drawingFileRef.current?.click()}
+        onExport={(format) => void handleExportCad(format)}
+        onExportOds={() => downloadOdsBlob(exportCadProjectOds(project), `${project.name}.ods`)}
+        onToggleAi={() => setAiChatOpen((v) => !v)}
+        onToggleGrid={setShowGrid}
+        onPaperTone={setPaperTone}
+        onToggleSatellite={(next) => patchBasemapOverlay("satellite", next)}
+        onToggleOrthophoto={(next) => setRasterLayerVisible("orthophoto", next)}
+        onToggleRelief={(next) => setRasterLayerVisible("hypsometric", next)}
+        onFitView={resetView}
+        onToggleFullscreen={toggleCadFullscreen}
+        onTabChange={setActiveTab}
+        onCityQueryChange={(value) => {
+          setCityQuery(value);
+          setCityHits([]);
+          setCityNotice(null);
+        }}
+        onCitySearch={() => void searchCityZoom()}
+        onCityHit={zoomToCityHit}
       />
-      <div className="cad-interface flex shrink-0 items-center gap-2 rounded-xl border border-[#e5e7eb] bg-white px-2 py-1.5">
+      {importNotice || exportError ? (
+        <p
+          className={`shrink-0 truncate px-3 py-1 text-[11px] ${
+            (importNotice ?? exportError ?? "").includes("Falha") ||
+            (importNotice ?? "").includes("Nenhum") ||
+            Boolean(exportError)
+              ? "bg-red-50 text-red-800"
+              : "bg-emerald-50 text-emerald-800"
+          }`}
+        >
+          {exportError ?? importNotice}
+        </p>
+      ) : null}
+      <div className="pointer-events-none absolute inset-x-0 top-12 z-30 flex justify-center px-16">
+        <div className="pointer-events-auto w-full max-w-xl">
+          <CadPointObservations
+            entities={project.entities}
+            layers={project.layers}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onUpdatePoint={updatePoint}
+          />
+        </div>
+      </div>
+      <CadProjectsDialog
+        open={openProjectsPanel}
+        savedProjects={savedProjects}
+        savedProjectId={savedProjectId}
+        formatSavedDate={formatSavedDate}
+        onClose={() => setOpenProjectsPanel(false)}
+        onOpenFile={() => projectFileRef.current?.click()}
+        onNewProject={handleNewProject}
+        onOpenProject={(id) => void handleOpenProject(id)}
+        onDownloadDwg={(id) => void handleDownloadCloudDwg(id)}
+        onDelete={handleDeleteProject}
+      />
+      {/*
+      <div className="cad-interface hidden shrink-0 items-center gap-2 rounded-xl border border-[#e5e7eb] bg-white px-2 py-1.5">
         <div className="min-w-[9rem] max-w-[13rem] shrink-0">
           <label className="sr-only">{t("project.nameLabel")}</label>
           <input
@@ -5208,10 +5459,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 ? t("meta.wgs84Detected", { zone: zoneDetection.zone })
                 : "",
             projectGeoref.isGeoreferenced ? projectGeoref.utmProjectionLabel : "",
-            project.adjustment
-              ? `${t("meta.adjusted")} RMS ${project.adjustment.rmsAfter.toFixed(4)} m (${project.adjustment.method})`
-              : "",
-            savedProjectId ? `ID ${savedProjectId.slice(-8)}` : "",
+            savedProjectId ? `ID ${savedProjectId?.slice(-8)}` : "",
           ].filter(Boolean).join(" · ")}>
             {project.crs}
             {projectGeoref.isGeoreferenced && zoneDetection.coordMode === "utm"
@@ -5219,7 +5467,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
               : projectGeoref.isGeoreferenced && zoneDetection.coordMode === "wgs84"
                 ? ` · WGS84`
                 : ""}
-            {savedProjectId ? ` · ${savedProjectId.slice(-8)}` : ""}
+            {savedProjectId ? ` · ${savedProjectId?.slice(-8)}` : ""}
           </p>
           {projectNotice ? (
             <p className={`truncate text-[10px] font-medium ${projectNoticeError ? "text-red-600" : "text-emerald-700"}`}>
@@ -5347,13 +5595,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
               <span className="absolute left-0 top-full z-20 mt-1 text-[10px] text-[#374151]">{cityNotice}</span>
             ) : null}
           </form>
-          <button
-            type="button"
-            onClick={() => router.push("/digital-twin/gnss-rtk")}
-            className="rounded-lg border border-[#d1d5db] px-3 py-2 text-sm"
-          >
-            {t("actions.backValidation")}
-          </button>
           <button type="button" onClick={resetView} className="rounded-lg border border-[#d1d5db] px-3 py-2 text-sm">
             {t("actions.fitView")}
           </button>
@@ -5421,192 +5662,19 @@ export function CadWorkspace({ userId }: { userId: string }) {
         </div>
         {exportError ? <p className="text-xs font-medium text-red-600">{exportError}</p> : null}
       </div>
+      */}
 
-      {importNotice ? (
-        <div
-          className={`cad-interface rounded-xl border px-4 py-3 text-sm ${
-            importNotice.includes("Falha") ||
-            importNotice.includes("Nenhum") ||
-            importNotice.includes("GDAL") ||
-            importNotice.includes("Não foi possível")
-              ? "border-red-200 bg-red-50 text-red-800"
-              : "border-emerald-200 bg-emerald-50 text-emerald-800"
-          }`}
-        >
-          {importNotice}
-        </div>
-      ) : null}
-
-      {openProjectsPanel ? (
-        <section className="cad-interface relative z-20 rounded-xl border border-[#e5e7eb] bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-semibold text-[#0f2848]">{t("project.openTitle")}</h3>
-              <p className="mt-1 text-xs text-[#6b7280]">{t("project.openHint")}</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => projectFileRef.current?.click()}
-                className="rounded-lg border border-[#0f2848] px-3 py-2 text-xs font-medium text-[#0f2848] hover:bg-[#f0fdff]"
-              >
-                {t("actions.openFile")}
-              </button>
-              <button
-                type="button"
-                onClick={handleNewProject}
-                className="rounded-lg border border-[#d1d5db] px-3 py-2 text-xs font-medium text-[#0f2848] hover:bg-[#f9fafb]"
-              >
-                {t("actions.newProject")}
-              </button>
-            </div>
-          </div>
-          <ul className="mt-3 max-h-64 space-y-2 overflow-y-auto">
-            {savedProjects.length === 0 ? (
-              <li className="rounded-lg border border-dashed border-[#d1d5db] px-4 py-6 text-center text-xs text-[#6b7280]">
-                {t("project.emptyList")}
-              </li>
-            ) : (
-              savedProjects.map((item) => (
-                <li
-                  key={item.id}
-                  className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${
-                    item.id === savedProjectId ? "border-[#00c8f0] bg-[#f0fdff]" : "border-[#e5e7eb]"
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-[#0f2848]">{item.name}</p>
-                    <p className="text-[10px] text-[#6b7280]">
-                      {t("project.lastSaved", { date: formatSavedDate(item.updatedAt) })}
-                      {" · "}
-                      {t("project.entities", {
-                        count: item.entityCount ?? item.project.entities.length,
-                      })}
-                      {item.hasDwg ? ` · ${t("project.hasDwg")}` : ""}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleOpenProject(item.id)}
-                      className="rounded-md bg-[#0f2848] px-3 py-1.5 text-xs font-medium text-white"
-                    >
-                      {t("project.open")}
-                    </button>
-                    {item.hasDwg ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleDownloadCloudDwg(item.id)}
-                        className="rounded-md border border-[#0e7490] px-3 py-1.5 text-xs font-medium text-[#0e7490]"
-                      >
-                        {t("project.downloadDwg")}
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteProject(item.id, item.name)}
-                      className="rounded-md border border-[#d1d5db] px-3 py-1.5 text-xs text-[#6b7280]"
-                    >
-                      {t("project.remove")}
-                    </button>
-                  </div>
-                </li>
-              ))
-            )}
-          </ul>
-        </section>
-      ) : null}
-
-      <div className="cad-interface flex shrink-0 flex-wrap items-center gap-1 rounded-xl border border-[#e5e7eb] bg-[#f9fafb] p-1">
-        <button
-          type="button"
-          onClick={() => setToolsSidebarOpen((v) => !v)}
-          title={toolsSidebarOpen ? t("sidebar.hide") : t("sidebar.show")}
-          className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
-            toolsSidebarOpen
-              ? "bg-[#0f2848] text-white shadow-sm"
-              : "border border-[#0f2848] bg-white text-[#0f2848]"
-          }`}
-        >
-          {t("sidebar.show")}
-        </button>
-        {cadTabs.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setActiveTab(item.id)}
-            className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
-              activeTab === item.id ? "bg-white text-[#0f2848] shadow-sm" : "text-[#6b7280]"
-            }`}
+          <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 gap-0">
+          <div
+            className="flex h-full min-h-0 shrink-0 flex-col"
+            style={{ width: sidebarCollapsed ? CAD_TOOLS_RAIL_WIDTH_PX : CAD_TOOLS_PANEL_WIDTH_PX }}
           >
-            {item.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col gap-2">
-          {activeTab === "desenho" && !imported && project.entities.length === 0 ? (
-            <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-dashed border-[#d1d5db] bg-white px-3 py-1.5">
-              <p className="min-w-0 flex-1 text-xs text-[#6b7280]">{t("empty.description")}</p>
-              <button
-                type="button"
-                disabled={importingDrawing}
-                onClick={() => drawingFileRef.current?.click()}
-                title={t("import.drawingHint")}
-                className="rounded-md border border-[#0e7490] px-2.5 py-1 text-xs font-medium text-[#0e7490] hover:bg-[#ecfeff] disabled:opacity-50"
-              >
-                {importingDrawing ? t("import.drawingWorking") : t("actions.importDrawing")}
-              </button>
-              <button
-                type="button"
-                disabled={importingPoints}
-                onClick={openSurveyImport}
-                className="rounded-md border border-[#38bdf8] px-2.5 py-1 text-xs font-medium text-[#0369a1] hover:bg-[#f0f9ff] disabled:opacity-50"
-              >
-                {importingPoints ? t("import.working") : t("import.pointsFile")}
-              </button>
-              <button
-                type="button"
-                disabled={importingPoints}
-                onClick={openExcelImport}
-                className="rounded-md border border-[#0f2848] px-2.5 py-1 text-xs font-medium text-[#0f2848] hover:bg-[#f0f4f8] disabled:opacity-50"
-              >
-                {importingPoints ? t("import.working") : t("import.excel")}
-              </button>
-              <button
-                type="button"
-                onClick={() => router.push("/digital-twin/gnss-rtk")}
-                className="rounded-md bg-[#00c8f0] px-2.5 py-1 text-xs font-semibold text-[#0f2848]"
-              >
-                {t("empty.goValidation")}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSnapToRtkPoints(false);
-                  setImported(true);
-                }}
-                className="rounded-md border border-[#0f2848] px-2.5 py-1 text-xs font-medium text-[#0f2848]"
-              >
-                {t("empty.startBlank")}
-              </button>
-              {importNotice ? (
-                <p className={`w-full text-[10px] ${importNotice.includes("Falha") || importNotice.includes("Nenhum") ? "text-red-600" : "text-emerald-700"}`}>
-                  {importNotice}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-          <div className="flex min-h-0 flex-1 gap-2">
-          {toolsSidebarOpen ? (
-            <div
-              className="flex h-full min-h-0 shrink-0 flex-col"
-              style={{ width: CAD_TOOLS_PANEL_WIDTH_PX }}
-            >
           <CadToolsSidebar
             activeTab={toolsTab}
             onTabChange={setToolsTab}
-            onHide={() => setToolsSidebarOpen(false)}
+            collapsed={sidebarCollapsed}
+            onCollapsedChange={setSidebarCollapsed}
             sections={{
               draw: (
                 <div className="space-y-4">
@@ -5624,6 +5692,16 @@ export function CadWorkspace({ userId }: { userId: string }) {
                         {importingDrawing ? t("import.drawingWorking") : t("actions.importDrawing")}
                       </button>
                       <p className="text-[10px] text-[#9ca3af]">{t("import.drawingHint")}</p>
+                      <button
+                        type="button"
+                        disabled={importingOrtho}
+                        onClick={() => window.requestAnimationFrame(() => orthoFileRef.current?.click())}
+                        title={t("import.orthoFormats")}
+                        className="rounded-lg border border-emerald-700 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
+                      >
+                        {importingOrtho ? t("reurb.orthoWorking") : t("import.orthophoto")}
+                      </button>
+                      <p className="text-[10px] text-[#9ca3af]">{t("import.orthoFormats")}</p>
                       <button
                         type="button"
                         disabled={importingPoints}
@@ -5788,7 +5866,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                           >
                             {project.layers.map((layer) => (
                               <option key={layer.id} value={layer.id}>
-                                {layer.name}
+                                {cadLayerPublicName(layer)}
                               </option>
                             ))}
                           </select>
@@ -6879,7 +6957,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                           <option value="">{t("volumetria.needDesignLayer")}</option>
                           {volDesignLayers.map((layer) => (
                             <option key={layer.id} value={layer.id}>
-                              {layer.name} ({layer.count})
+                              {cadLayerPublicName(layer)} ({layer.count})
                             </option>
                           ))}
                         </select>
@@ -7393,7 +7471,9 @@ export function CadWorkspace({ userId }: { userId: string }) {
                             setLoteamentoGlebaId(nextId);
                             setLoteamentoError(null);
                             setLoteamentoLados([]);
+                            setLoteamentoLadosFaixa([]);
                             setLoteamentoPickLado(false);
+                            setLoteamentoPickFaixa(false);
                             if (nextId) setSelectedId(nextId);
                           }}
                         >
@@ -7408,158 +7488,114 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       )}
                     </label>
                   </div>
-                  <div className="rounded-lg border border-[#e5e7eb] px-3 py-2">
-                    <label className="block text-[10px] text-[#6b7280]">
-                      {t("loteamento.larguraVia")}
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={loteamentoLarguraVia}
-                        onChange={(e) => setLoteamentoLarguraVia(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                      />
-                    </label>
-                    <p className="mt-1 text-[10px] text-[#9ca3af]">{t("loteamento.larguraViaHint")}</p>
-                    <label className="mt-2 block text-[10px] text-[#6b7280]">
-                      {t("loteamento.larguraCalcada")}
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={loteamentoLarguraCalcada}
-                        onChange={(e) => setLoteamentoLarguraCalcada(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                      />
-                    </label>
-                    <p className="mt-1 text-[10px] text-[#9ca3af]">{t("loteamento.larguraCalcadaHint")}</p>
-                    <label className="mt-2 flex items-center gap-2 text-[10px] text-[#6b7280]">
+                  <p className="text-xs font-semibold text-[#0f2848]">{t("loteamento.confrontacoesTitle")}</p>
+                  <p className="-mt-2 text-[10px] leading-4 text-[#6b7280]">{t("loteamento.confrontacoesHint")}</p>
+                  <div
+                    ref={loteamentoFaixaPanelRef}
+                    className="rounded-lg border-2 border-orange-400 bg-orange-50 px-2.5 py-2.5"
+                  >
+                    <label className="flex items-start gap-2 text-xs text-[#7c2d12]">
                       <input
                         type="checkbox"
-                        checked={loteamentoEixoRua}
-                        onChange={(e) => setLoteamentoEixoRua(e.target.checked)}
-                        className="rounded border-[#d1d5db]"
+                        checked={loteamentoFaixaDominio || loteamentoLadosFaixa.length > 0}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setLoteamentoFaixaDominio(on);
+                          if (!on) {
+                            setLoteamentoLadosFaixa([]);
+                            setLoteamentoPickFaixa(false);
+                            return;
+                          }
+                          if (loteamentoLadosFaixa.length === 0) {
+                            void startPickFaixaDominio();
+                          }
+                        }}
+                        className="mt-0.5 rounded border-orange-400"
                       />
-                      {t("loteamento.eixoRua")}
+                      <span>
+                        <span className="block text-sm font-semibold">{t("loteamento.faixaDominio")}</span>
+                        <span className="mt-0.5 block text-[10px] leading-4 text-[#9a3412]">
+                          {t("loteamento.faixaDominioHint")}
+                        </span>
+                        <span className="mt-1 block text-[10px] font-medium leading-4 text-[#7c2d12]">
+                          {t("loteamento.faixaDominioSteps")}
+                        </span>
+                      </span>
                     </label>
-                    <label className="mt-2 block text-[10px] text-[#6b7280]">
-                      {t("loteamento.raioEsquina")}
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={loteamentoRaioEsquina}
-                        onChange={(e) => setLoteamentoRaioEsquina(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                      />
-                    </label>
-                    <p className="mt-1 text-[10px] text-[#9ca3af]">{t("loteamento.raioEsquinaHint")}</p>
-                    <label className="mt-2 block text-[10px] text-[#6b7280]">
-                      {t("loteamento.profundidadeQuadra")}
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={loteamentoProfundidade}
-                        onChange={(e) => setLoteamentoProfundidade(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                      />
-                    </label>
-                    <p className="mt-1 text-[10px] text-[#9ca3af]">{t("loteamento.profundidadeQuadraHint")}</p>
-                    <label className="mt-2 block text-[10px] text-[#6b7280]">
-                      {t("loteamento.testadaMinima")}
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={loteamentoTestada}
-                        onChange={(e) => setLoteamentoTestada(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                      />
-                    </label>
-                    <label className="mt-2 block text-[10px] text-[#6b7280]">
-                      {t("loteamento.acrescimoEsquina")}
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={loteamentoPercentualEsquina}
-                        onChange={(e) => setLoteamentoPercentualEsquina(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                      />
-                    </label>
-                    <p className="mt-1 text-[10px] text-[#9ca3af]">{t("loteamento.acrescimoEsquinaHint")}</p>
-                    <fieldset className="mt-2 space-y-1.5 rounded-lg border border-[#e5e7eb] px-2 py-2">
-                      <legend className="px-1 text-[10px] font-medium text-[#374151]">
-                        {t("loteamento.quadraModo")}
-                      </legend>
-                      <label className="flex items-center gap-2 text-[10px] text-[#6b7280]">
-                        <input
-                          type="radio"
-                          name="quadra-modo"
-                          checked={loteamentoQuadraModo === "area"}
-                          onChange={() => setLoteamentoQuadraModo("area")}
-                          className="accent-[#0f2848]"
-                        />
-                        {t("loteamento.quadraModoArea")}
-                      </label>
-                      <label className="flex items-center gap-2 text-[10px] text-[#6b7280]">
-                        <input
-                          type="radio"
-                          name="quadra-modo"
-                          checked={loteamentoQuadraModo === "medidas"}
-                          onChange={() => setLoteamentoQuadraModo("medidas")}
-                          className="accent-[#0f2848]"
-                        />
-                        {t("loteamento.quadraModoMedidas")}
-                      </label>
-                      {loteamentoQuadraModo === "area" ? (
-                        <>
-                          <label className="mt-1 block text-[10px] text-[#6b7280]">
-                            {t("loteamento.areaMinimaQuadra")}
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={loteamentoAreaQuadra}
-                              onChange={(e) => setLoteamentoAreaQuadra(e.target.value)}
-                              className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                            />
-                          </label>
-                          <p className="text-[10px] text-[#9ca3af]">{t("loteamento.areaMinimaQuadraHint")}</p>
-                        </>
+                    <div className="mt-2 space-y-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (loteamentoPickFaixa) {
+                            setLoteamentoPickFaixa(false);
+                            return;
+                          }
+                          void startPickFaixaDominio();
+                        }}
+                        className={`w-full rounded-lg border px-3 py-2 text-xs font-semibold ${
+                          loteamentoPickFaixa
+                            ? "border-orange-600 bg-orange-200 text-orange-950"
+                            : "border-orange-700 bg-white text-orange-900 hover:bg-orange-100"
+                        }`}
+                      >
+                        {loteamentoPickFaixa ? t("loteamento.pickFaixaOn") : t("loteamento.pickFaixa")}
+                      </button>
+                      {loteamentoLadosFaixa.length > 0 ? (
+                        <ul className="space-y-1">
+                          {loteamentoLadosFaixa.map((index) => {
+                            const glebaId = loteamentoGlebaId.trim() || selectedId;
+                            const gleba = glebaId
+                              ? project.entities.find((entity) => entity.id === glebaId)
+                              : null;
+                            const verts = gleba?.type === "polyline" ? gleba.vertices : [];
+                            const a = verts[index];
+                            const b = verts[(index + 1) % Math.max(verts.length, 1)];
+                            const len = a && b ? Math.hypot(b.x - a.x, b.y - a.y) : 0;
+                            return (
+                              <li
+                                key={`faixa-${index}`}
+                                className="flex items-center justify-between rounded border border-orange-200 bg-white px-2 py-1 text-[10px] text-orange-900"
+                              >
+                                <span>
+                                  {t("loteamento.faixaLadoMarked", {
+                                    n: index + 1,
+                                    len: len.toFixed(1),
+                                  })}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setLoteamentoLadosFaixa((prev) => prev.filter((i) => i !== index))
+                                  }
+                                  className="text-orange-800 hover:text-red-700"
+                                >
+                                  {t("loteamento.ladoRemove")}
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
                       ) : (
-                        <>
-                          <label className="mt-1 block text-[10px] text-[#6b7280]">
-                            {t("loteamento.larguraQuadra")}
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={loteamentoLarguraQuadra}
-                              onChange={(e) => setLoteamentoLarguraQuadra(e.target.value)}
-                              className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                            />
-                          </label>
-                          <label className="mt-1 block text-[10px] text-[#6b7280]">
-                            {t("loteamento.distanciaQuadra")}
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={loteamentoDistanciaQuadra}
-                              onChange={(e) => setLoteamentoDistanciaQuadra(e.target.value)}
-                              className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                            />
-                          </label>
-                          <p className="text-[10px] text-[#9ca3af]">{t("loteamento.distanciaQuadraHint")}</p>
-                        </>
+                        <p className="text-[10px] text-[#9a3412]">{t("loteamento.pickFaixaHint")}</p>
                       )}
-                    </fieldset>
-                    <label className="mt-2 block text-[10px] text-[#6b7280]">
-                      {t("loteamento.orientacao")}
+                    </div>
+                    <label className="mt-2 block text-[10px] font-medium text-[#7c2d12]">
+                      {t("loteamento.larguraFaixaDominio")}
                       <input
                         type="text"
                         inputMode="decimal"
-                        value={loteamentoOrientacao}
-                        onChange={(e) => setLoteamentoOrientacao(e.target.value)}
-                        placeholder="auto"
-                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
+                        value={loteamentoLarguraFaixaDominio}
+                        onChange={(e) => setLoteamentoLarguraFaixaDominio(e.target.value)}
+                        placeholder="15"
+                        className="mt-1 w-full rounded-lg border border-orange-300 bg-white px-3 py-1.5 font-mono text-xs text-[#111827]"
                       />
+                      <span className="mt-0.5 block text-[10px] font-normal text-[#9a3412]">
+                        {t("loteamento.larguraFaixaDominioHint")}
+                      </span>
                     </label>
-                    <p className="mt-1 text-[10px] text-[#9ca3af]">{t("loteamento.orientacaoHint")}</p>
-                    <label className="mt-2 flex items-start gap-2 text-[10px] text-[#6b7280]">
+                  </div>
+                  <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-2">
+                    <label className="flex items-start gap-2 text-[10px] text-emerald-900">
                       <input
                         type="checkbox"
                         checked={loteamentoViasExistentes || loteamentoLados.length > 0}
@@ -7571,11 +7607,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
                             setLoteamentoPickLado(false);
                           }
                         }}
-                        className="mt-0.5 rounded border-[#d1d5db]"
+                        className="mt-0.5 rounded border-emerald-400"
                       />
                       <span>
-                        {t("loteamento.viasExistentes")}
-                        <span className="mt-0.5 block text-[10px] text-[#9ca3af]">
+                        <span className="block text-xs font-semibold">{t("loteamento.viasExistentes")}</span>
+                        <span className="mt-0.5 block text-[10px] text-emerald-800">
                           {t("loteamento.viasExistentesHint")}
                         </span>
                       </span>
@@ -7600,13 +7636,15 @@ export function CadWorkspace({ userId }: { userId: string }) {
                           setLoteamentoGlebaId(gleba.id);
                           setSelectedId(gleba.id);
                           setLoteamentoViasExistentes(true);
+                          setLoteamentoPickFaixa(false);
                           setLoteamentoPickLado((prev) => !prev);
+                          setTool("select");
                           setLoteamentoError(null);
                         }}
                         className={`w-full rounded-lg border px-3 py-1.5 text-xs font-medium ${
                           loteamentoPickLado
-                            ? "border-emerald-600 bg-emerald-50 text-emerald-800"
-                            : "border-[#0f2848] text-[#0f2848] hover:bg-[#f0f4f8]"
+                            ? "border-emerald-600 bg-emerald-100 text-emerald-900"
+                            : "border-emerald-700 bg-white text-emerald-900 hover:bg-emerald-100"
                         }`}
                       >
                         {loteamentoPickLado ? t("loteamento.pickLadoOn") : t("loteamento.pickLado")}
@@ -7627,7 +7665,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                             return (
                               <li
                                 key={`lado-${index}`}
-                                className="flex items-center justify-between rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-900"
+                                className="flex items-center justify-between rounded border border-emerald-200 bg-white px-2 py-1 text-[10px] text-emerald-900"
                               >
                                 <span>
                                   {t("loteamento.ladoMarked", {
@@ -7649,9 +7687,177 @@ export function CadWorkspace({ userId }: { userId: string }) {
                           })}
                         </ul>
                       ) : (
-                        <p className="text-[10px] text-[#9ca3af]">{t("loteamento.pickLadoHint")}</p>
+                        <p className="text-[10px] text-emerald-800">{t("loteamento.pickLadoHint")}</p>
                       )}
                     </div>
+                    {(loteamentoViasExistentes || loteamentoLados.length > 0) && (
+                      <label className="mt-2 block text-[10px] text-emerald-900">
+                        {t("loteamento.larguraViaExistente")}
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={loteamentoLarguraViaExistente}
+                          onChange={(e) => setLoteamentoLarguraViaExistente(e.target.value)}
+                          placeholder={loteamentoLarguraVia}
+                          className="mt-1 w-full rounded-lg border border-emerald-300 bg-white px-3 py-1.5 font-mono text-xs text-[#111827]"
+                        />
+                        <span className="mt-0.5 block text-[10px] text-emerald-800">
+                          {t("loteamento.larguraViaExistenteHint")}
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                  <div className="rounded-lg border border-[#e5e7eb] px-3 py-2 space-y-3">
+                    <label className="block text-xs font-medium text-[#111827]">
+                      {t("loteamento.larguraVia")}
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={loteamentoLarguraVia}
+                        onChange={(e) => setLoteamentoLarguraVia(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
+                      />
+                    </label>
+                    <p className="text-xs leading-5 text-[#374151]">{t("loteamento.larguraViaHint")}</p>
+                    <label className="block text-xs font-medium text-[#111827]">
+                      {t("loteamento.larguraCalcada")}
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={loteamentoLarguraCalcada}
+                        onChange={(e) => setLoteamentoLarguraCalcada(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
+                      />
+                    </label>
+                    <p className="text-xs leading-5 text-[#374151]">{t("loteamento.larguraCalcadaHint")}</p>
+                    <label className="flex items-center gap-2 text-xs font-medium text-[#111827]">
+                      <input
+                        type="checkbox"
+                        checked={loteamentoEixoRua}
+                        onChange={(e) => setLoteamentoEixoRua(e.target.checked)}
+                        className="rounded border-[#d1d5db]"
+                      />
+                      {t("loteamento.eixoRua")}
+                    </label>
+                    <label className="block text-xs font-medium text-[#111827]">
+                      {t("loteamento.raioEsquina")}
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={loteamentoRaioEsquina}
+                        onChange={(e) => setLoteamentoRaioEsquina(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
+                      />
+                    </label>
+                    <p className="text-xs leading-5 text-[#374151]">{t("loteamento.raioEsquinaHint")}</p>
+                    <label className="block text-xs font-medium text-[#111827]">
+                      {t("loteamento.profundidadeQuadra")}
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={loteamentoProfundidade}
+                        onChange={(e) => setLoteamentoProfundidade(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
+                      />
+                    </label>
+                    <p className="text-xs leading-5 text-[#374151]">{t("loteamento.profundidadeQuadraHint")}</p>
+                    <label className="block text-xs font-medium text-[#111827]">
+                      {t("loteamento.testadaMinima")}
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={loteamentoTestada}
+                        onChange={(e) => setLoteamentoTestada(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
+                      />
+                    </label>
+                    <label className="block text-xs font-medium text-[#111827]">
+                      {t("loteamento.acrescimoEsquina")}
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={loteamentoPercentualEsquina}
+                        onChange={(e) => setLoteamentoPercentualEsquina(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
+                      />
+                    </label>
+                    <p className="text-xs leading-5 text-[#374151]">{t("loteamento.acrescimoEsquinaHint")}</p>
+                    <fieldset className="space-y-1.5 rounded-lg border border-[#e5e7eb] px-2 py-2">
+                      <legend className="px-1 text-xs font-medium text-[#111827]">
+                        {t("loteamento.quadraModo")}
+                      </legend>
+                      <label className="flex items-center gap-2 text-xs text-[#111827]">
+                        <input
+                          type="radio"
+                          name="quadra-modo"
+                          checked={loteamentoQuadraModo === "area"}
+                          onChange={() => setLoteamentoQuadraModo("area")}
+                          className="accent-[#0f2848]"
+                        />
+                        {t("loteamento.quadraModoArea")}
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-[#111827]">
+                        <input
+                          type="radio"
+                          name="quadra-modo"
+                          checked={loteamentoQuadraModo === "medidas"}
+                          onChange={() => setLoteamentoQuadraModo("medidas")}
+                          className="accent-[#0f2848]"
+                        />
+                        {t("loteamento.quadraModoMedidas")}
+                      </label>
+                      {loteamentoQuadraModo === "area" ? (
+                        <>
+                          <label className="mt-1 block text-xs font-medium text-[#111827]">
+                            {t("loteamento.areaMinimaQuadra")}
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={loteamentoAreaQuadra}
+                              onChange={(e) => setLoteamentoAreaQuadra(e.target.value)}
+                              className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
+                            />
+                          </label>
+                          <p className="text-xs leading-5 text-[#374151]">{t("loteamento.areaMinimaQuadraHint")}</p>
+                        </>
+                      ) : (
+                        <>
+                          <label className="mt-1 block text-xs font-medium text-[#111827]">
+                            {t("loteamento.larguraQuadra")}
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={loteamentoLarguraQuadra}
+                              onChange={(e) => setLoteamentoLarguraQuadra(e.target.value)}
+                              className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
+                            />
+                          </label>
+                          <label className="mt-1 block text-xs font-medium text-[#111827]">
+                            {t("loteamento.distanciaQuadra")}
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={loteamentoDistanciaQuadra}
+                              onChange={(e) => setLoteamentoDistanciaQuadra(e.target.value)}
+                              className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
+                            />
+                          </label>
+                          <p className="text-xs leading-5 text-[#374151]">{t("loteamento.distanciaQuadraHint")}</p>
+                        </>
+                      )}
+                    </fieldset>
+                    <label className="mt-2 block text-[10px] text-[#6b7280]">
+                      {t("loteamento.orientacao")}
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={loteamentoOrientacao}
+                        onChange={(e) => setLoteamentoOrientacao(e.target.value)}
+                        placeholder="auto"
+                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
+                      />
+                    </label>
+                    <p className="mt-1 text-[10px] text-[#9ca3af]">{t("loteamento.orientacaoHint")}</p>
                     <label className="mt-2 block text-[10px] text-[#6b7280]">
                       {t("loteamento.eixosExistentes")}
                       {loteamentoEixosCandidatos.length === 0 ? (
@@ -7733,6 +7939,29 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     >
                       {loteamentoBusy ? t("loteamento.working") : t("loteamento.generate")}
                     </button>
+                    {project.layers.some((layer) => layer.id === LOTEAMENTO_LOTES_LAYER_ID) ? (
+                      <label className="mt-3 flex items-start gap-2 text-xs font-medium text-[#111827]">
+                        <input
+                          type="checkbox"
+                          checked={
+                            (project.layers.find((layer) => layer.id === LOTEAMENTO_LOTES_LAYER_ID)
+                              ?.hatchPattern ?? "grass") !== "none"
+                          }
+                          onChange={(e) =>
+                            updateLayerStyles(LOTEAMENTO_LOTES_LAYER_ID, {
+                              hatchPattern: e.target.checked ? "grass" : "none",
+                            })
+                          }
+                          className="mt-0.5 rounded border-[#d1d5db]"
+                        />
+                        <span>
+                          {t("loteamento.hatchVerde")}
+                          <span className="mt-0.5 block text-[10px] font-normal leading-4 text-[#6b7280]">
+                            {t("loteamento.hatchVerdeHint")}
+                          </span>
+                        </span>
+                      </label>
+                    ) : null}
                   </div>
                   {hasLoteamentoLots ? (
                     <div className="rounded-lg border border-[#bfdbfe] bg-[#eff6ff] px-3 py-2 space-y-2">
@@ -8964,20 +9193,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
             }}
           />
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setToolsSidebarOpen(true)}
-              title={t("sidebar.show")}
-              className="flex h-full w-9 shrink-0 flex-col items-center justify-start rounded-xl border border-[#0f2848] bg-[#0f2848] px-1 py-3 text-white shadow-sm hover:bg-[#1e3a5f]"
-            >
-              <span className="text-[10px] font-semibold tracking-wide [writing-mode:vertical-rl]">
-                {t("sidebar.show")}
-              </span>
-            </button>
-          )}
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {activeTab === "planilha" ? (
             <div className="min-h-0 flex-1 overflow-hidden">
               <CadDrainagePlanilha
@@ -9014,130 +9231,33 @@ export function CadWorkspace({ userId }: { userId: string }) {
             </div>
           ) : (
             <>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-[#1e293b] bg-[#0b1220]">
-            <div className="flex shrink-0 flex-wrap gap-1 border-b border-[#1e293b] p-2">
-              {(
-                [
-                  ["select", t("tools.select")],
-                  ["pan", t("tools.pan")],
-                  ["line", t("tools.line")],
-                  ["polyline", t("tools.polyline")],
-                  ["editPolygon", t("tools.editPolygon")],
-                  ["confrontacao", t("tools.confrontacao")],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => {
-                    setTool(id);
-                    setDraft([]);
-                    setDrawHint(null);
-                    setHoverSnapId(null);
-                    setDrawPreview(null);
-                    setKeyboardDistance("");
-                    if (id !== "editPolygon") setSelectedVertexIndex(null);
-                  }}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium ${
-                    tool === id ? "bg-[#00c8f0] text-[#0f2848]" : "text-[#94a3b8] hover:bg-[#1e293b]"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={toggleCoordLabels}
-                title={coordLabelsVisible ? t("tools.hideCoords") : t("tools.insertCoords")}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium ${
-                  coordLabelsVisible
-                    ? "bg-[#00c8f0] text-[#0f2848]"
-                    : "text-[#94a3b8] hover:bg-[#1e293b]"
-                }`}
-              >
-                {coordLabelsVisible ? t("tools.hideCoords") : t("tools.insertCoords")}
-              </button>
-              {tool === "polyline" && draft.length >= 2 ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => finishPolyline(false)}
-                    className="rounded-md border border-[#334155] px-3 py-1.5 text-xs font-medium text-[#e2e8f0]"
-                  >
-                    {t("tools.finishPolyline")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => finishPolyline(true)}
-                    disabled={draft.length < 3}
-                    className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-                  >
-                    {t("tools.closePolygon")}
-                  </button>
-                </>
-              ) : null}
-              {selectedPolyline && !selectedPolyline.closed && selectedPolyline.vertices.length >= 3 ? (
-                <button
-                  type="button"
-                  onClick={closeSelectedPolygon}
-                  className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white"
-                >
-                  {t("tools.closeSelected")}
-                </button>
-              ) : null}
-              <div className="ml-auto flex items-center gap-2">
-              <div className="flex overflow-hidden rounded-md border border-[#334155]">
-                <button
-                  type="button"
-                  onClick={() => setViewMode("plan")}
-                  title={t3d("plan")}
-                  className={`border-r border-[#334155] px-3 py-1.5 text-xs font-medium ${
-                    viewMode === "plan" ? "bg-[#00c8f0] text-[#0f2848]" : "text-[#e2e8f0] hover:bg-[#1e293b]"
-                  }`}
-                >
-                  2D
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewMode("3d");
-                    setTool("pan");
-                    setDraft([]);
-                    setDrawHint(null);
-                  }}
-                  title={t3d("scene")}
-                  className={`px-3 py-1.5 text-xs font-medium ${
-                    viewMode === "3d" ? "bg-[#00c8f0] text-[#0f2848]" : "text-[#e2e8f0] hover:bg-[#1e293b]"
-                  }`}
-                >
-                  3D
-                </button>
-              </div>
-              <div className="flex overflow-hidden rounded-md border border-[#334155]">
-                <button
-                  type="button"
-                  onClick={zoomOut}
-                  title={t("actions.zoomOut")}
-                  aria-label={t("actions.zoomOut")}
-                  className="border-r border-[#334155] px-2.5 py-1.5 text-sm font-semibold text-[#e2e8f0] hover:bg-[#1e293b]"
-                >
-                  −
-                </button>
-                <button
-                  type="button"
-                  onClick={zoomIn}
-                  title={t("actions.zoomIn")}
-                  aria-label={t("actions.zoomIn")}
-                  className="px-2.5 py-1.5 text-sm font-semibold text-[#e2e8f0] hover:bg-[#1e293b]"
-                >
-                  +
-                </button>
-              </div>
-              </div>
-            </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden border border-[#1e293b]" style={{ background: cadPaperFill(paperTone) }}>
+            <CadChromeToolbar
+              tool={tool}
+              coordLabelsVisible={coordLabelsVisible}
+              viewMode={viewMode}
+              polylineDraftLen={draft.length}
+              canCloseSelected={Boolean(
+                selectedPolyline && !selectedPolyline.closed && selectedPolyline.vertices.length >= 3,
+              )}
+              onTool={activateCadTool}
+              onToggleCoords={toggleCoordLabels}
+              onFinishPolyline={finishPolyline}
+              onCloseSelected={closeSelectedPolygon}
+              onViewMode={(mode) => {
+                setViewMode(mode);
+                if (mode === "3d") {
+                  setTool("pan");
+                  setDraft([]);
+                  setDrawHint(null);
+                }
+              }}
+              onZoomIn={zoomIn}
+              onZoomOut={zoomOut}
+            />
 
             {tool === "polyline" ? (
-              <div className="border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 {drawHint ? (
                   <span className="text-amber-400">{drawHint}</span>
                 ) : snapToRtkPoints ? (
@@ -9168,7 +9288,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 ) : null}
               </div>
             ) : tool === "line" ? (
-              <div className="border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 {drawHint ? <span className="text-amber-400">{drawHint}</span> : null}
                 {!drawHint ? (
                   <span>{draft.length === 0 ? t("draw.lineStart") : t("draw.lineEnd")}</span>
@@ -9191,11 +9311,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 ) : null}
               </div>
             ) : tool === "editPolygon" ? (
-              <div className="border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-emerald-400">{t("polygon.edit.hint")}</span>
               </div>
             ) : tool === "confrontacao" ? (
-              <div className="border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 {drawHint ? (
                   <span className="text-amber-400">{drawHint}</span>
                 ) : (
@@ -9203,7 +9323,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 )}
               </div>
             ) : distancePickMode ? (
-              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-amber-400">
                   {distancePickIds.length === 0
                     ? t("commands.distanceOps.pickFirst")
@@ -9221,7 +9341,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 </button>
               </div>
             ) : alignmentPickMode ? (
-              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-amber-400">{t("commands.profileOps.pickAlignmentHint")}</span>
                 <button
                   type="button"
@@ -9232,7 +9352,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 </button>
               </div>
             ) : appPickMode ? (
-              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-amber-400">{t("loteamento.appPickBanner")}</span>
                 <button
                   type="button"
@@ -9247,7 +9367,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 </button>
               </div>
             ) : profilePickMode ? (
-              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-amber-400">
                   {profilePickIds.length === 0
                     ? t("commands.profileOps.pickFirst")
@@ -9265,7 +9385,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 </button>
               </div>
             ) : areaPickMode ? (
-              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-amber-400">{t("commands.areaOps.pickHint")}</span>
                 <button
                   type="button"
@@ -9276,7 +9396,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 </button>
               </div>
             ) : loteamentoAlterarEixo ? (
-              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-amber-400">
                   {loteamentoAlterarEixo.phase === "a"
                     ? t("loteamento.alterarEixoFirst")
@@ -9290,8 +9410,19 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   {t("commands.profileOps.cancelPick")}
                 </button>
               </div>
+            ) : loteamentoPickFaixa ? (
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
+                <span className="text-orange-400">{t("loteamento.pickFaixaBanner")}</span>
+                <button
+                  type="button"
+                  onClick={() => setLoteamentoPickFaixa(false)}
+                  className="rounded border border-[#334155] px-2 py-0.5 text-[10px] text-[#cbd5e1] hover:bg-[#1e293b]"
+                >
+                  {t("loteamento.pickLadoDone")}
+                </button>
+              </div>
             ) : loteamentoPickLado ? (
-              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-amber-400">{t("loteamento.pickLadoBanner")}</span>
                 <button
                   type="button"
@@ -9302,7 +9433,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 </button>
               </div>
             ) : drenagemPick ? (
-              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-2 text-xs text-[#94a3b8]">
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-amber-400">
                   {drenagemPick === "pv"
                     ? t("drenagem.insertPvOn")
@@ -9327,12 +9458,68 @@ export function CadWorkspace({ userId }: { userId: string }) {
             <div
               ref={canvasContainerRef}
               className="relative min-h-0 w-full flex-1"
+              style={{ background: cadPaperFill(paperTone) }}
             >
+            {activeTab === "desenho" && !imported && project.entities.length === 0 ? (
+              <div className="absolute inset-x-2 top-2 z-30 flex flex-wrap items-center gap-2 rounded-md border border-dashed border-[#334155] bg-[#0b1220]/95 px-3 py-1.5">
+                <p className="min-w-0 flex-1 text-xs text-[#94a3b8]">{t("empty.description")}</p>
+                <button
+                  type="button"
+                  disabled={importingDrawing}
+                  onClick={() => drawingFileRef.current?.click()}
+                  title={t("import.drawingHint")}
+                  className="rounded-md border border-[#0e7490] px-2.5 py-1 text-xs font-medium text-[#67e8f9] hover:bg-[#164e63] disabled:opacity-50"
+                >
+                  {importingDrawing ? t("import.drawingWorking") : t("actions.importDrawing")}
+                </button>
+                <button
+                  type="button"
+                  disabled={importingOrtho}
+                  onClick={() => window.requestAnimationFrame(() => orthoFileRef.current?.click())}
+                  title={t("import.orthoFormats")}
+                  className="rounded-md border border-emerald-700 px-2.5 py-1 text-xs font-medium text-emerald-300 hover:bg-emerald-950 disabled:opacity-50"
+                >
+                  {importingOrtho ? t("reurb.orthoWorking") : t("import.orthophoto")}
+                </button>
+                <button
+                  type="button"
+                  disabled={importingPoints}
+                  onClick={openSurveyImport}
+                  className="rounded-md border border-[#38bdf8] px-2.5 py-1 text-xs font-medium text-[#7dd3fc] hover:bg-[#0c4a6e] disabled:opacity-50"
+                >
+                  {importingPoints ? t("import.working") : t("import.pointsFile")}
+                </button>
+                <button
+                  type="button"
+                  disabled={importingPoints}
+                  onClick={openExcelImport}
+                  className="rounded-md border border-[#64748b] px-2.5 py-1 text-xs font-medium text-[#e2e8f0] hover:bg-[#1e293b] disabled:opacity-50"
+                >
+                  {importingPoints ? t("import.working") : t("import.excel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSnapToRtkPoints(false);
+                    setImported(true);
+                  }}
+                  className="rounded-md border border-[#64748b] px-2.5 py-1 text-xs font-medium text-[#e2e8f0]"
+                >
+                  {t("empty.startBlank")}
+                </button>
+                {importNotice ? (
+                  <p className={`w-full text-[10px] ${importNotice.includes("Falha") || importNotice.includes("Nenhum") ? "text-red-400" : "text-emerald-400"}`}>
+                    {importNotice}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             {viewMode === "3d" ? (
               <Cad3dView
                 entities={visibleEntities}
                 layers={project.layers}
                 preferTin={hasTinLayer}
+                background={cadPaperFill(paperTone)}
               />
             ) : (
             <>
@@ -9359,8 +9546,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
               height="100%"
               viewBox={`0 0 ${width} ${height}`}
               preserveAspectRatio="xMidYMid meet"
-              className={`relative z-10 ${areaPickMode || distancePickMode || profilePickMode || alignmentPickMode || appPickMode || loteamentoPickLado || loteamentoAlterarEixo || drenagemPick || tool === "editPolygon" || tool === "confrontacao" || tool !== "pan" ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"}`}
-              style={{ background: hasUnderlay ? "transparent" : undefined }}
+              className={`relative z-10 ${areaPickMode || distancePickMode || profilePickMode || alignmentPickMode || appPickMode || loteamentoPickLado || loteamentoPickFaixa || loteamentoAlterarEixo || drenagemPick || tool === "editPolygon" || tool === "confrontacao" || tool !== "pan" ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"}`}
+              style={{ background: hasUnderlay ? "transparent" : cadPaperFill(paperTone) }}
               onMouseMove={(e) => {
                 const { sx, sy } = toViewBoxCoords(e.clientX, e.clientY);
                 const w = screenToWorld(sx, sy, viewport);
@@ -9523,6 +9710,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                             item.id !== entity.id &&
                             item.layerId !== AREA_RESERVA_LEGAL_LAYER_ID &&
                             item.layerId !== AREA_APP_LAYER_ID &&
+                            item.layerId !== AREA_FAIXA_DOMINIO_LAYER_ID &&
                             item.layerId !== AREA_UTIL_LAYER_ID &&
                             item.vertices.length >= 3 &&
                             pointInPolygon(c.x, c.y, item.vertices),
@@ -9564,7 +9752,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
               }}
               onMouseDown={(e) => {
                 const { sx, sy } = toViewBoxCoords(e.clientX, e.clientY);
-                if (tool === "pan") {
+                const picking =
+                  loteamentoPickLado ||
+                  loteamentoPickFaixa ||
+                  loteamentoAlterarEixo ||
+                  Boolean(drenagemPick) ||
+                  areaPickMode ||
+                  distancePickMode ||
+                  profilePickMode ||
+                  alignmentPickMode ||
+                  appPickMode;
+                if (tool === "pan" && !picking) {
                   setPanning({ startX: sx, startY: sy, bounds: { ...bounds } });
                   return;
                 }
@@ -9584,6 +9782,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 if (
                   tool === "select" &&
                   !loteamentoPickLado &&
+                  !loteamentoPickFaixa &&
                   !loteamentoAlterarEixo &&
                   !drenagemPick &&
                   !areaPickMode &&
@@ -9600,6 +9799,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       Boolean(item.closed) &&
                       (item.layerId === AREA_RESERVA_LEGAL_LAYER_ID ||
                         item.layerId === AREA_APP_LAYER_ID ||
+                        item.layerId === AREA_FAIXA_DOMINIO_LAYER_ID ||
                         item.layerId === AREA_UTIL_LAYER_ID) &&
                       item.vertices.length >= 3,
                   );
@@ -9630,18 +9830,20 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   if (hitReserva) {
                     const c = polygonCentroid(hitReserva.vertices);
                     const isAppPoly = hitReserva.layerId === AREA_APP_LAYER_ID;
+                    const isFaixaPoly = hitReserva.layerId === AREA_FAIXA_DOMINIO_LAYER_ID;
                     const isUtilPoly = hitReserva.layerId === AREA_UTIL_LAYER_ID;
                     const labels = project.entities
                       .filter((item): item is CadPointEntity => {
                         if (item.type !== "point" || item.layerId !== CAD_TEXT_LAYER.id) return false;
                         const label = item.label ?? "";
                         if (isAppPoly) return label.startsWith("APP ");
+                        if (isFaixaPoly) return isFaixaDominioLabel(label);
                         if (isUtilPoly) return label.startsWith("Área útil");
-                        return label.startsWith("Reserva legal");
+                        return isAreaVerdeLabel(label);
                       })
                       .filter((item) => Math.hypot(item.x - c.x, item.y - c.y) < 12)
                       .map((item) => ({ id: item.id, x: item.x, y: item.y }));
-                    const host = isAppPoly
+                    const host = isAppPoly || isFaixaPoly
                       ? undefined
                       : ((loteamentoGlebaId
                           ? project.entities.find(
@@ -9659,6 +9861,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                             item.id !== hitReserva.id &&
                             item.layerId !== AREA_RESERVA_LEGAL_LAYER_ID &&
                             item.layerId !== AREA_APP_LAYER_ID &&
+                            item.layerId !== AREA_FAIXA_DOMINIO_LAYER_ID &&
                             item.layerId !== AREA_UTIL_LAYER_ID &&
                             item.vertices.length >= 3 &&
                             pointInPolygon(c.x, c.y, item.vertices),
@@ -9681,6 +9884,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 if (
                   tool === "select" &&
                   !loteamentoPickLado &&
+                  !loteamentoPickFaixa &&
                   !loteamentoAlterarEixo &&
                   !drenagemPick &&
                   !areaPickMode &&
@@ -9726,7 +9930,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     return;
                   }
                 }
-                if (tool === "select" && !drenagemPick && !loteamentoPickLado && !loteamentoAlterarEixo && !appPickMode) {
+                if (tool === "select" && !drenagemPick && !loteamentoPickLado && !loteamentoPickFaixa && !loteamentoAlterarEixo && !appPickMode) {
                   const wts = (x: number, y: number) => worldToScreen(x, y, viewport);
                   const hitPv = hitDrainagePvAtScreen(sx, sy, project, wts, 14);
                   if (hitPv) {
@@ -9800,6 +10004,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 (selectedPolyline.closed &&
                   (selectedPolyline.layerId === AREA_RESERVA_LEGAL_LAYER_ID ||
                     selectedPolyline.layerId === AREA_APP_LAYER_ID ||
+                    selectedPolyline.layerId === AREA_FAIXA_DOMINIO_LAYER_ID ||
                     selectedPolyline.layerId === AREA_UTIL_LAYER_ID) &&
                   (tool === "select" || tool === "editPolygon")) ||
                 (isLoteamentoEixoPolyline(selectedPolyline) &&
@@ -9988,6 +10193,58 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 );
               })()}
 
+              {(() => {
+                const glebaId = loteamentoGlebaId.trim() || selectedId;
+                const gleba = glebaId
+                  ? project.entities.find((entity) => entity.id === glebaId)
+                  : null;
+                if (
+                  !gleba ||
+                  gleba.type !== "polyline" ||
+                  !gleba.closed ||
+                  loteamentoLadosFaixa.length === 0
+                ) {
+                  return null;
+                }
+                const wts = (x: number, y: number) => worldToScreen(x, y, viewport);
+                return (
+                  <g className="loteamento-faixa" pointerEvents="none">
+                    {loteamentoLadosFaixa.map((index) => {
+                      const from = gleba.vertices[index];
+                      const to = gleba.vertices[(index + 1) % gleba.vertices.length];
+                      if (!from || !to) return null;
+                      const pa = wts(from.x, from.y);
+                      const pb = wts(to.x, to.y);
+                      return (
+                        <g key={`lado-faixa-${index}`}>
+                          <line
+                            x1={pa.sx}
+                            y1={pa.sy}
+                            x2={pb.sx}
+                            y2={pb.sy}
+                            stroke="#fb923c"
+                            strokeWidth={5}
+                            strokeLinecap="round"
+                          />
+                          <text
+                            x={(pa.sx + pb.sx) / 2}
+                            y={(pa.sy + pb.sy) / 2 - 6}
+                            fill="#fed7aa"
+                            fontSize={10}
+                            textAnchor="middle"
+                            stroke="#0b1220"
+                            strokeWidth={3}
+                            paintOrder="stroke"
+                          >
+                            {t("loteamento.faixaLadoLabel")}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </g>
+                );
+              })()}
+
               {draft.length > 0 ? (
                 <g>
                   {draft.map((v, i) => {
@@ -10049,26 +10306,41 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 </g>
               ) : null}
             </svg>
-            {esquinaTooltip ? (
-              <div className="pointer-events-none absolute left-3 top-3 z-20 max-w-xs rounded-lg border border-[#0f2848] bg-white/95 px-3 py-2 text-[11px] leading-5 text-[#0f2848] shadow-md whitespace-pre-line">
-                {esquinaTooltip}
-              </div>
+            {lotCardLote && lotCardEntity ? (
+              <CadLotInfoCard
+                name={lotCardEntity.name}
+                lote={lotCardLote}
+                minimized={lotCardMinimized}
+                onMinimizedChange={setLotCardMinimized}
+              />
             ) : null}
+            {!aiChatOpen ? <CadIaLauncher onClick={() => setAiChatOpen(true)} /> : null}
             <CadBasemapAttribution overlays={basemapOverlays} />
             </>
             )}
             </div>
 
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[#1e293b] px-3 py-2 text-[10px] text-[#94a3b8]">
-              <span>
-                E: {cursor ? cursor.x.toFixed(3) : "—"} · N: {cursor ? cursor.y.toFixed(3) : "—"}
-                {showGrid ? ` · ${t("grid.step")} ${grid.stepE.toFixed(2)} m` : ""}
-              </span>
-              <span>{viewMode === "3d" ? t3d("statusHint") : t("hints.zoomPan")}</span>
-              {isDrawTool && drawReference ? (
-                <span className="text-[#00c8f0]">{t("draw.keyboardHint")}</span>
-              ) : null}
-            </div>
+            <CadStatusBar
+              crs={project.crs}
+              zoneLabel={
+                projectGeoref.isGeoreferenced
+                  ? zoneDetection.coordMode === "wgs84"
+                    ? "WGS84"
+                    : `${zoneDetection.zone}S`
+                  : ""
+              }
+              x={cursor ? cursor.x.toFixed(3) : "—"}
+              y={cursor ? cursor.y.toFixed(3) : "—"}
+              zoom={zoomLabel}
+              step={showGrid ? `${grid.stepE.toFixed(2)} m` : null}
+              hint={
+                viewMode === "3d"
+                  ? t3d("statusHint")
+                  : isDrawTool && drawReference
+                    ? t("draw.keyboardHint")
+                    : t("hints.zoomPan")
+              }
+            />
           </div>
 
           {drenagemPlanilhaOpen && listDrainagePipes(project).length > 0 ? (
@@ -10210,7 +10482,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
         </div>
         </div>
 
-      <CadAiChat
+      <CadAiAssistant
         project={project}
         selectedId={selectedId}
         selectedVertexIndex={selectedVertexIndex}
@@ -10221,6 +10493,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
         onProjectChange={setProject}
         onSelectedIdChange={setSelectedId}
         onSideEffect={handleAiSideEffect}
+        hideLauncher
       />
       <input
         ref={surveyFileRef}
@@ -10247,12 +10520,13 @@ export function CadWorkspace({ userId }: { userId: string }) {
       <input
         ref={orthoFileRef}
         type="file"
-        accept=".tif,.tiff,.jpg,.jpeg,.png,.ecw,image/tiff,image/jpeg,image/png"
+        multiple
+        accept=".tif,.tiff,.ecw,.tfw,.tifw,.wld,.jpg,.jpeg,.png,image/tiff,image/jpeg,image/png"
         className="hidden"
         onChange={(e) => {
-          const file = e.target.files?.[0];
+          const files = Array.from(e.target.files ?? []);
           e.target.value = "";
-          if (file) void handleImportReurbOrtho(file);
+          if (files.length) void handleImportOrthoFiles(files);
         }}
       />
       <input
@@ -10269,11 +10543,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
       <input
         ref={drawingFileRef}
         type="file"
-        accept=".dwg,.dxf,.kmz,.kml,application/dxf,application/acad,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
+        multiple
+        accept=".dwg,.dxf,.kmz,.kml,.tif,.tiff,.ecw,.tfw,.tifw,.wld,application/dxf,application/acad,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz,image/tiff"
         className="hidden"
         onChange={(e) => {
-          const file = e.target.files?.[0];
+          const files = Array.from(e.target.files ?? []);
           e.target.value = "";
+          if (files.some((file) => isGeotiffOrEcwName(file.name) || /\.(tfw|tifw|wld)$/i.test(file.name))) {
+            void handleImportOrthoFiles(files);
+            return;
+          }
+          const file = files[0];
           if (file) void handleImportCadDrawingFile(file);
         }}
       />

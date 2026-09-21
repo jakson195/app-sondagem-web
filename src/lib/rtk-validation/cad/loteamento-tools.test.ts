@@ -101,7 +101,7 @@ describe("summarizeLoteamento", () => {
 });
 
 describe("computeLoteamentoAreaUtilBreakdown", () => {
-  it("Total, RL 20%, ruas, 15% − ruas = área útil", () => {
+  it("Total, RL 20%, ruas, restante loteável = área útil", () => {
     const gleba = square("gleba_1", "draw", [0, 0], 100, "Gleba");
     const src = project([
       gleba,
@@ -115,8 +115,8 @@ describe("computeLoteamentoAreaUtilBreakdown", () => {
     assert.equal(br.reservaTargetM2, 2000);
     assert.equal(br.reservaM2, 400);
     assert.equal(br.viasM2, 100);
-    assert.equal(br.orcamentoM2, 1500);
-    assert.equal(br.alvoM2, 1400);
+    assert.equal(br.orcamentoM2, 9500);
+    assert.equal(br.alvoM2, 9500);
     assert.equal(br.areaUtilM2, 100);
   });
 });
@@ -155,7 +155,7 @@ describe("applyLoteamentoTables", () => {
     const tables = result.project.entities.filter((e) => e.layerId === LOTEAMENTO_TABELAS_LAYER.id);
     assert.equal(tables.length, 3);
     const labels = tables.map((e) => (e.type === "point" ? e.label ?? "" : "")).join("\n");
-    assert.match(labels, /Tabela de Áreas/);
+    assert.match(labels, /Quadro de Áreas/);
     assert.match(labels, /Tabela de lotes/);
     assert.match(labels, /Tabela de quadras/);
     assert.match(labels, /INTERNO|ESQUINA/);
@@ -197,7 +197,7 @@ describe("applyLoteamentoTables", () => {
     const result = applyLoteamentoTables(src);
     const labels = result.project.entities
       .filter((e) => e.layerId === LOTEAMENTO_TABELAS_LAYER.id && e.type === "point")
-      .map((e) => e.label ?? "")
+      .map((e) => (e.type === "point" ? e.label ?? "" : ""))
       .join("\n");
     assert.match(labels, /ESQUINA/);
     assert.match(labels, /INTERNO/);
@@ -248,7 +248,8 @@ describe("applyReservaLegalToProject", () => {
       (e): e is CadPolylineEntity =>
         e.type === "polyline" && e.layerId === AREA_RESERVA_LEGAL_LAYER_ID && Boolean(e.closed),
     );
-    assert.ok(reserva, "deveria criar o polígono da reserva legal");
+    assert.ok(reserva, "deveria criar o polígono da área verde");
+    assert.ok(reserva.name?.startsWith("Área verde"), reserva.name);
     assert.ok(result.reservedM2 > 1800 && result.reservedM2 < 2200, `área ${result.reservedM2}`);
     assert.ok(result.project.layers.some((l) => l.id === AREA_RESERVA_LEGAL_LAYER_ID && l.visible));
     const xs = reserva.vertices.map((v) => v.x);
@@ -482,6 +483,34 @@ describe("applyAreaUtilToProject", () => {
       () => applyAreaUtilToProject(src, { percent: 15, canto: "superior_direita" }),
       (err: unknown) => err instanceof Error && err.message === AREA_UTIL_NEED_POLYGON,
     );
+  });
+
+  it("ruas maiores que 15%T não zeram a área útil", () => {
+    const gleba = square("gleba_1", "draw", [0, 0], 100, "Gleba");
+    const src: CadProject = {
+      name: "Gleba",
+      crs: "EPSG:31982",
+      layers: [
+        { id: "draw", name: "DESENHO", color: "#fbbf24", visible: true, locked: false },
+        { id: "loteamento_vias", name: "VIAS", color: "#64748b", visible: true, locked: false },
+      ],
+      entities: [
+        gleba,
+        square("v1", "loteamento_vias", [0, 0], 50, "Via larga"),
+      ],
+    };
+    const withRl = applyReservaLegalToProject(src, {
+      glebaId: "gleba_1",
+      percent: 20,
+      canto: "superior_direita",
+    });
+    const result = applyAreaUtilToProject(withRl.project, {
+      glebaId: "gleba_1",
+      percent: 15,
+      canto: "superior_esquerda",
+    });
+    assert.equal(result.alvoM2, 1500);
+    assert.ok(result.areaM2 + 1 >= 1500 * 0.55, `desenho ${result.areaM2} vs 1500`);
   });
 });
 

@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { CAD_AI_IMPLEMENTED_ACTIONS, cadAiTools } from "./ai-command-catalog";
-import { parseOpenAiToolCalls } from "./ai-interpreter";
-import { interpretAssistenteIaCommand } from "./openai-assistant.service";
+import { CAD_AI_IMPLEMENTED_ACTIONS, cadAiResponsesTools, cadAiTools } from "./ai-command-catalog";
+import { parseOpenAiResponsesOutput, parseOpenAiToolCalls } from "./ai-interpreter";
+import {
+  ASSISTENTE_IA_UNAVAILABLE,
+  interpretAssistenteIaCommand,
+} from "./openai-assistant.service";
 import { validateCadAiCommands } from "./ai-command-validator";
 import { buildCadAiContext } from "./ai-context";
 import { executeCadAiCommand } from "./ai-command-executor";
@@ -125,6 +128,21 @@ const SAMPLE_ARGS: Record<(typeof CAD_AI_IMPLEMENTED_ACTIONS)[number], Record<st
   criar_rua_existente: { nome: "Rua A", usarSelecao: true },
   reservar_area: { tipo: "institucional", percentual: 20, lado: "fundo", usarSelecao: true },
   selecionar: { entidade_id: "pl_1" },
+  consultar_projeto: {},
+  consultar_quadras: {},
+  consultar_quadra: { quadra: "G" },
+  consultar_lotes: { filtro_area_max_m2: 250 },
+  consultar_lote: { lote: "G-01" },
+  calcular_testada: { lote: "G-01" },
+  calcular_area_remanescente: {},
+  otimizar_quadra: { quadra: "G", area_alvo_m2: 300, preservar_ruas: true },
+  ajustar_lote: { lote: "G-01", area_alvo_m2: 350 },
+  redistribuir_lotes: { quadra: "H" },
+  validar_loteamento: {},
+  aplicar_alteracao: {},
+  desfazer_alteracao: {},
+  zoom_objeto: { quadra: "G" },
+  renomear_quadra: { quadra: "A", novo_id: "QA" },
 };
 
 /** Frases informais que o parser local em geral não cobre — caem na OpenAI mockada. */
@@ -195,34 +213,59 @@ const PHRASES: Array<{
 ];
 
 function openaiPayload(toolCalls: Array<{ name: string; args: Record<string, unknown> }>, content = "") {
+  const output: Array<Record<string, unknown>> = toolCalls.map((tc, i) => ({
+    type: "function_call",
+    id: `fc_${i}`,
+    call_id: `call_${i}`,
+    name: tc.name,
+    arguments: JSON.stringify(tc.args),
+    status: "completed",
+  }));
+  if (content) {
+    output.push({
+      type: "message",
+      id: "msg_0",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: content }],
+    });
+  }
   return {
-    choices: [
-      {
-        message: {
-          content,
-          tool_calls: toolCalls.map((tc, i) => ({
-            id: `call_${i}`,
-            type: "function",
-            function: { name: tc.name, arguments: JSON.stringify(tc.args) },
-          })),
-        },
-      },
-    ],
+    id: "resp_test",
+    object: "response",
+    created_at: 0,
+    status: "completed",
+    model: "gpt-4o-mini",
+    output,
+    output_text: content,
+    error: null,
+    incomplete_details: null,
+    instructions: null,
+    metadata: {},
+    parallel_tool_calls: true,
+    temperature: 0.1,
+    tool_choice: "auto",
+    tools: [],
+    usage: {
+      input_tokens: 1,
+      output_tokens: 1,
+      total_tokens: 2,
+    },
   };
 }
 
 function mockOpenAi(payload: object) {
-  process.env.OPENAI_API_KEY = "sk-test";
+  process.env.OPENAI_API_KEY = "sk-test-openai-first";
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (!url.includes("api.openai.com")) {
       throw new Error(`fetch inesperado: ${url}`);
     }
-    return {
-      ok: true,
-      json: async () => payload,
-      text: async () => JSON.stringify(payload),
-    } as Response;
+    const body = JSON.stringify(payload);
+    return new Response(body, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
   }) as typeof fetch;
 }
 
@@ -341,21 +384,173 @@ describe("buildCadAiContext", () => {
 });
 
 describe("interpretAssistenteIaCommand", () => {
-  it("parser local continua tendo prioridade (não chama OpenAI)", async () => {
+  it("alterar lote 01 para 500m² resolve local com alta confiança", async () => {
+    process.env.OPENAI_API_KEY = "sk-test-should-not-call";
+    globalThis.fetch = (async () => {
+      throw new Error("OpenAI não deveria ser chamada para ajustar_lote explícito");
+    }) as typeof fetch;
+    const result = await interpretAssistenteIaCommand({
+      command: "alterar lote 01 para 500m²",
+      context: sampleContext(),
+    });
+    assert.equal(result.source, "local");
+    assert.equal(result.openaiCalled, false);
+    assert.equal(result.commands[0]?.acao, "ajustar_lote");
+    assert.equal(result.commands[0]?.lote, "01");
+    assert.equal(result.commands[0]?.area_alvo_m2, 500);
+  });
+
+  it("frase nova não cadastrada vai à OpenAI (não ao parser local)", async () => {
+    mockOpenAi(
+      openaiPayload([
+        {
+          name: "ajustar_lote",
+          args: {
+            lote: "01",
+            area_alvo_m2: 500,
+            resposta: "Vou aumentar o lote 01 sem alterar a rua. Deseja aplicar?",
+          },
+        },
+      ]),
+    );
+    const result = await interpretAssistenteIaCommand({
+      command: "quero aumentar um pouco o lote 01, mas sem alterar a rua",
+      context: sampleContext(),
+    });
+    assert.equal(result.source, "openai");
+    assert.equal(result.commands[0]?.acao, "ajustar_lote");
+    assert.equal(result.commands[0]?.lote, "01");
+    assert.match(result.commands[0]?.resposta ?? "", /rua/i);
+  });
+
+  it("alias alterar_area_verde da Responses API vira reservar_area", async () => {
+    mockOpenAi(openaiPayload([{ name: "alterar_area_verde", args: { percentual: 10 } }]));
+    const result = await interpretAssistenteIaCommand({
+      command: "muda o verde pra uns 10 por cento",
+      context: sampleContext(),
+    });
+    assert.equal(result.source, "openai");
+    assert.equal(result.commands[0]?.acao, "reservar_area");
+    assert.equal(result.commands[0]?.tipo, "reserva_legal");
+    assert.equal(result.commands[0]?.percentual, 10);
+  });
+
+  it("cadAiResponsesTools inclui aliases pedidos sem duplicar o motor", () => {
+    const names = cadAiResponsesTools().map((tool) => tool.name);
+    for (const name of [
+      "consultar_projeto",
+      "consultar_quadras",
+      "consultar_quadra",
+      "consultar_lotes",
+      "consultar_lote",
+      "calcular_area",
+      "calcular_testada",
+      "ajustar_lote",
+      "ajustar_lotes",
+      "otimizar_quadra",
+      "reprojetar_loteamento",
+      "alterar_area_verde",
+      "alterar_area_institucional",
+      "calcular_area_remanescente",
+      "validar_loteamento",
+      "aplicar_alteracao",
+      "desfazer_alteracao",
+    ]) {
+      assert.ok(names.includes(name), `faltou tool ${name}`);
+    }
+  });
+
+  it("parseOpenAiResponsesOutput lê function_call", () => {
+    const parsed = parseOpenAiResponsesOutput([
+      { type: "function_call", name: "ajustar_lote", arguments: JSON.stringify({ lote: "01", area_alvo_m2: 500 }) },
+    ]);
+    assert.equal(parsed.commands[0]?.acao, "ajustar_lote");
+    assert.equal(parsed.commands[0]?.lote, "01");
+    assert.equal(parsed.commands[0]?.area_alvo_m2, 500);
+  });
+
+  it("se o router não resolver e a OpenAI falhar, cai no parser local", async () => {
     let called = false;
-    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.OPENAI_API_KEY = "sk-test-fallback-local";
     globalThis.fetch = (async () => {
       called = true;
-      throw new Error("não deveria chamar OpenAI");
+      throw new Error("openai indisponível no teste");
     }) as typeof fetch;
 
     const result = await interpretAssistenteIaCommand({
       command: "renumerar pontos",
       context: sampleContext(),
     });
-    assert.equal(called, false);
+    assert.equal(called, true);
     assert.equal(result.source, "local");
     assert.equal(result.commands[0]?.acao, "renumerar_pontos");
+  });
+
+  it("sem chave, frases de loteamento não viram erro de OpenAI", async () => {
+    process.env.OPENAI_API_KEY = "";
+    const context = sampleContext();
+    const verde = await interpretAssistenteIaCommand({
+      command: "mudar area verde para 10%",
+      context,
+    });
+    assert.equal(verde.source, "local");
+    assert.equal(verde.commands[0]?.acao, "reservar_area");
+    assert.equal(verde.commands[0]?.percentual, 10);
+    assert.doesNotMatch(verde.resposta ?? "", /indisponível|OpenAI/i);
+
+    const lotes = await interpretAssistenteIaCommand({
+      command: "ajustar os lotes para 250m²",
+      context,
+    });
+    assert.equal(lotes.source, "local");
+    assert.equal(lotes.commands[0]?.acao, "otimizar_quadra");
+    assert.equal(lotes.commands[0]?.area_alvo_m2, 250);
+
+    const demais = await interpretAssistenteIaCommand({
+      command: "os demias com 250m²",
+      context,
+      history: [{ role: "user", content: "alterar lote 01 para 500m²" }],
+    });
+    assert.equal(demais.source, "local");
+    assert.equal(demais.commands[0]?.acao, "otimizar_quadra");
+    assert.equal(demais.commands[0]?.area_alvo_m2, 250);
+
+    const ola = await interpretAssistenteIaCommand({ command: "ola", context });
+    assert.equal(ola.commands.length, 0);
+    assert.doesNotMatch(ola.resposta ?? "", /indisponível/i);
+    assert.match(ola.resposta ?? "", /Olá|loteamento/i);
+
+    const unknown = await interpretAssistenteIaCommand({ command: "xyzzy comando inventado", context });
+    assert.equal(unknown.source, "local");
+    assert.equal(unknown.commands.length, 0);
+    assert.equal(unknown.resposta, ASSISTENTE_IA_UNAVAILABLE);
+  });
+
+  it("follow-up de testada/profundidade funciona sem OpenAI", async () => {
+    process.env.OPENAI_API_KEY = "";
+    const context = sampleContext();
+    context.loteamento = {
+      projeto: { nome: "Teste", unidade: "m / m²", sistemaCoordenadas: "EPSG:31982" },
+      quadras: [{ id: "G", area: 4000, quantidadeLotes: 1, areaMedia: 200 }],
+      lotes: [{ id: "01", quadra: "G", area: 200, testada: 8, profundidade: 25 }],
+      ruas: [],
+      areasInstitucionais: [],
+      areasVerdes: [],
+      remanescenteM2: 0,
+    };
+    const result = await interpretAssistenteIaCommand({
+      command: "testada de 10 metros, profundidade de 20",
+      context,
+      history: [
+        { role: "user", content: "reprojetar loteamento" },
+        { role: "assistant", content: "Informe testada e profundidade (ou área em m²) maiores que zero." },
+      ],
+    });
+    assert.equal(result.source, "local");
+    assert.equal(result.commands[0]?.acao, "otimizar_quadra");
+    assert.equal(result.commands[0]?.testada_minima_m, 10);
+    assert.equal(result.commands[0]?.profundidade_quadra_m, 20);
+    assert.equal(result.commands[0]?.area_alvo_m2, 200);
   });
 
   for (const { phrase, acao } of PHRASES) {
@@ -389,16 +584,7 @@ describe("interpretAssistenteIaCommand", () => {
   });
 
   it("texto sem tool (ex.: círculo) vira esclarecimento, sem executar", async () => {
-    mockOpenAi({
-      choices: [
-        {
-          message: {
-            content: "Ainda não consigo criar círculos neste CAD. Posso criar um polígono com os pontos selecionados.",
-            tool_calls: [],
-          },
-        },
-      ],
-    });
+    mockOpenAi(openaiPayload([], "Ainda não consigo criar círculos neste CAD. Posso criar um polígono com os pontos selecionados."));
     const result = await interpretAssistenteIaCommand({
       command: "desenha um círculo aqui",
       context: sampleContext(),
@@ -427,6 +613,7 @@ describe("gerar polígono do ponto até o quatro", () => {
   });
 
   it("parser local reconhece a frase falada sem OpenAI", async () => {
+    process.env.OPENAI_API_KEY = "";
     const result = await interpretAssistenteIaCommand({
       command: "Gerar polígonos do ponto até o quatro",
       context: sampleContext(),
@@ -713,6 +900,6 @@ describe("registro de comandos CAD", () => {
     assert.equal(executed.ok, true, executed.message);
     assert.ok(executed.project.entities.some((e) => e.id === "quadra_1"), "gleba permanece");
     assert.ok(executed.project.entities.some((e) => e.layerId === "area_reserva_legal" && e.type === "polyline"));
-    assert.match(executed.message, /reserva legal/i);
+    assert.match(executed.message, /área verde/i);
   });
 });

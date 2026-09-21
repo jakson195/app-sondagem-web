@@ -120,6 +120,11 @@ const nextConfig: NextConfig = {
       ...config.resolve.alias,
       cesium: path.resolve(__dirname, "node_modules/cesium"),
     };
+    /** mapbox-gl first compile can exceed webpack's 120s script timeout in next dev */
+    config.output = {
+      ...config.output,
+      chunkLoadTimeout: 180_000,
+    };
     return config;
   },
 };

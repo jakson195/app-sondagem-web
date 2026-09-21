@@ -13,10 +13,8 @@ export default async function CadPage() {
   if (!user) redirect("/login?next=/cad");
 
   return (
-    <div className="cad-page flex min-h-0 flex-1 flex-col">
-      <header className="cad-page-title mb-2 flex shrink-0 items-baseline gap-2">
-        <h1 className="text-base font-semibold text-[var(--text)]">Ambiente CAD</h1>
-      </header>
+    <div className="cad-page flex min-h-0 flex-1 flex-col overflow-hidden">
+      <h1 className="cad-page-title sr-only">Ambiente CAD</h1>
       <CadWorkspace userId={String(user.id)} />
     </div>
   );

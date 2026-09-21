@@ -1,5 +1,5 @@
 import { polygonCentroid } from "./ai-geometry-utils";
-import { formatCoordBr, polygonAreaM2 } from "./polygon-utils";
+import { formatCoordBr, pointInPolygon, polygonAreaM2, splitSvgLabelLines } from "./polygon-utils";
 import type { CadDrainageKind, CadEntity, CadPointEntity, CadPolylineEntity, CadVertex } from "./types";
 
 /** Azul de drenagem e chamadas técnicas. */
@@ -11,15 +11,18 @@ export const CAD_PLAN_INK = "#111827";
 /** Área do lote em destaque (laranja/marrom da planta de referência). */
 export const CAD_PLAN_AREA = "#c2410c";
 
+/** Fundo branco do quadro de áreas ao lado da planta. */
+export const CAD_PLAN_AREA_BOX = "#ffffff";
+
 export const CAD_PLAN_FONT = "Arial, Helvetica, sans-serif";
 
 export type CadPlanTextRole = "lot-title" | "lot-area" | "lot-edge" | "street" | "pipe" | "node";
 
-/** textSize gravado nas entidades (número circundado / área / testada-profundidade). */
+/** textSize gravado nas entidades (número circundado / área compacta / testada-profundidade). */
 export const CADASTRAL_LOT_ENTITY_TEXT_SIZE = {
-  "lot-title": 24,
-  "lot-area": 30,
-  "lot-edge": 18,
+  "lot-title": 19,
+  "lot-area": 16,
+  "lot-edge": 14,
 } as const;
 
 export function cadastralLotEntityTextSize(role: CadPlanTextRole): number {
@@ -399,6 +402,149 @@ function edgeLabelInside(a: CadVertex, b: CadVertex, centroid: CadVertex, offset
   return { x: mx + nx * offsetM, y: my + ny * offsetM, z: (a.z + b.z) / 2 };
 }
 
+function polygonAreaCentroid(vertices: CadVertex[]): CadVertex {
+  if (vertices.length < 3) {
+    return polygonCentroid(vertices);
+  }
+  let twiceArea = 0;
+  let cx = 0;
+  let cy = 0;
+  let cz = 0;
+  const n = vertices.length;
+  for (let i = 0; i < n; i++) {
+    const p = vertices[i];
+    const q = vertices[(i + 1) % n];
+    const cross = p.x * q.y - q.x * p.y;
+    twiceArea += cross;
+    cx += (p.x + q.x) * cross;
+    cy += (p.y + q.y) * cross;
+    cz += p.z;
+  }
+  if (Math.abs(twiceArea) < 1e-12) return polygonCentroid(vertices);
+  return { x: cx / (3 * twiceArea), y: cy / (3 * twiceArea), z: cz / n };
+}
+
+function streetInwardUnit(centroid: CadVertex, fronts: MergedLotEdge[]): { x: number; y: number } | null {
+  if (fronts.length === 0) return null;
+  let dx = 0;
+  let dy = 0;
+  for (const edge of fronts) {
+    const mx = (edge.a.x + edge.b.x) / 2;
+    const my = (edge.a.y + edge.b.y) / 2;
+    let nx = -(edge.b.y - edge.a.y);
+    let ny = edge.b.x - edge.a.x;
+    const len = Math.hypot(nx, ny) || 1;
+    nx /= len;
+    ny /= len;
+    if (nx * (centroid.x - mx) + ny * (centroid.y - my) < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    dx += nx;
+    dy += ny;
+  }
+  const out = Math.hypot(dx, dy);
+  if (out < 1e-9) return null;
+  return { x: dx / out, y: dy / out };
+}
+
+function unmergedStreetEdges(verts: CadVertex[], streets?: CadPolylineEntity[]): MergedLotEdge[] {
+  const n = verts.length;
+  if (n < 2 || !streets || streets.length === 0) return [];
+  const segs: MergedLotEdge[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = verts[i];
+    const b = verts[(i + 1) % n];
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    if (length < 1e-6) continue;
+    if (!edgeAlongStreets(a, b, streets)) continue;
+    segs.push({ a, b, length, alongStreet: true });
+  }
+  return segs;
+}
+
+/** Testada (a frente mais curta) — em esquina o laranja não pode ir para o lote vizinho. */
+function pickAreaFronts(fronts: MergedLotEdge[], fallback: MergedLotEdge[]): MergedLotEdge[] {
+  if (fronts.length >= 2) {
+    return [fronts.reduce((best, edge) => (edge.length < best.length ? edge : best), fronts[0])];
+  }
+  if (fronts.length === 1) return fronts;
+  return fallback;
+}
+
+function nudgeAway(point: CadVertex, other: CadVertex, minDist: number): CadVertex {
+  const dx = point.x - other.x;
+  const dy = point.y - other.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist >= minDist) return point;
+  if (dist < 1e-9) return point;
+  const scale = minDist / dist;
+  return { x: other.x + dx * scale, y: other.y + dy * scale, z: point.z };
+}
+
+function clampInsideLot(
+  point: CadVertex,
+  centroid: CadVertex,
+  verts: CadVertex[],
+  margin: number,
+): CadVertex {
+  let p: CadVertex = { x: point.x, y: point.y, z: point.z };
+  for (let i = 0; i < 10; i++) {
+    const inside = pointInPolygon(p.x, p.y, verts);
+    const dist = minDistToRing([p.x, p.y], verts);
+    if (inside && dist >= margin) return p;
+    const dx = centroid.x - p.x;
+    const dy = centroid.y - p.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) return { x: centroid.x, y: centroid.y, z: centroid.z };
+    const step = inside ? Math.min(1, (margin - dist + 0.12) / len) : 0.4;
+    p = { x: p.x + dx * step, y: p.y + dy * step, z: p.z };
+  }
+  return { x: centroid.x, y: centroid.y, z: centroid.z };
+}
+
+/** Miolo do lote, logo atrás do número e sempre dentro da poligonal. */
+function placeLotAreaAnchor(
+  centroid: CadVertex,
+  verts: CadVertex[],
+  title: CadVertex | null,
+  edges: CadVertex[],
+  span: number,
+  fronts: MergedLotEdge[],
+): CadVertex {
+  const ringDist = minDistToRing([centroid.x, centroid.y], verts);
+  const budget = Math.max(0.55, ringDist - 0.85);
+  const titleGap = Math.min(budget, Math.max(1.15, Math.min(1.7, span * 0.12)));
+  const inward = streetInwardUnit(centroid, fronts);
+  let point: CadVertex = { x: centroid.x, y: centroid.y, z: centroid.z };
+  if (inward) {
+    point = {
+      x: centroid.x + inward.x * titleGap,
+      y: centroid.y + inward.y * titleGap,
+      z: centroid.z,
+    };
+  }
+  const edgeClear = Math.min(budget, Math.max(1.1, span * 0.1));
+  for (const edge of edges) {
+    point = nudgeAway(point, edge, edgeClear);
+    point = clampInsideLot(point, centroid, verts, 0.7);
+  }
+  if (title) {
+    point = nudgeAway(point, title, Math.min(titleGap, budget));
+  }
+  point = clampInsideLot(point, centroid, verts, 0.7);
+  if (title && inward && Math.hypot(point.x - title.x, point.y - title.y) < 1.05) {
+    const step = Math.min(titleGap, budget);
+    point = clampInsideLot(
+      { x: title.x + inward.x * step, y: title.y + inward.y * step, z: point.z },
+      centroid,
+      verts,
+      0.7,
+    );
+  }
+  return point;
+}
+
 export function buildCadastralLotPlanTexts(
   lot: CadPolylineEntity,
   index: number,
@@ -409,7 +555,7 @@ export function buildCadastralLotPlanTexts(
   const verts = lot.vertices;
   if (verts.length < 3) return [];
   const n = parseCadastralLotNumber(lot.name, index);
-  const c = polygonCentroid(verts);
+  const c = polygonAreaCentroid(verts);
   const span = lotMinSpanM(verts);
   const classified = classifyMergedLotEdges(mergeCollinearLotEdges(verts, options.streets));
   const rawFronts = classified.filter((item) => item.kind === "front" && item.edge.length >= MIN_EDGE_DIM_M);
@@ -418,63 +564,50 @@ export function buildCadastralLotPlanTexts(
   const maxSide = rawSides.reduce((m, item) => Math.max(m, item.edge.length), 0);
   const fronts = rawFronts.filter((item) => item.edge.length >= Math.max(MIN_EDGE_DIM_M, Math.min(4, maxFront * 0.4)));
   const sides = rawSides.filter((item) => item.edge.length >= Math.max(MIN_EDGE_DIM_M, maxSide * 0.45));
-  const primaryFront = fronts.reduce(
-    (best, item) => (!best || item.edge.length > best.edge.length ? item : best),
-    fronts[0] as (typeof fronts)[0] | undefined,
+  const streetSegs = unmergedStreetEdges(verts, options.streets);
+  const areaFronts = pickAreaFronts(
+    fronts.map((item) => item.edge),
+    streetSegs,
   );
+  const testada = areaFronts[0];
   const depthDir = (sides[0] ?? classified.find((item) => item.kind !== "front") ?? classified[0])?.edge;
-  const areaRot = depthDir
-    ? readableLabelRotationDeg(depthDir.b.x - depthDir.a.x, depthDir.b.y - depthDir.a.y)
-    : 0;
-  const frontRot = primaryFront
-    ? readableLabelRotationDeg(
-        primaryFront.edge.b.x - primaryFront.edge.a.x,
-        primaryFront.edge.b.y - primaryFront.edge.a.y,
-      )
-    : areaRot;
+  const areaRot = testada
+    ? readableLabelRotationDeg(testada.b.x - testada.a.x, testada.b.y - testada.a.y)
+    : depthDir
+      ? readableLabelRotationDeg(depthDir.b.x - depthDir.a.x, depthDir.b.y - depthDir.a.y)
+      : 0;
+  const frontRot = areaRot;
 
-  const titleOff = Math.min(span * 0.34, Math.max(1.05, span * 0.14));
-  const frontDimOff = Math.min(span * 0.48, Math.max(titleOff + 1.05, span * 0.28));
-  const sideOff = Math.min(1.25, Math.max(0.55, span * 0.08));
+  const edgeOff = Math.min(0.85, Math.max(0.38, span * 0.055));
 
   const texts: CadPlanText[] = [];
-  if (primaryFront) {
-    const pos = edgeLabelInside(primaryFront.edge.a, primaryFront.edge.b, c, titleOff);
-    texts.push({
-      x: pos.x,
-      y: pos.y,
-      z: pos.z,
-      label: formatCadastralLotTitle(n),
-      rotationDeg: frontRot,
-      role: "lot-title",
-    });
-  } else {
-    texts.push({
-      x: c.x,
-      y: c.y + Math.max(0.6, span * 0.12),
-      z: c.z,
-      label: formatCadastralLotTitle(n),
-      rotationDeg: frontRot,
-      role: "lot-title",
-    });
-  }
+  texts.push({
+    x: c.x,
+    y: c.y,
+    z: c.z,
+    label: formatCadastralLotTitle(n),
+    rotationDeg: frontRot,
+    role: "lot-title",
+  });
 
-  if (includeArea) {
-    texts.push({
-      x: c.x,
-      y: c.y,
-      z: c.z,
-      label: formatCadastralLotArea(polygonAreaM2(verts, true)),
-      rotationDeg: areaRot,
-      role: "lot-area",
-    });
+  if (!includeCotas) {
+    if (includeArea) {
+      const title = texts[0] ?? null;
+      const areaPos = placeLotAreaAnchor(c, verts, title, [], span, areaFronts);
+      texts.push({
+        x: areaPos.x,
+        y: areaPos.y,
+        z: areaPos.z,
+        label: formatCadastralLotArea(polygonAreaM2(verts, true)),
+        rotationDeg: areaRot,
+        role: "lot-area",
+      });
+    }
+    return texts;
   }
-
-  if (!includeCotas) return texts;
 
   for (const item of fronts) {
-    const isPrimary = item === primaryFront;
-    const pos = edgeLabelInside(item.edge.a, item.edge.b, c, isPrimary ? frontDimOff : Math.min(frontDimOff, titleOff + 0.85));
+    const pos = edgeLabelInside(item.edge.a, item.edge.b, c, edgeOff);
     texts.push({
       x: pos.x,
       y: pos.y,
@@ -485,7 +618,7 @@ export function buildCadastralLotPlanTexts(
     });
   }
   for (const item of sides) {
-    const pos = edgeLabelInside(item.edge.a, item.edge.b, c, sideOff);
+    const pos = edgeLabelInside(item.edge.a, item.edge.b, c, edgeOff);
     texts.push({
       x: pos.x,
       y: pos.y,
@@ -493,6 +626,20 @@ export function buildCadastralLotPlanTexts(
       label: formatCadastralEdgeDimension(item.edge.length),
       rotationDeg: readableLabelRotationDeg(item.edge.b.x - item.edge.a.x, item.edge.b.y - item.edge.a.y),
       role: "lot-edge",
+    });
+  }
+
+  if (includeArea) {
+    const title = texts.find((item) => item.role === "lot-title") ?? null;
+    const edgeAnchors = texts.filter((item) => item.role === "lot-edge");
+    const areaPos = placeLotAreaAnchor(c, verts, title, edgeAnchors, span, areaFronts);
+    texts.push({
+      x: areaPos.x,
+      y: areaPos.y,
+      z: areaPos.z,
+      label: formatCadastralLotArea(polygonAreaM2(verts, true)),
+      rotationDeg: areaRot,
+      role: "lot-area",
     });
   }
   return texts;
@@ -556,16 +703,37 @@ export function planTextFillColor(role: CadPlanTextRole | undefined, fallback = 
 }
 
 export function planTextHaloWidth(fontSize: number, role?: CadPlanTextRole): number {
-  const factor = role === "lot-area" ? 0.18 : role === "lot-title" ? 0.16 : 0.14;
-  return Math.max(1.2, fontSize * factor);
+  const factor = role === "lot-area" ? 0.12 : role === "lot-title" ? 0.16 : 0.14;
+  return Math.max(role === "lot-area" ? 0.7 : 1.2, fontSize * factor);
 }
 
 export function planLotTitleCircleRadius(fontSize: number): number {
   return Math.max(7, fontSize * 0.92);
 }
 
+/** Quadro branco da tabela de áreas/quadras/lotes ao lado da planta. */
+export function planTableQuadroSize(fontSize: number, label: string): { width: number; height: number } {
+  const lines = splitSvgLabelLines(label);
+  const longest = Math.max(1, ...lines.map((line) => line.length));
+  const lineH = Math.max(fontSize * 1.12, fontSize + 1);
+  const padX = fontSize * 0.38;
+  const padY = fontSize * 0.28;
+  return {
+    width: longest * fontSize * 0.58 + padX * 2,
+    height: Math.max(lineH, lines.length * lineH) + padY * 2,
+  };
+}
+
+export function isLoteamentoTableEntity(entity: { layerId: string }): boolean {
+  return entity.layerId === "loteamento_tabelas";
+}
+
+export function isAreaQuadroLabel(label: string | undefined): boolean {
+  return /quadro de [áa]reas|tabela de [áa]reas/i.test(label ?? "");
+}
+
 export function planTextFontWeight(role: CadPlanTextRole | undefined, label?: string): number {
-  if (role === "lot-area") return 800;
+  if (role === "lot-area") return 700;
   if (role === "lot-title" || role === "street") return 700;
   if (role === "lot-edge") return 600;
   const text = label ?? "";

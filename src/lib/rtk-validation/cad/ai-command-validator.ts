@@ -59,6 +59,19 @@ const commandShape = z
     nome: optionalString,
     equidistancia_m: optionalNumber,
     cota_referencia_m: optionalNumber,
+    quadra: optionalString,
+    lote: optionalString,
+    lotes: optionalStringArray,
+    area_alvo_m2: optionalNumber,
+    area_maxima_m2: optionalNumber,
+    preservar_ruas: z.boolean().optional(),
+    preservar_limites: z.boolean().optional(),
+    minimizar_remanescente: z.boolean().optional(),
+    lotes_esquina_maiores: z.boolean().optional(),
+    filtro_area_max_m2: optionalNumber,
+    filtro_area_min_m2: optionalNumber,
+    nomes: optionalStringArray,
+    scope: z.enum(["single_lot", "quad", "local_redistribution"]).optional(),
   })
   .passthrough();
 
@@ -164,6 +177,11 @@ function missingForAction(cmd: CadAiCommand): string[] {
       if (cmd.percentual == null || !Number.isFinite(cmd.percentual) || cmd.percentual <= 0 || cmd.percentual >= 100) {
         missing.push("percentual (0–100)");
       }
+      break;
+    case "consultar_lote":
+    case "calcular_testada":
+    case "ajustar_lote":
+      if (!cmd.lote?.trim() && !cmd.entidade_id && !sel) missing.push("lote (ex.: G-01)");
       break;
     default:
       break;

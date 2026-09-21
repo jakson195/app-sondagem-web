@@ -119,16 +119,16 @@ export function screenToWorld(
 /** Altura padrão de anotação genérica (ruas/drenagem/tabelas), em metros de terreno. */
 export const CAD_LOT_LABEL_HEIGHT_M = 0.8;
 
-/** Altura em metros e teto em px: número circundado / área em destaque / testada-profundidade. */
-export const CAD_CADASTRAL_TITLE_HEIGHT_M = 3.2;
-export const CAD_CADASTRAL_AREA_HEIGHT_M = 4.2;
-export const CAD_CADASTRAL_EDGE_HEIGHT_M = 2.4;
-export const CAD_CADASTRAL_TITLE_MAX_PX = 28;
-export const CAD_CADASTRAL_AREA_MAX_PX = 34;
-export const CAD_CADASTRAL_EDGE_MAX_PX = 20;
-export const CAD_CADASTRAL_TITLE_SPAN_FACTOR = 0.26;
-export const CAD_CADASTRAL_AREA_SPAN_FACTOR = 0.32;
-export const CAD_CADASTRAL_EDGE_SPAN_FACTOR = 0.18;
+/** Altura em metros e teto em px: número circundado / área (compacta, centro do lote) / testada-profundidade. */
+export const CAD_CADASTRAL_TITLE_HEIGHT_M = 2.56;
+export const CAD_CADASTRAL_AREA_HEIGHT_M = 1.86;
+export const CAD_CADASTRAL_EDGE_HEIGHT_M = 1.92;
+export const CAD_CADASTRAL_TITLE_MAX_PX = 22.4;
+export const CAD_CADASTRAL_AREA_MAX_PX = 13.2;
+export const CAD_CADASTRAL_EDGE_MAX_PX = 16;
+export const CAD_CADASTRAL_TITLE_SPAN_FACTOR = 0.208;
+export const CAD_CADASTRAL_AREA_SPAN_FACTOR = 0.132;
+export const CAD_CADASTRAL_EDGE_SPAN_FACTOR = 0.144;
 
 export function worldMetersPerPixel(viewport: CadViewport): number {
   const innerW = Math.max(1, viewport.width - viewport.padding * 2);
@@ -157,7 +157,7 @@ export function annotationFontSizePx(
   return Math.max(1.6, Math.min(maxPx, px));
 }
 
-/** Número / área / cotas de frente e lado — bem maiores que ruas e drenagem. */
+/** Número e cotas maiores que ruas; área do lote menor e no miolo do polígono. */
 export function cadastralLotFontSizePx(
   viewport: CadViewport,
   role: "lot-title" | "lot-area" | "lot-edge",

@@ -33,23 +33,33 @@ export type GeotiffCrsInfo = {
   reprojected: boolean;
 };
 
+function geoKeyNumber(keys: Record<string, unknown>, name: string, numeric: number): number | null {
+  const raw = keys[name] ?? keys[numeric] ?? keys[String(numeric)];
+  return typeof raw === "number" && raw > 0 && raw !== 32767 ? raw : null;
+}
+
 export function epsgFromGeoTiffImage(image: GeoTIFFImage): number {
   try {
     const keys = image.getGeoKeys() as Record<string, unknown> | undefined;
     if (!keys) return 4326;
-    const projected = keys.ProjectedCSTypeGeoKey;
-    const geographic = keys.GeographicTypeGeoKey;
     const raw =
-      typeof projected === "number"
-        ? projected
-        : typeof geographic === "number"
-          ? geographic
-          : null;
-    if (raw == null || raw === 32767) return 4326;
-    return raw > 0 ? raw : 4326;
+      geoKeyNumber(keys, "ProjectedCSTypeGeoKey", 3072) ??
+      geoKeyNumber(keys, "GeographicTypeGeoKey", 2048);
+    if (raw == null) return 4326;
+    return raw;
   } catch {
     return 4326;
   }
+}
+
+/** Registra definição proj4 embutida (SIRGAS/UTM/WGS84). */
+export function defineBundledProj4(epsg: number): boolean {
+  const code = `EPSG:${epsg}`;
+  if (proj4.defs(code)) return true;
+  const bundled = BUNDLED_PROJ4[epsg];
+  if (!bundled) return false;
+  proj4.defs(code, bundled);
+  return true;
 }
 
 export function crsLabel(epsg: number): string {
@@ -138,7 +148,7 @@ export type Wgs84Bounds = {
 };
 
 /** Converte o retângulo do raster (CRS de origem) para limites WGS84 para o Leaflet. */
-function bboxLooksProjectedMeters(bb: number[]): boolean {
+export function bboxLooksProjectedMeters(bb: number[]): boolean {
   const [minX, minY, maxX, maxY] = bb;
   const spanX = Math.abs(maxX - minX);
   const spanY = Math.abs(maxY - minY);

@@ -10,6 +10,7 @@ type Cad3dViewProps = {
   layers: CadLayer[];
   preferTin?: boolean;
   className?: string;
+  background?: string;
 };
 
 type ThreeModule = typeof import("three");
@@ -104,7 +105,7 @@ function fitCameraToScene(
   controls.update();
 }
 
-export function Cad3dView({ entities, layers, preferTin = false, className }: Cad3dViewProps) {
+export function Cad3dView({ entities, layers, preferTin = false, className, background = "#000000" }: Cad3dViewProps) {
   const t = useTranslations("rtkCad.view3d");
   const containerRef = useRef<HTMLDivElement>(null);
   const [webglError, setWebglError] = useState<string | null>(null);
@@ -133,7 +134,7 @@ export function Cad3dView({ entities, layers, preferTin = false, className }: Ca
         if (disposed || !containerRef.current) return;
 
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x0b1220);
+        scene.background = new THREE.Color(background);
 
         const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 10_000_000);
         renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -299,7 +300,7 @@ export function Cad3dView({ entities, layers, preferTin = false, className }: Ca
         container.removeChild(renderer.domElement);
       }
     };
-  }, [sceneData, t]);
+  }, [sceneData, t, background]);
 
   const hasTerrain = sceneData?.terrain != null;
   const entityCount = (sceneData?.lines.length ?? 0) + (sceneData?.points.length ?? 0);
@@ -307,7 +308,7 @@ export function Cad3dView({ entities, layers, preferTin = false, className }: Ca
 
   if (buildError) {
     return (
-      <div className="flex h-[560px] items-center justify-center bg-[#0b1220] p-6 text-center text-sm text-red-300">
+      <div className="flex h-[560px] items-center justify-center p-6 text-center text-sm text-red-300" style={{ background }}>
         {buildError}
       </div>
     );
@@ -315,14 +316,14 @@ export function Cad3dView({ entities, layers, preferTin = false, className }: Ca
 
   if (webglError) {
     return (
-      <div className="flex h-[560px] items-center justify-center bg-[#0b1220] p-6 text-center text-sm text-red-300">
+      <div className="flex h-[560px] items-center justify-center p-6 text-center text-sm text-red-300" style={{ background }}>
         {webglError}
       </div>
     );
   }
 
   return (
-    <div className={className ?? "relative h-[560px] w-full bg-[#0b1220]"}>
+    <div className={className ?? "relative h-[560px] w-full"} style={{ background }}>
       <div ref={containerRef} className="absolute inset-0" />
       {isEmpty ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-[#94a3b8]">
