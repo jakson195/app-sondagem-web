@@ -186,3 +186,29 @@ body {
   background: #000;
   border: 1px solid var(--border);
 }
+
+/* Painel CAD é claro: sem isso, color-scheme:dark pinta select/input escuros
+   com texto herdado escuro e as letras somem. */
+.cad-page,
+.cad-workspace,
+.cad-tools-panel {
+  color-scheme: light;
+}
+
+.cad-tools-panel select,
+.cad-tools-panel input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="hidden"]),
+.cad-tools-panel textarea {
+  background-color: #ffffff;
+  color: #111827;
+}
+
+.cad-tools-panel select option {
+  background-color: #ffffff;
+  color: #111827;
+}
+
+.cad-tools-panel input::placeholder,
+.cad-tools-panel textarea::placeholder {
+  color: #6b7280;
+  opacity: 1;
+}

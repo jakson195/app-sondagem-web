@@ -27,6 +27,22 @@ export const CAD_ASSISTANT_MUTATE_ACTIONS = [
   "subdividir_quadra",
   "reservar_area",
   "aplicar_alteracao",
+  "mover",
+  "copiar",
+  "rotacionar",
+  "espelhar",
+  "esticar",
+  "escala",
+  "deslocar",
+  "aparar",
+  "estender",
+  "concordar",
+  "chanfrar",
+  "matriz",
+  "explodir",
+  "unir",
+  "unir_linhas",
+  "dividir",
 ] as const;
 
 export const CAD_ASSISTANT_DESTRUCTIVE_ACTIONS = [

@@ -125,10 +125,10 @@ export function writeAcadDocumentDxfBytes(doc: CadDocument): Uint8Array {
 
 export function writeAcadDocumentDwgBytes(doc: CadDocument): Uint8Array {
   const count = modelSpace(doc).entities.count;
-  const buffer = new Uint8Array(Math.max(512 * 1024, count * 8192 + 131072));
+  const buffer = new ArrayBuffer(Math.max(512 * 1024, count * 8192 + 131072));
   const writer = new DwgWriter(buffer, doc);
   writer.write();
-  return buffer.subarray(0, writer.bytesWritten);
+  return new Uint8Array(buffer, 0, writer.bytesWritten);
 }
 
 export function exportCadProjectDxfBytes(project: CadProject): Uint8Array {

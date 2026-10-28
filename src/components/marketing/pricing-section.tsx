@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { isLoteamentoProductMode } from "@/lib/product-mode";
+import { getProductMode } from "@/lib/product-mode";
 import { SAAS_PLANS, type SaasPlanId } from "@/lib/saas/plans";
 
 const LOTEAMENTO_PLAN_FEATURES: Record<SaasPlanId, string[]> = {
@@ -24,12 +24,40 @@ const LOTEAMENTO_PLAN_FEATURES: Record<SaasPlanId, string[]> = {
   ],
 };
 
+const SONDAGEM_PLAN_FEATURES: Record<SaasPlanId, string[]> = {
+  trial: [
+    "SPT, rotativa, trado e poços",
+    "Relatórios PDF de campo",
+    "2 obras",
+    "Sem cartão de crédito",
+  ],
+  pro: [
+    "Todos os módulos de sondagem",
+    "Mais obras e utilizadores",
+    "Portal do cliente",
+    "Prioridade no suporte",
+  ],
+  enterprise: [
+    "Tudo do Pro",
+    "SSO e API dedicada",
+    "Implementação assistida",
+    "Formação e implementação",
+    "Gestor de conta dedicado",
+  ],
+};
+
 type Props = {
   compact?: boolean;
 };
 
 export function PricingSection({ compact = false }: Props) {
-  const loteamento = isLoteamentoProductMode();
+  const productMode = getProductMode();
+  const featuresFor = (planId: SaasPlanId, fallback: string[]) =>
+    productMode === "SONDAGEM"
+      ? SONDAGEM_PLAN_FEATURES[planId]
+      : productMode === "LOTEAMENTO"
+        ? LOTEAMENTO_PLAN_FEATURES[planId]
+        : fallback;
   return (
     <section id="planos" className="scroll-mt-24 py-20 sm:py-28">
       <div className="mx-auto max-w-6xl px-4 text-center sm:px-6">
@@ -62,7 +90,7 @@ export function PricingSection({ compact = false }: Props) {
               </p>
               <p className="mt-3 text-sm text-[var(--dg-muted)]">{plan.description}</p>
               <ul className="mt-6 flex-1 space-y-2 text-sm">
-                {(loteamento ? LOTEAMENTO_PLAN_FEATURES[plan.id] : plan.features).map((f) => (
+                {featuresFor(plan.id, plan.features).map((f) => (
                   <li key={f} className="flex gap-2">
                     <span className="text-[var(--dg-cyan)]">✓</span> {f}
                   </li>

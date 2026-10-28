@@ -44,6 +44,28 @@ export const CAD_AI_ACTION_ALIASES: Record<string, CadAiAction> = {
   exportar_kml: "exportar",
   exportar_kmz: "exportar",
   apagar_entidades: "apagar",
+  move_entity: "mover",
+  rotate_entity: "rotacionar",
+  copy_entity: "copiar",
+  mirror_entity: "espelhar",
+  stretch_entity: "esticar",
+  scale_entity: "escala",
+  offset_entity: "deslocar",
+  trim_entity: "aparar",
+  extend_entity: "estender",
+  fillet_entity: "concordar",
+  chamfer_entity: "chanfrar",
+  array_entity: "matriz",
+  explode_entity: "explodir",
+  join_entities: "unir",
+  split_entity: "dividir",
+  offset: "deslocar",
+  fillet: "concordar",
+  chamfer: "chanfrar",
+  trim: "aparar",
+  explode: "explodir",
+  join: "unir",
+  unir_linhas: "unir",
   adicionar_texto: "inserir_texto",
   triangulacao: "gerar_tin",
   gerar_triangulacao: "gerar_tin",
@@ -111,10 +133,33 @@ export function normalizeCadAiCommand(raw: CadAiCommand): CadAiCommand {
   const arquivo = raw.arquivo?.toLowerCase();
   const formato = raw.formato?.toLowerCase();
   const z = raw.z ?? raw.cota_referencia_m;
-  const testada_minima_m = raw.testada_minima_m ?? raw.testada_m;
+  const area_minima_m2 = raw.area_minima_m2 ?? raw.area_alvo_m2;
+  let testada_minima_m = raw.testada_minima_m ?? raw.testada_m;
+  let largura_via_m = raw.largura_via_m;
+  let profundidade_quadra_m = raw.profundidade_quadra_m;
+  let largura_quadra_m = raw.largura_quadra_m;
+  let distancia_quadra_m = raw.distancia_quadra_m;
   const area_minima_quadra_m2 = raw.area_minima_quadra_m2 ?? raw.area_quadra_m2;
-  const largura_quadra_m = raw.largura_quadra_m;
-  const distancia_quadra_m = raw.distancia_quadra_m;
+  if (acao === "gerar_loteamento") {
+    const hasLotTarget = area_minima_m2 != null && Number.isFinite(area_minima_m2) && area_minima_m2 > 0;
+    const hasBlockSize =
+      (largura_quadra_m != null && largura_quadra_m > 0) ||
+      (distancia_quadra_m != null && distancia_quadra_m > 0);
+    if (!(testada_minima_m != null && testada_minima_m > 0) && hasLotTarget) testada_minima_m = 10;
+    if (!(largura_via_m != null && largura_via_m > 0) && (hasLotTarget || hasBlockSize)) largura_via_m = 10;
+    if (
+      !(profundidade_quadra_m != null && profundidade_quadra_m > 0) &&
+      hasLotTarget &&
+      testada_minima_m != null &&
+      testada_minima_m > 0
+    ) {
+      profundidade_quadra_m = area_minima_m2 / testada_minima_m;
+    }
+    if (!(distancia_quadra_m != null && distancia_quadra_m > 0) && largura_quadra_m != null && largura_quadra_m > 0) {
+      distancia_quadra_m = largura_quadra_m;
+    }
+    largura_quadra_m = undefined;
+  }
   const texto = raw.texto ?? raw.nome;
   const visivel =
     acao === "trocar_camada" && original === "ocultar_camada" ? false : raw.visivel;
@@ -134,10 +179,15 @@ export function normalizeCadAiCommand(raw: CadAiCommand): CadAiCommand {
     arquivo,
     formato,
     z,
+    area_minima_m2,
     testada_minima_m,
+    largura_via_m,
+    profundidade_quadra_m,
     area_minima_quadra_m2,
     largura_quadra_m,
     distancia_quadra_m,
+    require_road_access: acao === "gerar_loteamento" ? raw.require_road_access !== false : raw.require_road_access,
+    allow_internal_roads: acao === "gerar_loteamento" ? raw.allow_internal_roads !== false : raw.allow_internal_roads,
     texto,
     visivel,
     tipo,
@@ -145,8 +195,8 @@ export function normalizeCadAiCommand(raw: CadAiCommand): CadAiCommand {
 }
 
 export const CAD_AI_ACTION_CATALOG: Array<{ acao: CadAiAction; descricao: string; params?: string }> = [
-  { acao: "criar_ponto", descricao: "Criar ponto", params: "x, y, z ou pontos[]" },
-  { acao: "criar_linha", descricao: "Linha entre 2 pontos", params: "pontos: [P1,P2]" },
+  { acao: "criar_ponto", descricao: "Criar ponto", params: "x, y, z ou osnap+lote/quadra" },
+  { acao: "criar_linha", descricao: "Linha entre 2 pontos", params: "pontos: [P1,P2] ou osnap_origem/osnap_destino" },
   { acao: "criar_polilinha", descricao: "Polilinha aberta", params: "pontos[]" },
   { acao: "criar_poligono", descricao: "Polígono fechado", params: "pontos[] (mín. 3)" },
   { acao: "fechar_poligono", descricao: "Fechar polígono selecionado", params: "entidade_id?" },
@@ -273,6 +323,18 @@ export const CAD_AI_IMPLEMENTED_ACTIONS = [
   "mover",
   "copiar",
   "rotacionar",
+  "espelhar",
+  "esticar",
+  "escala",
+  "deslocar",
+  "aparar",
+  "estender",
+  "concordar",
+  "chanfrar",
+  "matriz",
+  "explodir",
+  "unir",
+  "dividir",
   "alterar_id",
   "alterar_cota",
   "renumerar_pontos",
@@ -386,6 +448,33 @@ const SCHEMA_PROPS = {
     description: "Mensagem curta em português confirmando a ação.",
   },
   distancia: { type: "number", description: "Distância em metros." },
+  distancia_1: { type: "number", description: "Primeira distância do chanfro (m)." },
+  distancia_2: { type: "number", description: "Segunda distância do chanfro (m)." },
+  dx: { type: "number", description: "Deslocamento em E (metros). +leste." },
+  dy: { type: "number", description: "Deslocamento em N (metros). +norte." },
+  x2: { type: "number", description: "Segundo ponto E (eixo de espelho / janela)." },
+  y2: { type: "number", description: "Segundo ponto N (eixo de espelho / janela)." },
+  fator: { type: "number", description: "Fator de escala (2 = dobro, 0.8 = 80%)." },
+  raio: { type: "number", description: "Raio da concordância em metros." },
+  manter_original: { type: "boolean", description: "true = manter o original ao espelhar/copiar." },
+  colunas: { type: "number", description: "Colunas da matriz retangular." },
+  linhas: { type: "number", description: "Linhas da matriz retangular." },
+  partes: { type: "number", description: "Quantidade de partes iguais (dividir) ou cópias (matriz polar)." },
+  entidade_corte: { type: "string", description: "ID do objeto limite (aparar/estender)." },
+  vertices_indices: {
+    type: "array",
+    items: { type: "number" },
+    description: "Índices dos vértices a esticar ou da esquina da concordância.",
+  },
+  tipo_matriz: {
+    type: "string",
+    enum: ["retangular", "polar"],
+    description: "Tipo da matriz: retangular ou polar.",
+  },
+  entity_type: {
+    type: "string",
+    description: "Tipo lógico: lote, quadra, rua, linha, polilinha, poligono.",
+  },
   angulo: {
     type: "number",
     description: "Azimute ou ângulo em graus. Em mover/copiar: azimute a partir do norte.",
@@ -423,7 +512,7 @@ const SCHEMA_PROPS = {
   profundidade_quadra_m: {
     type: "number",
     description:
-      "Profundidade do lote em metros, da testada ao fundo (ex.: 25). A malha espaça vias paralelas em ~2× este valor (duas fileiras). A quadra só parte ao meio se couberem duas fileiras com essa profundidade.",
+      "Profundidade do lote em metros, da testada ao fundo (ex.: 30 para lote de 300 m² com testada 10). A malha espaça vias internas em ~2× este valor + largura da via. Nunca empilha mais de duas fileiras sem criar rua.",
   },
   testada_minima_m: {
     type: "number",
@@ -445,12 +534,12 @@ const SCHEMA_PROPS = {
   largura_quadra_m: {
     type: "number",
     description:
-      "Largura da quadra em metros (modo medidas). Use com distancia_quadra_m para dividir a gleba em quadras dessa dimensão, com vias entre elas.",
+      "Obsoleto. A largura da quadra é sempre 2 × profundidade_quadra_m (duas fileiras, uma para cada rua). Não envie.",
   },
   distancia_quadra_m: {
     type: "number",
     description:
-      "Profundidade/distância da quadra em metros (modo medidas). Use com largura_quadra_m. Tem prioridade sobre area_minima_quadra_m2 quando ambos são informados.",
+      "Comprimento da quadra ao longo da rua, em metros. A largura entre as duas ruas é calculada: 2 × profundidade do lote, com um lote virado para cada lado. Tem prioridade sobre area_minima_quadra_m2.",
   },
   orientacao: {
     type: "number",
@@ -503,7 +592,29 @@ const SCHEMA_PROPS = {
   },
   ferramenta: {
     type: "string",
-    enum: ["selecionar", "pan", "linha", "polilinha", "editar_poligono", "confrontacao"],
+    enum: [
+      "selecionar",
+      "pan",
+      "linha",
+      "polilinha",
+      "editar_poligono",
+      "confrontacao",
+      "mover",
+      "rotacionar",
+      "copiar",
+      "espelhar",
+      "esticar",
+      "escala",
+      "deslocar",
+      "aparar",
+      "estender",
+      "concordar",
+      "chanfrar",
+      "matriz",
+      "explodir",
+      "unir",
+      "dividir",
+    ],
     description: "Ferramenta do canvas a ativar.",
   },
   camada: {
@@ -544,6 +655,19 @@ const SCHEMA_PROPS = {
     type: "string",
     description: 'Identificador do lote: "01", "lote 1", "G-01" ou "H-05". Normalize "lote 1" → "01".',
   },
+  osnap: {
+    type: "string",
+    description:
+      "Tipo OSNAP do motor CAD: ENDPOINT, MIDPOINT, CENTER, INTERSECTION, PERPENDICULAR, TANGENT, QUADRANT, NODE, NEAREST, EXTENSION, INSERTION, APPARENT_INTERSECTION. A IA NÃO calcula coordenada — só pede o tipo e o alvo (lote/quadra/nome).",
+  },
+  osnap_origem: {
+    type: "string",
+    description: "OSNAP do ponto inicial da linha (mesmo vocabulário de osnap).",
+  },
+  osnap_destino: {
+    type: "string",
+    description: "OSNAP do ponto final da linha (ex.: PERPENDICULAR na Rua A).",
+  },
   lotes: {
     type: "array",
     items: { type: "string" },
@@ -556,6 +680,14 @@ const SCHEMA_PROPS = {
   area_maxima_m2: {
     type: "number",
     description: "Área máxima em m².",
+  },
+  require_road_access: {
+    type: "boolean",
+    description: "true = todo lote precisa confrontar uma via. Sempre true no motor.",
+  },
+  allow_internal_roads: {
+    type: "boolean",
+    description: "true = criar ruas internas conectadas quando a profundidade da quadra exigir.",
   },
   preservar_ruas: {
     type: "boolean",
@@ -575,9 +707,9 @@ const SCHEMA_PROPS = {
   },
   objetivo: {
     type: "string",
-    enum: ["maximizar_equidade"],
+    enum: ["maximizar_equidade", "maximize_valid_lots"],
     description:
-      'Use "maximizar_equidade" quando o usuário pedir lotes mais iguais / mesma área. NÃO calcule geometria — o motor CAD otimiza.',
+      'maximizar_equidade = lotes mais iguais. maximize_valid_lots = máximo de lotes válidos com acesso viário. NÃO calcule geometria — o motor CAD otimiza.',
   },
   excecoes: {
     type: "array",
@@ -682,6 +814,21 @@ const CAD_AI_RESPONSE_ALIASES: Array<{
     from: "reservar_area",
     description: "Altera a área institucional para o percentual informado. O CAD calcula a geometria. tipo=institucional.",
   },
+  { name: "move_entity", from: "mover", description: "Mover geometria. O CAD executa. dx/dy ou distancia+angulo (0=norte, 90=leste)." },
+  { name: "rotate_entity", from: "rotacionar", description: "Rotacionar geometria. O CAD executa. angulo em graus." },
+  { name: "copy_entity", from: "copiar", description: "Copiar geometria sem alterar o original. O CAD executa." },
+  { name: "mirror_entity", from: "espelhar", description: "Espelhar no eixo (x,y)-(x2,y2). O CAD executa." },
+  { name: "stretch_entity", from: "esticar", description: "Esticar só parte da geometria. O CAD executa." },
+  { name: "scale_entity", from: "escala", description: "Escalar a partir de um ponto. O CAD executa." },
+  { name: "offset_entity", from: "deslocar", description: "Offset/paralela. O CAD executa." },
+  { name: "trim_entity", from: "aparar", description: "Aparar no limite. O CAD executa." },
+  { name: "extend_entity", from: "estender", description: "Estender até o limite. O CAD executa." },
+  { name: "fillet_entity", from: "concordar", description: "Concordância/fillet. O CAD executa." },
+  { name: "chamfer_entity", from: "chanfrar", description: "Chanfro. O CAD executa." },
+  { name: "array_entity", from: "matriz", description: "Matriz retangular ou polar. O CAD executa." },
+  { name: "explode_entity", from: "explodir", description: "Explodir polígono em linhas. O CAD executa." },
+  { name: "join_entities", from: "unir", description: "Unir linhas conectadas. O CAD executa." },
+  { name: "split_entity", from: "dividir", description: "Dividir em partes iguais. O CAD executa." },
 ];
 
 /**
@@ -724,16 +871,28 @@ export function cadAiResponsesTools(): Array<{
  * O name da tool é a própria `acao` de CadAiCommand.
  */
 export const cadAiTools: CadAiTool[] = [
-  tool("criar_ponto", "Criar um ponto nas coordenadas E/N (x/y). Use quando o usuário pedir um ponto novo.", ["x", "y", "z", "novo_id", "texto", "resposta"], ["x", "y"]),
-  tool("criar_linha", "Criar uma linha reta entre dois pontos existentes.", ["pontos", "usarSelecao", "resposta"]),
+  tool("criar_ponto", "Criar um ponto nas coordenadas E/N (x/y) ou no OSNAP de um lote/quadra/entidade. A IA não calcula o snap — informe osnap + lote/quadra/nome.", ["x", "y", "z", "novo_id", "texto", "osnap", "lote", "quadra", "nome", "usarSelecao", "resposta"]),
+  tool("criar_linha", "Criar uma linha reta. Use pontos rotulados ou osnap_origem/osnap_destino no motor CAD (ENDPOINT no lote, PERPENDICULAR na rua). A IA não calcula coordenadas.", ["pontos", "usarSelecao", "osnap", "osnap_origem", "osnap_destino", "lote", "quadra", "nome", "distancia", "angulo", "resposta"]),
   tool("criar_polilinha", "Criar uma polilinha aberta ligando uma sequência de pontos. 'Ligue todos os pontos' usa todos os pontos do contexto.", ["pontos", "usarSelecao", "resposta"]),
   tool("criar_poligono", "Criar um polígono fechado com no mínimo 3 pontos.", ["pontos", "usarSelecao", "resposta"]),
   tool("fechar_poligono", "Fechar a polilinha selecionada, transformando-a em polígono.", ["entidade_id", "usarSelecao", "resposta"]),
   tool("unir_linhas", "Unir duas polilinhas em uma só (informe entidade_ids).", ["entidade_ids", "usarSelecao", "resposta"]),
+  tool("unir", "Unir linhas/polilinhas cujas extremidades se tocam (tolerância 0,001 m).", ["entidade_ids", "usarSelecao", "resposta"]),
   tool("apagar", "Apagar ponto(s) ou entidade(s). Com seleção e 'esse/essa', use usarSelecao=true. Não há ferramenta para apagar só um vértice de polígono.", ["entidade_id", "entidade_ids", "pontos", "id_origem", "forcar", "usarSelecao", "resposta"]),
-  tool("mover", "Mover a entidade selecionada ou indicada. Informe distancia (m) e angulo (azimute em graus).", ["entidade_id", "distancia", "angulo", "usarSelecao", "resposta"], ["distancia", "angulo"]),
-  tool("copiar", "Copiar a entidade com o mesmo deslocamento de mover (distancia + angulo).", ["entidade_id", "distancia", "angulo", "usarSelecao", "resposta"], ["distancia", "angulo"]),
-  tool("rotacionar", "Rotacionar a entidade em torno do centróide. Informe angulo em graus.", ["entidade_id", "angulo", "usarSelecao", "resposta"], ["angulo"]),
+  tool("mover", "Mover entidade/lote/quadra. Use dx/dy ou distancia+angulo (0=norte, 90=leste). 'lote 01 5 m para leste' → lote=01, distancia=5, angulo=90.", ["entidade_id", "entidade_ids", "lote", "quadra", "dx", "dy", "distancia", "angulo", "usarSelecao", "resposta"]),
+  tool("copiar", "Copiar entidade sem alterar o original. Mesmos parâmetros de mover.", ["entidade_id", "entidade_ids", "lote", "quadra", "dx", "dy", "distancia", "angulo", "usarSelecao", "resposta"]),
+  tool("rotacionar", "Rotacionar em torno do centróide ou de x/y. angulo em graus.", ["entidade_id", "entidade_ids", "lote", "quadra", "angulo", "x", "y", "usarSelecao", "resposta"]),
+  tool("espelhar", "Espelhar no eixo (x,y)→(x2,y2). manter_original=true cria cópia.", ["entidade_id", "entidade_ids", "x", "y", "x2", "y2", "manter_original", "usarSelecao", "resposta"]),
+  tool("esticar", "Estica só os vértices da janela (x,y)-(x2,y2) ou vertices_indices.", ["entidade_id", "dx", "dy", "distancia", "angulo", "x", "y", "x2", "y2", "vertices_indices", "usarSelecao", "resposta"]),
+  tool("escala", "Escala a partir de x/y. fator=2 dobra; distancia=50 escala a linha para 50 m.", ["entidade_id", "fator", "distancia", "x", "y", "usarSelecao", "resposta"]),
+  tool("deslocar", "Offset/paralela. distancia em metros; lado=esquerda|direita.", ["entidade_id", "distancia", "lado", "usarSelecao", "resposta"]),
+  tool("aparar", "Aparar alvo no limite. entidade_id=alvo, entidade_corte=limite.", ["entidade_id", "entidade_corte", "entidade_ids", "x", "y", "usarSelecao", "resposta"]),
+  tool("estender", "Estender alvo até o limite. entidade_id=alvo, entidade_corte=limite.", ["entidade_id", "entidade_corte", "entidade_ids", "x", "y", "usarSelecao", "resposta"]),
+  tool("concordar", "Fillet/concordância de raio. Duas linhas ou esquina de polilinha (vertices_indices).", ["entidade_ids", "raio", "distancia", "vertices_indices", "usarSelecao", "resposta"]),
+  tool("chanfrar", "Chanfro. distancia ou distancia_1/distancia_2.", ["entidade_ids", "distancia", "distancia_1", "distancia_2", "usarSelecao", "resposta"]),
+  tool("matriz", "Matriz retangular (colunas, linhas, dx, dy) ou polar (partes, angulo).", ["entidade_id", "colunas", "linhas", "dx", "dy", "distancia", "partes", "angulo", "tipo_matriz", "usarSelecao", "resposta"]),
+  tool("explodir", "Explode polígono/polilinha em linhas.", ["entidade_id", "usarSelecao", "resposta"]),
+  tool("dividir", "Divide linha/polígono/lote em N partes iguais (partes, padrão 2).", ["entidade_id", "lote", "partes", "usarSelecao", "resposta"]),
   tool("alterar_id", "Renomear o rótulo de um ponto (id_origem → novo_id).", ["id_origem", "novo_id", "pontos", "resposta"], ["id_origem", "novo_id"]),
   tool("alterar_cota", "Alterar a cota Z de um ponto.", ["id_origem", "pontos", "z", "resposta"], ["z"]),
   tool("renumerar_pontos", "Renumerar todos os pontos como P1, P2, P3… ('numere os vértices').", ["resposta"]),
@@ -762,7 +921,7 @@ export const cadAiTools: CadAiTool[] = [
   tool("exportar_sigef", "Exportar ODS SIGEF da poligonal fechada selecionada (vértices, E/N, lat/lon e confrontantes) para conferência no INCRA.", ["entidade_id", "usarSelecao", "resposta"]),
   tool(
     "gerar_loteamento",
-    "Divide uma área/gleba selecionada em lotes com vias internas. area_minima_quadra_m2 (ex. 2000) é a área alvo de cada quadra — o motor parte a gleba em quadras desse tamanho com vias entre elas. Alternativa: largura_quadra_m + distancia_quadra_m define a quadra por largura e profundidade. Quadras profundas partem ao meio (divisória de fundos) mesmo sem rua no interior; laterais ortogonais à testada de cada fileira. Restos nas bordas viram lotes (sem vazios). Área verde é recortada — lotes e vias não sobrepõem. vias_existentes_extremidades=true: a via pública já existe FORA da gleba — gera o corredor do lado de fora (não come o terreno) e as vias do loteamento se unem a ela na borda. largura_via_existente_m define a largura dessa rua externa. lados_aresta = índices das arestas com via já existente (só esses lados). Faixa de domínio (rodovia): lados_faixa_dominio + largura_faixa_dominio_m recua a faixa PARA DENTRO da gleba; não recebe lote nem via. entidade_ids = polilinhas de eixo existentes para inserir. Use quando o usuário pedir para lotear, parcelar a gleba, dividir o terreno em lotes ou criar um loteamento.",
+    "Divide uma área/gleba selecionada em lotes com acesso viário obrigatório. TODO lote precisa de testada confrontando uma via — nunca preencha o miolo sem rua. Se a profundidade da quadra for maior que ~2 fileiras, o motor cria ruas internas ligadas à malha. 'quadra de 150 m ao longo da rua com lotes de 300m²' → distancia_quadra_m + area_minima_m2 + testada_minima_m (padrão 10) + profundidade_quadra_m = área/testada + largura_via_m (padrão 10). A largura da quadra é sempre 2 × profundidade do lote (um lote para cada rua); não envie largura_quadra_m. area_minima_quadra_m2 parte a gleba em quadras dessa área. Restos sem acesso viram remanescente, nunca lote inválido nem institucional artificial. Área verde/APP é recortada. vias_existentes_extremidades=true: via pública já existe FORA da gleba. Use quando o usuário pedir para lotear, parcelar, criar ruas internas ou não querer lote sem acesso.",
     [
       "entidade_id",
       "usarSelecao",
@@ -785,6 +944,8 @@ export const cadAiTools: CadAiTool[] = [
       "entidade_ids",
       "orientacao",
       "prefixo_quadra",
+      "require_road_access",
+      "allow_internal_roads",
       "resposta",
     ],
     ["largura_via_m", "profundidade_quadra_m", "testada_minima_m"],
@@ -936,7 +1097,8 @@ Consulta: execute direto. Geometria: descreva e peça confirmação na resposta.
 
 Flags: usarSelecao=true usa a seleção; preservar_ruas=true não altera vias.
 Normalize "ponto 1"→P1, "lote 1"/"lote 01"→"01".
-Lotear gleba nova → gerar_loteamento (peça via, profundidade e testada se faltarem).
+Lotear gleba nova / 'quadra de 150 m com lotes de 300m²' / 'crie ruas internas' / 'não quero lote sem acesso' / 'máximo de lotes possível' → gerar_loteamento(distancia_quadra_m=150, area_minima_m2=300, testada_minima_m=10, profundidade_quadra_m=30, largura_via_m=10, allow_internal_roads=true, require_road_access=true, objetivo=maximize_valid_lots). A largura entre as ruas é 2 × profundidade do lote. Nunca preencha o centro sem via.
+Modificar geometria: mover/copiar/rotacionar/espelhar/esticar/escala/deslocar/aparar/estender/concordar/chanfrar/matriz/explodir/unir/dividir. O motor CAD calcula. 'mova o lote 01 5 m para leste' → mover(lote=01, distancia=5, angulo=90). Sem distância: pergunte, não invente. 'agora 5 metros para direita' completa a operação pendente. Nunca deixe lote sem acesso, fora da quadra ou sobreposto.
 Loteamento já gerado (contexto.loteamento): você decide O QUE fazer; o motor decide COMO.
 Considere camadas, CRS, seleção, histórico e contexto.loteamento.
 
@@ -968,10 +1130,40 @@ const COMPACT_TOOL_NAMES = new Set([
   "zoom_objeto",
   "selecionar",
   "renomear_quadra",
+  "mover",
+  "copiar",
+  "rotacionar",
+  "espelhar",
+  "esticar",
+  "escala",
+  "deslocar",
+  "aparar",
+  "estender",
+  "concordar",
+  "chanfrar",
+  "matriz",
+  "explodir",
+  "unir",
+  "dividir",
+  "move_entity",
+  "rotate_entity",
+  "copy_entity",
+  "mirror_entity",
+  "stretch_entity",
+  "scale_entity",
+  "offset_entity",
+  "trim_entity",
+  "extend_entity",
+  "fillet_entity",
+  "chamfer_entity",
+  "array_entity",
+  "explode_entity",
+  "join_entities",
+  "split_entity",
 ]);
 
 const LOTEAMENTO_INTENT_RE =
-  /lote|quadra|loteamento|gleba|área verde|area verde|institucional|reprojet|reporjet|testada|remanescente|vi[aá]rio|ruas?/i;
+  /lote|quadra|loteamento|gleba|área verde|area verde|institucional|reprojet|reporjet|testada|remanescente|vi[aá]rio|ruas?|mover|copiar|rotacion|espelh|estic|escala|offset|desloc|aparar|estend|concord|fillet|chanfr|matriz|explod|unir|divid/i;
 
 /** Tools enxutas para linguagem natural de loteamento — menos tokens. */
 export function cadAiCompactResponsesTools() {
@@ -984,6 +1176,7 @@ Nunca trate quadra como lote. Nunca confunda loteamento com lote.
 Saída principal: tool call. Texto curto.
 NUNCA invente coordenadas, vértices, GeoJSON, JavaScript, SQL ou shell.
 NUNCA altere geometria direto — só tools. O motor CAD calcula.
+Modificar: mover/move_entity, copiar/copy_entity, rotacionar/rotate_entity, espelhar/mirror_entity, esticar/stretch_entity, escala/scale_entity, deslocar/offset_entity, aparar/trim_entity, estender/extend_entity, concordar/fillet_entity, chanfrar/chamfer_entity, matriz/array_entity, explodir/explode_entity, unir/join_entities, dividir/split_entity. Sem distância: pergunte. 'agora 5 m para direita' completa a pendente.
 dar nome / nomear / identificar quadras → renomear_quadra. Sem nomes: pergunte. NUNCA ajustar_lote.
 ajustar_lote só com lote explícito (lote 01), área e scope=single_lot. Uma tool. otimizar_quadra/reprojetar_loteamento para lotes da quadra ou o loteamento.
 Normalize lote 1 → 01. Operação grande: peça confirmação na resposta curta.`;

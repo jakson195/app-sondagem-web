@@ -22,6 +22,10 @@ export type ClassifyLotInput = {
   areaMinimaInterno: number;
   percentualEsquina?: number;
   index?: number;
+  /** Testada mínima (m). Cada frente de rua tem de atingir este valor. */
+  testadaMinimaM?: number;
+  /** Profundidade mínima do lote (m). */
+  profundidadeMinimaM?: number;
 };
 
 function dropClosing(ring: [number, number][]): [number, number][] {
@@ -167,15 +171,28 @@ export function formatLoteEsquinaTooltip(info: {
   areaM2: number;
   areaMinimaM2: number;
   atende: boolean;
+  testadaM?: number;
+  testadaMinimaM?: number;
+  profundidadeM?: number;
+  profundidadeMinimaM?: number;
 }): string {
   const status = info.atende ? "✓ ATENDE" : "✗ NÃO ATENDE";
-  return [
+  const lines = [
     formatLoteNumeroLabel(info.name, info.index ?? 0),
     "Tipo: ESQUINA",
     `Área: ${formatAreaBr(info.areaM2)}`,
     `Área mínima: ${formatAreaBr(info.areaMinimaM2)}`,
-    `Status: ${status}`,
-  ].join("\n");
+  ];
+  if (info.testadaMinimaM != null && info.testadaMinimaM > 0 && info.testadaM != null) {
+    lines.push(`Testada: ${info.testadaM.toFixed(2)} m (mín. ${info.testadaMinimaM.toFixed(2)} m)`);
+  }
+  if (info.profundidadeMinimaM != null && info.profundidadeMinimaM > 0 && info.profundidadeM != null) {
+    lines.push(
+      `Profundidade: ${info.profundidadeM.toFixed(2)} m (mín. ${info.profundidadeMinimaM.toFixed(2)} m)`,
+    );
+  }
+  lines.push(`Status: ${status}`);
+  return lines.join("\n");
 }
 
 export function classifyLot(input: ClassifyLotInput): CadLoteProps {
@@ -196,13 +213,20 @@ export function classifyLot(input: ClassifyLotInput): CadLoteProps {
     streetRings,
   );
   const testadaM = frontages.reduce((sum, f) => sum + f.lengthM, 0) || dims.testadaM;
+  const menorFrenteM = frontages.length > 0 ? Math.min(...frontages.map((f) => f.lengthM)) : testadaM;
   const profundidadeM =
     dims.profundidadeM > 0.5 ? dims.profundidadeM : testadaM > 0.2 ? areaM2 / testadaM : 0;
+  const testadaMin = input.testadaMinimaM != null && input.testadaMinimaM > 0 ? input.testadaMinimaM : 0;
+  const profMin =
+    input.profundidadeMinimaM != null && input.profundidadeMinimaM > 0 ? input.profundidadeMinimaM : 0;
+  const atendeArea = areaM2 + 1e-6 >= areaMinimaM2;
+  const atendeTestada = !(testadaMin > 0) || menorFrenteM + 0.05 >= testadaMin;
+  const atendeProf = !(profMin > 0) || profundidadeM + 0.05 >= profMin;
   return {
     tipo,
     areaM2,
     areaMinimaM2,
-    atende: areaM2 + 1e-6 >= areaMinimaM2,
+    atende: atendeArea && atendeTestada && atendeProf,
     testadaM,
     profundidadeM,
     ruas: frontages.map((f) => f.streetName),
@@ -214,6 +238,8 @@ export function classifyLot(input: ClassifyLotInput): CadLoteProps {
 export type ApplyLotClassificationParams = {
   percentualEsquina?: number;
   areaMinimaInterno: number;
+  testadaMinimaM?: number;
+  profundidadeMinimaM?: number;
 };
 
 /** Passada de classificação: não altera geometria, numeração nem geração dos INTERNO. */
@@ -232,6 +258,8 @@ export function applyLoteamentoLotClassification(
         streets,
         areaMinimaInterno: params.areaMinimaInterno,
         percentualEsquina: params.percentualEsquina,
+        testadaMinimaM: params.testadaMinimaM,
+        profundidadeMinimaM: params.profundidadeMinimaM,
         index,
       }),
     ]),

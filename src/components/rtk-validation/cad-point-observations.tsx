@@ -128,7 +128,7 @@ export function CadPointObservations({
   if (points.length === 0) return null;
 
   return (
-    <section className="rounded-md border border-[#e5e7eb] bg-white/95 shadow-sm">
+    <section className="pointer-events-auto w-full max-w-xl rounded-md border border-[#e5e7eb] bg-white/95 shadow-sm">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

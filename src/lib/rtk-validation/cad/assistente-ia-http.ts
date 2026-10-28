@@ -9,11 +9,13 @@ import {
   reportOpenAiConfiguration,
 } from "@/lib/rtk-validation/cad/openai-assistant.service";
 import type { AssistenteIaRequest } from "@/lib/rtk-validation/cad/openai-assistant.service";
+import type { CadPendingAction } from "@/lib/cad-ai/pending-action";
 
 type AssistenteIaBody = AssistenteIaRequest & {
   message?: string;
   cadContext?: AssistenteIaRequest["context"];
   conversationId?: string;
+  pendingAction?: CadPendingAction | null;
 };
 
 function publicErrorMessage(err: unknown): { message: string; status: number } {
@@ -70,6 +72,7 @@ export async function postAssistenteIa(request: NextRequest) {
       fileContent: body.fileContent,
       fileName: body.fileName,
       conversationId: body.conversationId,
+      pendingAction: body.pendingAction,
     });
     console.info(
       `[CAD AI] route: ${result.source} | openaiCalled: ${Boolean(result.openaiCalled)} | contextLevel: ${result.contextLevel ?? ""} | contextSize: ${result.contextSize ?? 0}`,
@@ -95,6 +98,9 @@ export async function postAssistenteIa(request: NextRequest) {
       contextSize: result.contextSize,
       intent: result.intent,
       entity: result.entity,
+      pendingAction: result.pendingAction ?? null,
+      applyImmediately: result.applyImmediately,
+      incomingCommand: result.incomingCommand,
     });
   } catch (err) {
     const { message, status } = publicErrorMessage(err);

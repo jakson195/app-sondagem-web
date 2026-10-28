@@ -61,6 +61,9 @@ const commandShape = z
     cota_referencia_m: optionalNumber,
     quadra: optionalString,
     lote: optionalString,
+    osnap: optionalString,
+    osnap_origem: optionalString,
+    osnap_destino: optionalString,
     lotes: optionalStringArray,
     area_alvo_m2: optionalNumber,
     area_maxima_m2: optionalNumber,
@@ -97,10 +100,28 @@ function missingForAction(cmd: CadAiCommand): string[] {
 
   switch (cmd.acao) {
     case "criar_ponto":
-      if (cmd.x == null || !Number.isFinite(cmd.x)) missing.push("x (coordenada E)");
-      if (cmd.y == null || !Number.isFinite(cmd.y)) missing.push("y (coordenada N)");
+      if (
+        (cmd.x == null || !Number.isFinite(cmd.x) || cmd.y == null || !Number.isFinite(cmd.y)) &&
+        !cmd.osnap &&
+        !cmd.lote &&
+        !cmd.quadra
+      ) {
+        missing.push("x/y ou osnap (lote/quadra)");
+      }
       break;
     case "criar_linha":
+      if (
+        pontos.length < 2 &&
+        !sel &&
+        !cmd.osnap &&
+        !cmd.osnap_origem &&
+        !cmd.osnap_destino &&
+        !cmd.lote &&
+        !cmd.quadra
+      ) {
+        missing.push("dois pontos (ex.: P1 e P2) ou osnap_origem/osnap_destino");
+      }
+      break;
     case "medir_distancia":
     case "medir_azimute":
     case "medir_inclinacao":
@@ -118,11 +139,42 @@ function missingForAction(cmd: CadAiCommand): string[] {
       break;
     case "mover":
     case "copiar":
-      if (cmd.distancia == null || !Number.isFinite(cmd.distancia)) missing.push("distancia (metros)");
-      if (cmd.angulo == null || !Number.isFinite(cmd.angulo)) missing.push("angulo (azimute em graus)");
+      if (
+        (cmd.dx == null || cmd.dy == null || !Number.isFinite(cmd.dx) || !Number.isFinite(cmd.dy)) &&
+        (cmd.distancia == null || !Number.isFinite(cmd.distancia))
+      ) {
+        missing.push("distancia (metros)");
+      }
+      if (
+        (cmd.dx == null || cmd.dy == null || !Number.isFinite(cmd.dx) || !Number.isFinite(cmd.dy)) &&
+        (cmd.angulo == null || !Number.isFinite(cmd.angulo))
+      ) {
+        missing.push("angulo (azimute em graus)");
+      }
       break;
     case "rotacionar":
       if (cmd.angulo == null || !Number.isFinite(cmd.angulo)) missing.push("angulo (graus)");
+      break;
+    case "espelhar":
+      if (cmd.x == null || cmd.y == null || cmd.x2 == null || cmd.y2 == null) {
+        missing.push("dois pontos do eixo (x,y e x2,y2)");
+      }
+      break;
+    case "escala":
+      if ((cmd.fator == null || !Number.isFinite(cmd.fator)) && (cmd.distancia == null || !Number.isFinite(cmd.distancia))) {
+        missing.push("fator ou distancia de referência");
+      }
+      break;
+    case "deslocar":
+      if (cmd.distancia == null || !Number.isFinite(cmd.distancia)) missing.push("distancia (metros)");
+      break;
+    case "concordar":
+      if ((cmd.raio == null || !Number.isFinite(cmd.raio)) && (cmd.distancia == null || !Number.isFinite(cmd.distancia))) {
+        missing.push("raio (metros)");
+      }
+      break;
+    case "chanfrar":
+      if (cmd.distancia == null && cmd.distancia_1 == null) missing.push("distancia (metros)");
       break;
     case "alterar_id":
       if (!cmd.id_origem && !pontos[0]) missing.push("id_origem (ponto atual)");
@@ -136,7 +188,7 @@ function missingForAction(cmd: CadAiCommand): string[] {
       if (!cmd.texto?.trim()) missing.push("texto");
       break;
     case "selecionar":
-      if (!cmd.entidade_id && !sel) missing.push("entidade_id");
+      if (!cmd.entidade_id && !sel && !cmd.lote && !cmd.quadra) missing.push("entidade_id");
       break;
     case "perfil_longitudinal":
       if (pontos.length < 1 && !sel) missing.push("pontos inicial e final");

@@ -10,6 +10,17 @@ import type { CadAiCommand, CadAiHistoryMessage, CadAiProjectContext } from "@/l
 import { detectCadContextLevel, type CadContextLevel } from "./minimal-context";
 import { classifyCadIntent, commandFromIntent, logCadAiIntent, validateCadCommand, type CadStructuredIntent } from "./intent";
 import type { CadConversationState } from "./conversation-state";
+import {
+  cancelPendingMessage,
+  createTopicSwitchPending,
+  logPendingAction,
+  pendingRedistributionOf,
+  pendingStillOpenMessage,
+  resolvePendingUserMessage,
+  understoodRedistribution,
+  topicSwitchQuestion,
+  type CadPendingAction,
+} from "./pending-action";
 
 export type CadRouterDecision = {
   route: "local" | "openai";
@@ -18,6 +29,10 @@ export type CadRouterDecision = {
   reason: string;
   resposta?: string;
   intent?: CadStructuredIntent;
+  pendingAction?: CadPendingAction | null;
+  applyImmediately?: boolean;
+  incomingCommand?: string;
+  openaiCalled?: false;
 };
 
 const HELP_RE =
@@ -111,6 +126,17 @@ function countLotsQuery(command: string, context: CadAiProjectContext): CadAiCom
   return [{ acao: "consultar_lotes", resposta: n ? `Existem ${n} lote(s) no projeto.` : "Ainda não há lotes no desenho." }];
 }
 
+function redistributionCommand(action: NonNullable<ReturnType<typeof pendingRedistributionOf>>): CadAiCommand {
+  return {
+    acao: "ajustar_lote",
+    lote: action.targetLot,
+    area_alvo_m2: action.targetArea,
+    scope: "local_redistribution",
+    applyImmediately: true,
+    resposta: understoodRedistribution(action),
+  };
+}
+
 export function cadCommandRouter(
   command: string,
   context: CadAiProjectContext,
@@ -124,6 +150,92 @@ export function cadCommandRouter(
   if (!text) {
     return { route: "local", contextLevel: 0, commands: [], reason: "empty" };
   }
+
+  if (state?.pendingAction) {
+    const resolution = resolvePendingUserMessage(text, state.pendingAction);
+    if (resolution.kind === "complete_modify") {
+      return {
+        route: "local",
+        contextLevel: 1,
+        commands: [resolution.command],
+        reason: "pending-modify-complete",
+        pendingAction: null,
+      };
+    }
+    if (resolution.kind === "update_modify") {
+      return {
+        route: "local",
+        contextLevel: 1,
+        commands: [],
+        reason: "pending-modify-update",
+        resposta: pendingStillOpenMessage(resolution.action),
+        pendingAction: resolution.action,
+      };
+    }
+    if (resolution.kind === "confirm" || resolution.kind === "continue_pending") {
+      const action = resolution.action;
+      logPendingAction("user response", text);
+      logPendingAction("pendingAction resolved", action.type);
+      logPendingAction("executing", "redistribute_lots");
+      return {
+        route: "local",
+        contextLevel: 1,
+        commands: [redistributionCommand(action)],
+        reason: "pending-confirm",
+        resposta: understoodRedistribution(action),
+        pendingAction: null,
+        applyImmediately: true,
+      };
+    }
+    if (resolution.kind === "cancel") {
+      logPendingAction("user response", text);
+      logPendingAction("pendingAction cleared");
+      return {
+        route: "local",
+        contextLevel: 0,
+        commands: [],
+        reason: "pending-cancel",
+        resposta: cancelPendingMessage(),
+        pendingAction: null,
+      };
+    }
+    if (resolution.kind === "switch_confirmed") {
+      logPendingAction("user response", text);
+      logPendingAction("pendingAction cleared");
+      return {
+        route: "local",
+        contextLevel: 0,
+        commands: [],
+        reason: "pending-switch-confirmed",
+        resposta: cancelPendingMessage(),
+        pendingAction: null,
+        incomingCommand: resolution.action.incomingCommand,
+      };
+    }
+    if (resolution.kind === "topic_switch") {
+      const next = createTopicSwitchPending(resolution.action, resolution.incomingCommand);
+      logPendingAction("pendingAction created", next.type);
+      return {
+        route: "local",
+        contextLevel: 0,
+        commands: [],
+        reason: "pending-topic-switch",
+        resposta: topicSwitchQuestion(next),
+        pendingAction: next,
+      };
+    }
+    if (resolution.kind === "remind") {
+      return {
+        route: "local",
+        contextLevel: 0,
+        commands: [],
+        reason: "pending-remind",
+        resposta: pendingStillOpenMessage(resolution.action),
+        pendingAction: resolution.action,
+      };
+    }
+  }
+
   if (isGreetingPhrase(text) || HELP_RE.test(text)) {
     const greeting = isGreetingPhrase(text);
     return {

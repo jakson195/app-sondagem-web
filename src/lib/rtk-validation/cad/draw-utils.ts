@@ -1,6 +1,15 @@
 import type { CadEntity, CadVertex } from "./types";
 import type { CadViewport } from "./viewport";
 import { findPointAtScreen, screenToWorld, snapToPoint } from "./viewport";
+import {
+  DEFAULT_OSNAP_SETTINGS,
+  effectiveOsnapSettings,
+  getSnapPoint,
+  type OsnapSettings,
+  type OsnapType,
+  type SnapResult,
+  type SpatialIndex,
+} from "./snap-engine";
 
 /** Azimute topográfico (0° = Norte, 90° = Leste). */
 export function vertexFromPolar(from: CadVertex, distanceM: number, azimuthDeg: number): CadVertex {
@@ -27,35 +36,72 @@ export function parseDrawNumber(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+export type ResolveDrawOptions = {
+  snapToPoints: boolean;
+  orthogonalMode: boolean;
+  reference?: CadVertex | null;
+  osnap?: OsnapSettings;
+  overrideType?: OsnapType | null;
+  index?: SpatialIndex;
+  excludeIds?: string[];
+};
+
+export function resolveDrawSnap(
+  sx: number,
+  sy: number,
+  viewport: CadViewport,
+  entities: CadEntity[],
+  options: ResolveDrawOptions,
+): SnapResult {
+  const world = screenToWorld(sx, sy, viewport);
+  const raw: CadVertex = { x: world.x, y: world.y, z: 0 };
+  const settings = effectiveOsnapSettings(
+    options.osnap ?? DEFAULT_OSNAP_SETTINGS,
+    options.snapToPoints,
+    options.overrideType,
+  );
+  if (settings.enabled) {
+    const snap = getSnapPoint({
+      screen: { sx, sy },
+      world: raw,
+      viewport,
+      entities,
+      index: options.index,
+      settings,
+      reference: options.reference,
+      overrideType: options.overrideType,
+      excludeIds: options.excludeIds,
+    });
+    if (snap.snapped) return snap;
+    if (options.orthogonalMode && options.reference) {
+      return { snapped: false, point: constrainOrthogonal(options.reference, raw) };
+    }
+    return { snapped: false, point: raw };
+  }
+
+  let point = raw;
+  if (options.snapToPoints) {
+    const screenHit = findPointAtScreen(sx, sy, entities, viewport, 16);
+    if (screenHit) point = { ...screenHit.vertex };
+    else {
+      const snapped = snapToPoint(world.x, world.y, entities, 3);
+      if (snapped) point = snapped;
+    }
+  }
+  if (options.orthogonalMode && options.reference) {
+    point = constrainOrthogonal(options.reference, point);
+  }
+  return { snapped: false, point };
+}
+
 export function resolveDrawVertex(
   sx: number,
   sy: number,
   viewport: CadViewport,
   entities: CadEntity[],
-  options: {
-    snapToPoints: boolean;
-    orthogonalMode: boolean;
-    reference?: CadVertex | null;
-  },
+  options: ResolveDrawOptions,
 ): CadVertex {
-  const world = screenToWorld(sx, sy, viewport);
-  let point: CadVertex = { x: world.x, y: world.y, z: 0 };
-
-  if (options.snapToPoints) {
-    const screenHit = findPointAtScreen(sx, sy, entities, viewport, 16);
-    if (screenHit) {
-      point = { ...screenHit.vertex };
-    } else {
-      const snapped = snapToPoint(world.x, world.y, entities, 3);
-      if (snapped) point = snapped;
-    }
-  }
-
-  if (options.orthogonalMode && options.reference) {
-    point = constrainOrthogonal(options.reference, point);
-  }
-
-  return point;
+  return resolveDrawSnap(sx, sy, viewport, entities, options).point;
 }
 
 export function segmentLengthM(a: CadVertex, b: CadVertex): number {

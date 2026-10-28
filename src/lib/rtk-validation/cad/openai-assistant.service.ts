@@ -13,6 +13,7 @@ import { parseCadAiResponse, parseOpenAiResponsesOutput } from "./ai-interpreter
 import { cadCommandRouter } from "@/lib/cad-ai/command-router";
 import { classifyCadIntent, logCadAiIntent, validateCadCommand, validateIntent } from "@/lib/cad-ai/intent";
 import { getCadConversationState } from "@/lib/cad-ai/conversation-state";
+import { isCadPendingAction, type CadPendingAction } from "@/lib/cad-ai/pending-action";
 import { compactCadContext, contextContainsGeometry, isFollowUpCommand } from "@/lib/cad-ai/minimal-context";
 import {
   conversationSummary,
@@ -32,6 +33,7 @@ export interface AssistenteIaRequest {
   fileContent?: string;
   fileName?: string;
   conversationId?: string;
+  pendingAction?: CadPendingAction | null;
 }
 
 export interface AssistenteIaResponse {
@@ -43,6 +45,9 @@ export interface AssistenteIaResponse {
   contextSize?: number;
   intent?: string;
   entity?: string;
+  pendingAction?: CadPendingAction | null;
+  applyImmediately?: boolean;
+  incomingCommand?: string;
 }
 
 export const ASSISTENTE_IA_UNAVAILABLE =
@@ -344,6 +349,9 @@ export async function interpretAssistenteIaCommand(body: AssistenteIaRequest): P
   }
 
   const fileContent = body.fileContent ?? "";
+  if (body.pendingAction && isCadPendingAction(body.pendingAction) && body.conversationId) {
+    upsertCadConversationState(body.conversationId, { pendingAction: body.pendingAction });
+  }
   const state = getCadConversationState(body.conversationId);
   const intent = classifyCadIntent(command, body.context, body.history, state);
   const routed = cadCommandRouter(command, body.context, body.history, state);
@@ -360,7 +368,15 @@ export async function interpretAssistenteIaCommand(body: AssistenteIaRequest): P
   if (routed.route === "local" && (routed.commands.length || routed.resposta)) {
     const commands = withFile(routed.commands, fileContent, body.fileName);
     recordCadAiLocalRoute(commands.map((cmd) => cmd.acao).join(",") || routed.reason, routed.contextLevel);
-    if (commands.length) rememberConversation(body, commands, intent.intent, intent.entity);
+    if (routed.pendingAction !== undefined) {
+      upsertCadConversationState(body.conversationId, { pendingAction: routed.pendingAction });
+    }
+    if (commands.length && routed.reason !== "pending-confirm") {
+      rememberConversation(body, commands, intent.intent, intent.entity);
+    }
+    if (routed.reason === "pending-confirm" || routed.reason === "pending-cancel" || routed.reason === "pending-switch-confirmed") {
+      upsertCadConversationState(body.conversationId, { pendingAction: null });
+    }
     return withIntent({
       commands,
       source: "local",
@@ -368,6 +384,9 @@ export async function interpretAssistenteIaCommand(body: AssistenteIaRequest): P
       openaiCalled: false,
       contextLevel: routed.contextLevel,
       contextSize: 0,
+      pendingAction: routed.pendingAction ?? null,
+      applyImmediately: routed.applyImmediately,
+      incomingCommand: routed.incomingCommand,
     });
   }
 

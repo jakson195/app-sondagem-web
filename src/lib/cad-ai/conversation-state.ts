@@ -1,3 +1,5 @@
+import type { CadPendingAction } from "./pending-action";
+
 export type CadConversationState = {
   conversationId: string;
   quadraAtual: string | null;
@@ -11,6 +13,7 @@ export type CadConversationState = {
   lastContextLevel: number;
   pendingIntent: string | null;
   pendingEntity: string | null;
+  pendingAction: CadPendingAction | null;
 };
 
 const sessions = new Map<string, CadConversationState>();
@@ -46,6 +49,7 @@ export function upsertCadConversationState(
     lastContextLevel: 0,
     pendingIntent: null,
     pendingEntity: null,
+    pendingAction: null,
   };
   const next: CadConversationState = { ...prev, ...patch, conversationId };
   sessions.set(conversationId, next);
@@ -90,5 +94,27 @@ export function conversationSummary(state: CadConversationState | null): Record<
   if (state.exigirAcesso) out.exigirAcesso = true;
   if (state.resumo) out.resumo = state.resumo.slice(0, 160);
   if (state.pendingIntent) out.pendingIntent = state.pendingIntent;
+  if (state.pendingAction) {
+    if (state.pendingAction.type === "pending_modify") {
+      out.pendingAction = {
+        type: state.pendingAction.type,
+        action: state.pendingAction.action,
+        missing: state.pendingAction.missing,
+        lote: state.pendingAction.lote,
+      };
+    } else {
+      out.pendingAction = {
+        type: state.pendingAction.type,
+        targetLot:
+          state.pendingAction.type === "confirm_redistribution"
+            ? state.pendingAction.targetLot
+            : state.pendingAction.previous.targetLot,
+        targetArea:
+          state.pendingAction.type === "confirm_redistribution"
+            ? state.pendingAction.targetArea
+            : state.pendingAction.previous.targetArea,
+      };
+    }
+  }
   return Object.keys(out).length ? out : undefined;
 }

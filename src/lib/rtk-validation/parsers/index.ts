@@ -3,6 +3,7 @@ import { parseCsvOrTxt } from "./csv";
 import { parseDxf } from "./dxf";
 import { parseExcelBuffer } from "./excel";
 import { parseGeoJson } from "./geojson";
+import { parseSurveyMatrix } from "./survey-matrix";
 
 export type SupportedFormat = "csv" | "txt" | "dxf" | "geojson" | "xlsx" | "xls";
 
@@ -45,16 +46,57 @@ export function parseSurveyFile(filename: string, content: string): ParseResult 
   return { points, format, warnings };
 }
 
-export async function parseSurveyUpload(filename: string, data: string | ArrayBuffer): Promise<ParseResult> {
+export async function parseSurveyUpload(
+  filename: string,
+  data: string | ArrayBuffer,
+  map?: Partial<import("./survey-matrix").SurveyColumnMap>,
+): Promise<ParseResult> {
   if (isExcelFilename(filename)) {
     const buffer = data instanceof ArrayBuffer ? data : new TextEncoder().encode(data).buffer;
+    if (map) {
+      const XLSX = await import("xlsx");
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
+      const sheetName = workbook.SheetNames[0];
+      const rows = sheetName
+        ? XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false })
+        : [];
+      const { points, warnings } = parseSurveyMatrix(rows, map);
+      const ext = filename.split(".").pop()?.toLowerCase();
+      return { points, format: ext === "xls" ? "xls" : "xlsx", warnings };
+    }
     const { points, warnings } = await parseExcelBuffer(buffer, filename);
     const ext = filename.split(".").pop()?.toLowerCase();
     return { points, format: ext === "xls" ? "xls" : "xlsx", warnings };
   }
 
   const content = typeof data === "string" ? data : new TextDecoder("utf-8").decode(data);
+  const format = detectFormat(filename, content);
+  if ((format === "csv" || format === "txt") && map) {
+    const { parseDelimitedPreview } = await import("./csv");
+    const { points, warnings } = parseSurveyMatrix(parseDelimitedPreview(content), map);
+    return { points, format, warnings };
+  }
   return parseSurveyFile(filename, content);
 }
 
-export { parseSurveyMatrix } from "./survey-matrix";
+export async function peekSurveyTable(filename: string, data: string | ArrayBuffer) {
+  const { suggestSurveyColumns, stringifySurveyRows } = await import("./survey-matrix");
+  if (isExcelFilename(filename)) {
+    const buffer = data instanceof ArrayBuffer ? data : new TextEncoder().encode(data).buffer;
+    const XLSX = await import("xlsx");
+    const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
+    const sheetName = workbook.SheetNames[0];
+    const raw = sheetName
+      ? XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false })
+      : [];
+    const rows = stringifySurveyRows(raw);
+    return { format: filename.split(".").pop()?.toLowerCase() ?? "xlsx", ...suggestSurveyColumns(rows), rows };
+  }
+  const content = typeof data === "string" ? data : new TextDecoder("utf-8").decode(data);
+  const { parseDelimitedPreview } = await import("./csv");
+  const rows = parseDelimitedPreview(content);
+  return { format: detectFormat(filename, content), ...suggestSurveyColumns(rows), rows };
+}
+
+export { parseSurveyMatrix, suggestSurveyColumns, stringifySurveyRows, type SurveyColumnMap } from "./survey-matrix";
+export { parseDelimitedPreview } from "./csv";

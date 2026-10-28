@@ -9,6 +9,15 @@ export {
   isGreetingPhrase,
 } from "./parse";
 export {
+  isAffirmativeResponse,
+  isNegativeResponse,
+  resolvePendingUserMessage,
+  createRedistributionPending,
+  createTopicSwitchPending,
+  isCadPendingAction,
+} from "./pending-action";
+export type { CadPendingAction, CadPendingRedistribution, CadPendingTopicSwitch, CadPendingModify } from "./pending-action";
+export {
   isReadOnlyAssistantAction,
   isMutatingAssistantAction,
   isDestructiveAssistantAction,
@@ -37,6 +46,8 @@ export {
   otimizarQuadra,
   ajustarLote,
   redistribuirLotes,
+  executeRedistributionPending,
+  countChangedLots,
   analisarLoteamento,
   paramsFromCommand,
   renomearQuadra,

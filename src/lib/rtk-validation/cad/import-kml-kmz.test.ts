@@ -8,6 +8,8 @@ import {
   parseKmlToCadGeoms,
   parseKmzBufferToCadGeoms,
 } from "./import-kml-kmz";
+import { exportCadProjectKml, exportCadProjectKmz } from "./kml-io";
+import type { CadProject } from "./types";
 
 const POLYGON_KML = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
@@ -77,6 +79,47 @@ describe("KML/KMZ para vértices CAD", () => {
     assert.ok(poly && poly.kind === "polyline");
     assert.equal(poly.vertices.length, 4);
     assert.equal(poly.name, "Quadra 01");
+  });
+
+  it("exporta KMZ em lon/lat e reimporta nas mesmas coordenadas UTM", () => {
+    const georef = createCadGeorefContext(23);
+    const parsed = parseKmlToCadGeoms(POLYGON_KML, georef);
+    const poly = parsed.geoms.find((g) => g.kind === "polyline" && g.closed);
+    assert.ok(poly && poly.kind === "polyline");
+    const project: CadProject = {
+      name: "Loteamento",
+      crs: "EPSG:31983",
+      layers: [{ id: "lotes", name: "Lotes", color: "#22c55e", visible: true, locked: false }],
+      entities: [
+        { id: "q1", type: "polyline", layerId: "lotes", closed: true, name: "Quadra 01", vertices: poly.vertices },
+        { id: "m1", type: "point", layerId: "lotes", x: poly.vertices[0]!.x, y: poly.vertices[0]!.y, z: 12, label: "Marco" },
+      ],
+    };
+    const kml = exportCadProjectKml(project);
+    assert.match(kml, /<Folder><name>Lotes<\/name>/);
+    assert.match(kml, /<Polygon>/);
+    assert.match(kml, /-46\.633\d+,-23\.550\d+/);
+
+    const kmz = exportCadProjectKmz(project);
+    const back = parseKmzBufferToCadGeoms(kmz.buffer.slice(kmz.byteOffset, kmz.byteOffset + kmz.byteLength), georef);
+    const backPoly = back.geoms.find((g) => g.kind === "polyline" && g.closed);
+    assert.ok(backPoly && backPoly.kind === "polyline");
+    assert.equal(backPoly.vertices.length, 4);
+    for (let i = 0; i < 4; i++) {
+      assert.ok(Math.abs(backPoly.vertices[i]!.x - poly.vertices[i]!.x) < 0.01);
+      assert.ok(Math.abs(backPoly.vertices[i]!.y - poly.vertices[i]!.y) < 0.01);
+    }
+    assert.ok(back.geoms.some((g) => g.kind === "point" && g.label === "Marco"));
+  });
+
+  it("recusa KML de desenho sem georreferência", () => {
+    const project: CadProject = {
+      name: "Local",
+      crs: "",
+      layers: [{ id: "draw", name: "Desenho", color: "#ffffff", visible: true, locked: false }],
+      entities: [{ id: "l", type: "polyline", layerId: "draw", vertices: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 5, z: 0 }] }],
+    };
+    assert.throws(() => exportCadProjectKml(project), /georreferenc/);
   });
 
   it("interpreta tuples lon,lat,elev", () => {

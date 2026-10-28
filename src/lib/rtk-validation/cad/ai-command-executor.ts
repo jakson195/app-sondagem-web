@@ -18,6 +18,8 @@ import {
   translateVertex,
 } from "./ai-geometry-utils";
 import { parsePointReferenceList, resolvePointLabels } from "./ai-point-utils";
+import { vertexFromPolar } from "./draw-utils";
+import { resolveNamedSnap } from "./snap-named";
 import {
   CONTOUR_LAYER,
   extractSurveyElevationPoints,
@@ -64,6 +66,7 @@ import { importSurveyPointsToProject } from "./import-survey-points";
 import { buildSigefOdsBytes, sigefOdsFilename } from "./export-sigef-ods";
 import { defaultMemorialForm } from "./memorial-types";
 import {
+  formatLoteamentoCoverageNotice,
   generateLoteamento,
   LoteamentoError,
   parseReservaCanto,
@@ -73,6 +76,8 @@ import {
   subdivideQuadraEmLotes,
   type ReservaAreaLado,
 } from "./lot-subdivision";
+import { formatLoteamentoAccessSummary } from "./lot-access";
+import { applyModifyCommand } from "./modify-ops";
 import {
   DEFAULT_PERCENTUAL_ESQUINA,
   resolveAreaMinimaInterno,
@@ -92,6 +97,7 @@ import {
   collectReservaLegalRings,
   EIXO_NEED_LOTEAMENTO,
   isLoteamentoEixoPolyline,
+  isLoteamentoLotEntity,
   stripPreviousAreaUtil,
   stripPreviousFaixaDominio,
   stripPreviousRemanescente,
@@ -229,6 +235,24 @@ const FERRAMENTA_TO_TOOL: Record<string, CadTool> = {
   inserir_coordenadas: "select",
   excluir_ponto: "deletePoint",
   alterar_cota: "editElevation",
+  mover: "move",
+  rotacionar: "rotate",
+  copiar: "copy",
+  espelhar: "mirror",
+  esticar: "stretch",
+  escala: "scale",
+  deslocar: "offset",
+  offset: "offset",
+  aparar: "trim",
+  trim: "trim",
+  estender: "extend",
+  concordar: "fillet",
+  fillet: "fillet",
+  chanfrar: "chamfer",
+  matriz: "array",
+  explodir: "explode",
+  unir: "join",
+  dividir: "split",
 };
 
 const LAYER_ID_ALIASES: Record<string, string> = {
@@ -461,35 +485,94 @@ export function executeCadAiCommand(
 
   switch (command.acao) {
     case "criar_ponto": {
-      if (command.x != null && command.y != null) {
+      const named = command.osnap || command.lote || command.quadra
+        ? resolveNamedSnap(nextProject, {
+            type: command.osnap ?? "ENDPOINT",
+            lote: command.lote,
+            quadra: command.quadra,
+            nome: command.nome,
+            entidade_id: command.entidade_id,
+            selectedId,
+          })
+        : null;
+      const x = named?.point.x ?? command.x;
+      const y = named?.point.y ?? command.y;
+      if (x != null && y != null) {
         const pt = {
           id: newId("pt"),
           type: "point" as const,
           layerId: "draw",
-          x: command.x,
-          y: command.y,
-          z: command.z ?? 0,
+          x,
+          y,
+          z: command.z ?? named?.point.z ?? 0,
           label: command.novo_id ?? command.texto ?? `P${nextProject.entities.filter((e) => e.type === "point").length + 1}`,
         };
         nextProject = { ...nextProject, entities: [...nextProject.entities, pt] };
         selectedId = pt.id;
         sideEffects.push({ type: "fit_view", entities: nextProject.entities });
-        message = message || `Ponto ${pt.label} criado em E ${formatCoordBr(pt.x)}, N ${formatCoordBr(pt.y)}.`;
+        message =
+          message ||
+          (named
+            ? `Ponto ${pt.label} no ${named.type} (${named.entityId}) em E ${formatCoordBr(pt.x)}, N ${formatCoordBr(pt.y)}.`
+            : `Ponto ${pt.label} criado em E ${formatCoordBr(pt.x)}, N ${formatCoordBr(pt.y)}.`);
       } else {
-        return fail(project, "Informe coordenadas (x, y) ou use importar para pontos em lote.");
+        return fail(project, "Informe coordenadas (x, y) ou um OSNAP de lote/quadra.");
       }
       break;
     }
 
     case "criar_linha": {
       const labels = command.pontos ?? [];
-      if (labels.length < 2) return fail(project, "Informe dois pontos para a linha.");
-      const { vertices, missing } = resolvePointLabels(nextProject.entities, labels.slice(0, 2));
-      if (missing.length) return fail(project, `Pontos não encontrados: ${missing.join(", ")}.`);
-      const entity = { id: newId("ln"), type: "line" as const, layerId: "draw", start: vertices[0], end: vertices[1] };
+      let start: CadVertex | undefined;
+      let end: CadVertex | undefined;
+      if (labels.length >= 2) {
+        const resolved = resolvePointLabels(nextProject.entities, labels.slice(0, 2));
+        if (!resolved.missing.length) {
+          start = resolved.vertices[0];
+          end = resolved.vertices[1];
+        } else if (!command.osnap && !command.osnap_origem && !command.osnap_destino) {
+          return fail(project, `Pontos não encontrados: ${resolved.missing.join(", ")}.`);
+        }
+      }
+      if (!start && command.usarSelecao && selectedId) {
+        const selected = nextProject.entities.find((e) => e.id === selectedId);
+        if (selected?.type === "point") start = { x: selected.x, y: selected.y, z: selected.z };
+        else if (selected?.type === "line") start = selected.end;
+        else if (selected?.type === "polyline" && selected.vertices[0]) start = selected.vertices[0];
+      }
+      if (!start && (command.osnap_origem || command.osnap || command.lote || command.quadra)) {
+        const origin = resolveNamedSnap(nextProject, {
+          type: command.osnap_origem ?? command.osnap ?? "ENDPOINT",
+          lote: command.lote,
+          quadra: command.osnap_destino ? undefined : command.quadra,
+          nome: command.osnap_destino ? undefined : command.nome,
+          entidade_id: command.entidade_id,
+          selectedId,
+        });
+        if (origin) start = origin.point;
+      }
+      if (!end && (command.osnap_destino || command.osnap || command.nome)) {
+        const dest = resolveNamedSnap(nextProject, {
+          type: command.osnap_destino ?? command.osnap ?? "PERPENDICULAR",
+          lote: command.osnap_origem ? undefined : command.lote,
+          quadra: command.quadra,
+          nome: command.nome,
+          entidade_id: command.osnap_origem ? undefined : command.entidade_id,
+          from: start,
+          selectedId,
+        });
+        if (dest) end = dest.point;
+      }
+      if (start && !end && command.distancia != null && command.angulo != null) {
+        end = vertexFromPolar(start, command.distancia, command.angulo);
+      }
+      if (!start || !end) {
+        return fail(project, "Informe dois pontos, OSNAP de origem/destino, ou origem + distância/ângulo.");
+      }
+      const entity = { id: newId("ln"), type: "line" as const, layerId: "draw", start, end };
       nextProject = { ...nextProject, entities: [...nextProject.entities, entity] };
       selectedId = entity.id;
-      message = message || `Linha criada entre ${labels[0]} e ${labels[1]}.`;
+      message = message || (labels.length >= 2 ? `Linha criada entre ${labels[0]} e ${labels[1]}.` : "Linha criada com OSNAP do motor CAD.");
       break;
     }
 
@@ -558,27 +641,56 @@ export function executeCadAiCommand(
       break;
     }
 
-    case "unir_linhas": {
-      const ids = command.entidade_ids ?? (command.entidade_id ? [command.entidade_id] : []);
-      const pls = ids
-        .map((id) => nextProject.entities.find((e) => e.id === id))
-        .filter((e): e is CadPolylineEntity => e?.type === "polyline");
-      if (pls.length < 2) return fail(project, "Selecione duas polilinhas para unir (entidade_ids).");
-      const merged = [...pls[0].vertices, ...pls[1].vertices.slice(1)];
-      const entity: CadPolylineEntity = {
-        id: newId("pl"),
-        type: "polyline",
-        layerId: "draw",
-        vertices: merged,
-        closed: false,
-        name: "Polilinha unida",
-      };
-      nextProject = {
-        ...nextProject,
-        entities: [...nextProject.entities.filter((e) => !ids.includes(e.id)), entity],
-      };
-      selectedId = entity.id;
-      message = message || "Polilinhas unidas.";
+    case "unir_linhas":
+    case "unir":
+    case "mover":
+    case "copiar":
+    case "rotacionar":
+    case "espelhar":
+    case "esticar":
+    case "escala":
+    case "deslocar":
+    case "aparar":
+    case "estender":
+    case "concordar":
+    case "chanfrar":
+    case "matriz":
+    case "explodir":
+    case "dividir": {
+      const extraIds = [
+        ...(command.entidade_ids ?? []),
+        ...(command.usarSelecao && selectedId ? [selectedId] : []),
+      ];
+      const modified = applyModifyCommand(nextProject, command, {
+        selectedId,
+        extraIds,
+      });
+      if (!modified.ok) {
+        if (modified.missing?.length) {
+          return {
+            ok: false,
+            project,
+            message: modified.message,
+            pendingAction: {
+              type: "pending_modify",
+              status: "pending",
+              action: command.acao,
+              originalCommand: command.resposta ?? command.acao,
+              lote: command.lote,
+              quadra: command.quadra,
+              entidade_id: command.entidade_id ?? selectedId ?? undefined,
+              entidade_ids: command.entidade_ids,
+              collected: command,
+              missing: modified.missing,
+              createdAt: new Date().toISOString(),
+            },
+          };
+        }
+        return fail(project, modified.message);
+      }
+      nextProject = modified.project;
+      selectedId = modified.selectedIds[0] ?? selectedId;
+      message = message || modified.message;
       break;
     }
 
@@ -627,50 +739,6 @@ export function executeCadAiCommand(
       nextProject = { ...nextProject, entities: nextProject.entities.filter((e) => !ids.has(e.id)) };
       selectedId = null;
       message = message || `${ids.size} entidade(s) removida(s).`;
-      break;
-    }
-
-    case "mover":
-    case "copiar": {
-      const id = command.entidade_id ?? selectedId;
-      if (!id) return fail(project, "Selecione a entidade a mover/copiar.");
-      const entity = nextProject.entities.find((e) => e.id === id);
-      if (!entity) return fail(project, "Entidade não encontrada.");
-      const dist = command.distancia ?? 1;
-      const ang = command.angulo ?? 0;
-      const fn = (v: CadVertex) => translateVertex(v, dist, ang);
-      const transformed = transformEntity(entity, fn);
-      if (command.acao === "copiar") {
-        const copy = { ...transformed, id: newId(entity.type === "point" ? "pt" : entity.type === "line" ? "ln" : "pl") };
-        nextProject = { ...nextProject, entities: [...nextProject.entities, copy] };
-        selectedId = copy.id;
-        message = message || `Cópia deslocada ${dist} m, azimute ${ang}°.`;
-      } else {
-        nextProject = {
-          ...nextProject,
-          entities: nextProject.entities.map((e) => (e.id === id ? transformed : e)),
-        };
-        message = message || `Entidade movida ${dist} m, azimute ${ang}°.`;
-      }
-      break;
-    }
-
-    case "rotacionar": {
-      const id = command.entidade_id ?? selectedId;
-      if (!id) return fail(project, "Selecione a entidade a rotacionar.");
-      const entity = nextProject.entities.find((e) => e.id === id);
-      if (!entity) return fail(project, "Entidade não encontrada.");
-      const angle = command.angulo ?? 90;
-      let center: CadVertex = { x: 0, y: 0, z: 0 };
-      if (entity.type === "point") center = { x: entity.x, y: entity.y, z: entity.z };
-      else if (entity.type === "line") center = polygonCentroid([entity.start, entity.end]);
-      else center = polygonCentroid(entity.vertices);
-      const fn = (v: CadVertex) => rotateVertex(v, center, angle);
-      nextProject = {
-        ...nextProject,
-        entities: nextProject.entities.map((e) => (e.id === id ? transformEntity(e, fn) : e)),
-      };
-      message = message || `Entidade rotacionada ${angle}°.`;
       break;
     }
 
@@ -1144,6 +1212,14 @@ export function executeCadAiCommand(
 
     case "exportar": {
       const fmt = (command.formato ?? "dxf").toLowerCase();
+      if (fmt === "kml" || fmt === "kmz") {
+        if (nextProject.entities.length === 0) return fail(project, "Projeto sem geometrias para exportar.");
+        try {
+          exportCadProjectKml(nextProject);
+        } catch (err) {
+          return fail(project, err instanceof Error ? err.message : "Falha na exportação KML.");
+        }
+      }
       if (fmt === "kml") {
         const kml = exportCadProjectKml(nextProject);
         sideEffects.push({
@@ -1236,14 +1312,23 @@ export function executeCadAiCommand(
           : command.area_quadra_m2 != null && Number.isFinite(command.area_quadra_m2)
             ? Math.max(0, command.area_quadra_m2)
             : 0;
-      const larguraQuadraM =
-        command.largura_quadra_m != null && Number.isFinite(command.largura_quadra_m)
-          ? Math.max(0, command.largura_quadra_m)
-          : 0;
-      const profundidadeBlocoM =
-        command.distancia_quadra_m != null && Number.isFinite(command.distancia_quadra_m)
-          ? Math.max(0, command.distancia_quadra_m)
-          : 0;
+      const comprimentoQuadraM = (() => {
+        const along =
+          command.distancia_quadra_m != null && Number.isFinite(command.distancia_quadra_m)
+            ? Math.max(0, command.distancia_quadra_m)
+            : 0;
+        if (along > 0) return along;
+        const legacy =
+          command.largura_quadra_m != null && Number.isFinite(command.largura_quadra_m)
+            ? Math.max(0, command.largura_quadra_m)
+            : 0;
+        return legacy;
+      })();
+      /**
+       * Entre as faces das duas ruas: duas fileiras, uma virada para cada lado.
+       * A folga cobre o recorte da via para a profundidade não sair abaixo do mínimo.
+       */
+      const larguraEntreRuasM = profundidadeQuadraM * 2 + 0.5;
       const larguraCalcadaM =
         command.largura_calcada_m != null && Number.isFinite(command.largura_calcada_m)
           ? Math.max(0, command.largura_calcada_m)
@@ -1317,11 +1402,12 @@ export function executeCadAiCommand(
           larguraViaM,
           profundidadeQuadraM,
           testadaMinimaM,
-          areaMinimaM2: command.area_minima_m2,
+          areaMinimaM2: command.area_minima_m2 ?? command.area_alvo_m2,
+          allowInternalRoads: command.allow_internal_roads !== false,
           percentualEsquina: command.percentual_esquina,
           areaMinimaQuadraM2,
-          larguraQuadraM: larguraQuadraM > 0 ? larguraQuadraM : undefined,
-          profundidadeBlocoM: profundidadeBlocoM > 0 ? profundidadeBlocoM : undefined,
+          larguraQuadraM: comprimentoQuadraM > 0 ? larguraEntreRuasM : undefined,
+          profundidadeBlocoM: comprimentoQuadraM > 0 ? comprimentoQuadraM : undefined,
           orientacao: command.orientacao,
           prefixoQuadra: command.prefixo_quadra?.trim() || "Quadra",
           larguraCalcadaM,
@@ -1464,9 +1550,25 @@ export function executeCadAiCommand(
         const areaLotes = result.lotes.reduce((s, l) => s + l.area_m2, 0);
         const rlM2 = reservaLegal.reduce((s, ring) => s + polygonAreaPlanarM2(ring), 0);
         const rlShow = rlM2 > 0 ? rlM2 : result.areaGlebaM2 * 0.2;
+        const glebaXs = coords.map((p) => p[0]);
+        const glebaYs = coords.map((p) => p[1]);
+        const accessSummary = formatLoteamentoAccessSummary({
+          widthM: Math.max(...glebaXs) - Math.min(...glebaXs),
+          heightM: Math.max(...glebaYs) - Math.min(...glebaYs),
+          lotCount: result.lotes.length,
+          averageArea: result.report.averageArea,
+          internalStreetCount: result.report.internalStreetCount,
+          lotsWithoutRoadAccess: result.report.lotsWithoutRoadAccess,
+          lotsWithoutFrontage: result.report.lotsWithoutFrontage,
+          residualArea: result.report.residualArea,
+        });
+        const accessWarn = result.report.accessWarning
+          ? `\n${result.report.accessWarning}\nAlternativas: criar ruas internas; reduzir a quantidade de lotes; alterar área alvo, testada ou largura das ruas; permitir cul-de-sac.`
+          : "";
+        const coverageNotice = result.coverage ? `\n${formatLoteamentoCoverageNotice(result.coverage)}` : "";
         message =
           message ||
-          `Loteamento gerado: ${result.lotes.length} lotes em ${result.quadras} quadras, lotes ${formatAreaBr(areaLotes)}. Total ${formatAreaBr(result.areaGlebaM2)}. RL 20% ${formatAreaBr(rlShow)}. Ruas ${formatAreaBr(result.areaViasM2)}. Área útil loteada ${formatAreaBr(areaLotes)}.`;
+          `${accessSummary}\nLotes ${formatAreaBr(areaLotes)}. Total ${formatAreaBr(result.areaGlebaM2)}. Área útil ${formatAreaBr(result.areaUtilAlvoM2)}. RL 20% ${formatAreaBr(rlShow)}. Ruas ${formatAreaBr(result.areaViasM2)}.${accessWarn}${coverageNotice}`;
       } catch (err) {
         const text = err instanceof LoteamentoError || err instanceof Error ? err.message : "Falha ao gerar loteamento.";
         return fail(project, text);
@@ -1680,7 +1782,7 @@ export function executeCadAiCommand(
       if (!tool) {
         return fail(
           project,
-          "Informe a ferramenta: selecionar, pan, linha, polilinha, editar_poligono ou confrontacao.",
+          "Informe a ferramenta: selecionar, pan, linha, polilinha, editar_poligono, confrontacao ou uma ferramenta de modificar.",
         );
       }
       sideEffects.push({ type: "set_tool", tool });
@@ -1863,6 +1965,19 @@ export function executeCadAiCommand(
     }
 
     case "selecionar": {
+      if (command.quadra && !command.lote) {
+        const key = command.quadra.trim().toUpperCase();
+        const lots = nextProject.entities.filter(
+          (e) =>
+            isLoteamentoLotEntity(e) &&
+            ((e.lote?.quadra ?? "").toUpperCase() === key || (e.name ?? "").toUpperCase().includes(`QUADRA ${key}`)),
+        );
+        if (lots.length > 0) {
+          selectedId = lots[0].id;
+          message = message || `Selecionados ${lots.length} lote(s) da quadra ${command.quadra}.`;
+          break;
+        }
+      }
       if (command.lote || command.lotes?.length || command.quadra) {
         const listed = consultarLotes(nextProject, {
           quadra: command.quadra,

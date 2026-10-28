@@ -48,6 +48,12 @@ function sampleProject(): CadProject {
       [84, 0],
       [-4, 0],
     ],
+    [
+      [-4, 50],
+      [84, 50],
+      [84, 62],
+      [-4, 62],
+    ],
   ];
   const lotsG = rebuildQuadraLotes(quadraG, 10, 25, streets, undefined, "Quadra G");
   const lotsH = rebuildQuadraLotes(quadraH, 10, 25, streets, undefined, "Quadra H");
@@ -238,6 +244,20 @@ describe("parseLoteamentoAssistantCommand", () => {
       assert.equal(cmds?.[0]?.quadra, "G", phrase);
       assert.equal(cmds?.[0]?.area_alvo_m2, 300, phrase);
     }
+  });
+
+  it("quadra 150x150 com lotes de 300m² e ruas internas → gerar_loteamento", () => {
+    const cmds = parseLoteamentoAssistantCommand(
+      "Faça essa quadra de 150x150 com lotes de 300m² e crie ruas internas se precisar.",
+    );
+    assert.equal(cmds?.[0]?.acao, "gerar_loteamento");
+    assert.equal(cmds?.[0]?.largura_quadra_m, 150);
+    assert.equal(cmds?.[0]?.distancia_quadra_m, 150);
+    assert.equal(cmds?.[0]?.area_minima_m2, 300);
+    assert.equal(cmds?.[0]?.testada_minima_m, 10);
+    assert.equal(cmds?.[0]?.profundidade_quadra_m, 30);
+    assert.equal(cmds?.[0]?.require_road_access, true);
+    assert.equal(cmds?.[0]?.allow_internal_roads, true);
   });
 
   it("compõe G 300, H 250 e exceções G-01/G-02", () => {

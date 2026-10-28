@@ -1,8 +1,11 @@
 "use client";
 
-import { Menu, Search, Settings, Sparkles } from "lucide-react";
+import { ArrowLeft, Menu, Search, Settings, Sparkles } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
+import type { CadImportKind, CadInsertKind } from "@/lib/rtk-validation/cad/cad-io-kinds";
+import type { CadGoogleMapType } from "@/lib/google-maps-config";
 import { CadMenu, CadMenuCheck, CadMenuItem, CadMenuSep } from "./cad-ui-menu";
 
 export type CadChromeTabId = "desenho" | "layout" | "planilha";
@@ -25,6 +28,7 @@ type CadChromeHeaderProps = {
   showGrid: boolean;
   paperTone: "white" | "black";
   satelliteOn: boolean;
+  googleMapType: CadGoogleMapType;
   orthophotoOn: boolean;
   showOrthophotoToggle: boolean;
   reliefOn: boolean;
@@ -39,13 +43,15 @@ type CadChromeHeaderProps = {
   onOpenFile: () => void;
   onSaveLocal: () => void;
   onSaveCloud: () => void;
-  onImportDrawing: () => void;
-  onExport: (format: "dxf" | "dwg" | "shp") => void;
+  onImportKind: (kind: CadImportKind) => void;
+  onInsertKind: (kind: CadInsertKind) => void;
+  onExport: (format: "dxf" | "dwg" | "shp" | "kmz") => void;
   onExportOds: () => void;
   onToggleAi: () => void;
   onToggleGrid: (next: boolean) => void;
   onPaperTone: (tone: "white" | "black") => void;
   onToggleSatellite: (next: boolean) => void;
+  onGoogleMapType: (type: CadGoogleMapType) => void;
   onToggleOrthophoto: (next: boolean) => void;
   onToggleRelief: (next: boolean) => void;
   onFitView: () => void;
@@ -58,14 +64,42 @@ type CadChromeHeaderProps = {
 
 export function CadChromeHeader(props: CadChromeHeaderProps) {
   const t = useTranslations("rtkCad");
+  const router = useRouter();
   const [menu, setMenu] = useState<string | null>(null);
   const [locateOpen, setLocateOpen] = useState(false);
 
   const openMenu = (id: string) => setMenu((prev) => (prev === id ? null : id));
   const closeMenu = () => setMenu(null);
+  const goBack = () => {
+    if (typeof window !== "undefined") {
+      try {
+        const ref = document.referrer;
+        if (ref) {
+          const url = new URL(ref);
+          if (url.origin === window.location.origin && !url.pathname.startsWith("/cad")) {
+            router.back();
+            return;
+          }
+        }
+      } catch {
+        /* referrer inválido — cai no dashboard */
+      }
+    }
+    router.push("/dashboard");
+  };
 
   return (
-    <header className="cad-interface flex h-12 shrink-0 items-center gap-1 border-b border-[#e5e7eb] bg-white px-2">
+    <header className="cad-interface pointer-events-auto relative z-[80] isolate flex h-12 shrink-0 items-center gap-1 border-b border-[#e5e7eb] bg-white px-2">
+      <button
+        type="button"
+        onClick={goBack}
+        title={t("chrome.back")}
+        aria-label={t("chrome.back")}
+        className="inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-semibold text-[#0f2848] hover:bg-[#f3f4f6]"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        <span>{t("chrome.back")}</span>
+      </button>
       <button
         type="button"
         onClick={props.onToggleSidebar}
@@ -147,34 +181,6 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
         </CadMenuItem>
         <CadMenuSep />
         <CadMenuItem
-          disabled={props.importingDrawing}
-          onClick={() => {
-            closeMenu();
-            props.onImportDrawing();
-          }}
-        >
-          {t("chrome.importFile")}
-        </CadMenuItem>
-        <CadMenuItem
-          disabled={props.importingDrawing}
-          onClick={() => {
-            closeMenu();
-            props.onImportDrawing();
-          }}
-        >
-          {t("chrome.importDwg")}
-        </CadMenuItem>
-        <CadMenuItem
-          disabled={props.importingDrawing}
-          onClick={() => {
-            closeMenu();
-            props.onImportDrawing();
-          }}
-        >
-          {t("chrome.importDxf")}
-        </CadMenuItem>
-        <CadMenuSep />
-        <CadMenuItem
           disabled={props.exportingFormat !== null}
           onClick={() => {
             closeMenu();
@@ -191,6 +197,15 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
           }}
         >
           {t("actions.exportDxf")}
+        </CadMenuItem>
+        <CadMenuItem
+          disabled={props.exportingFormat !== null}
+          onClick={() => {
+            closeMenu();
+            props.onExport("kmz");
+          }}
+        >
+          {t("actions.exportKmz")}
         </CadMenuItem>
         <CadMenuItem
           disabled={props.exportingFormat !== null}
@@ -215,35 +230,68 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
         open={menu === "import"}
         onOpenChange={(open) => (open ? openMenu("import") : closeMenu())}
         label={t("chrome.import")}
-        title={t("import.drawingHint")}
+        title={t("chrome.import")}
       >
-        <CadMenuItem
-          disabled={props.importingDrawing}
-          onClick={() => {
-            closeMenu();
-            props.onImportDrawing();
-          }}
-        >
-          {t("chrome.importFile")}
-        </CadMenuItem>
-        <CadMenuItem
-          disabled={props.importingDrawing}
-          onClick={() => {
-            closeMenu();
-            props.onImportDrawing();
-          }}
-        >
-          {t("chrome.importDwg")}
-        </CadMenuItem>
-        <CadMenuItem
-          disabled={props.importingDrawing}
-          onClick={() => {
-            closeMenu();
-            props.onImportDrawing();
-          }}
-        >
-          {t("chrome.importDxf")}
-        </CadMenuItem>
+        {(
+          [
+            ["dwg", "DWG"],
+            ["dxf", "DXF"],
+            ["points-txt", "TXT"],
+            ["points-csv", "CSV"],
+            ["points-xlsx", "Excel XLSX"],
+            ["geotiff", "GeoTIFF"],
+            ["ecw", "ECW"],
+            ["jpg", "JPG"],
+            ["png", "PNG"],
+            ["tiff", "TIFF"],
+            ["kml", "KML / KMZ"],
+            ["shp", "SHP"],
+            ["geojson", "GeoJSON"],
+            ["rtk", "Pontos RTK"],
+          ] as Array<[CadImportKind, string]>
+        ).map(([kind, label]) => (
+          <CadMenuItem
+            key={kind}
+            onClick={() => {
+              closeMenu();
+              props.onImportKind(kind);
+            }}
+          >
+            {label}
+          </CadMenuItem>
+        ))}
+      </CadMenu>
+
+      <CadMenu
+        open={menu === "insert"}
+        onOpenChange={(open) => (open ? openMenu("insert") : closeMenu())}
+        label={t("chrome.insert")}
+        title={t("chrome.insert")}
+      >
+        {(
+          [
+            ["point", t("chrome.insertPoint")],
+            ["line", t("chrome.insertLine")],
+            ["polyline", t("chrome.insertPolyline")],
+            ["polygon", t("chrome.insertPolygon")],
+            ["circle", t("chrome.insertCircle")],
+            ["arc", t("chrome.insertArc")],
+            ["text", t("chrome.insertText")],
+            ["dimension", t("chrome.insertDim")],
+            ["block", t("chrome.insertBlock")],
+            ["image", t("chrome.insertImage")],
+          ] as Array<[CadInsertKind, string]>
+        ).map(([kind, label]) => (
+          <CadMenuItem
+            key={kind}
+            onClick={() => {
+              closeMenu();
+              props.onInsertKind(kind);
+            }}
+          >
+            {label}
+          </CadMenuItem>
+        ))}
       </CadMenu>
 
       <CadMenu
@@ -269,6 +317,15 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
           }}
         >
           {props.exportingFormat === "dxf" ? t("export.working") : t("actions.exportDxf")}
+        </CadMenuItem>
+        <CadMenuItem
+          disabled={props.exportingFormat !== null}
+          onClick={() => {
+            closeMenu();
+            props.onExport("kmz");
+          }}
+        >
+          {props.exportingFormat === "kmz" ? t("export.working") : t("actions.exportKmz")}
         </CadMenuItem>
         <CadMenuItem
           disabled={props.exportingFormat !== null}
@@ -303,6 +360,37 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
         {t("chrome.ai")}
       </button>
 
+      <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-[#e5e7eb] p-0.5">
+        {(
+          [
+            ["satellite", t("basemap.mapTypeSatellite")],
+            ["hybrid", t("basemap.mapTypeHybrid")],
+            ["roadmap", t("basemap.mapTypeRoadmap")],
+          ] as Array<[CadGoogleMapType, string]>
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            title={t("basemap.satelliteHint")}
+            onClick={() => {
+              if (props.satelliteOn && props.googleMapType === id) {
+                props.onToggleSatellite(false);
+                return;
+              }
+              props.onGoogleMapType(id);
+              if (!props.satelliteOn) props.onToggleSatellite(true);
+            }}
+            className={`h-7 rounded px-1.5 text-[10px] font-semibold uppercase ${
+              props.satelliteOn && props.googleMapType === id
+                ? "bg-[#0f2848] text-white"
+                : "text-[#374151] hover:bg-[#f3f4f6]"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <CadMenu
         open={menu === "view"}
         onOpenChange={(open) => (open ? openMenu("view") : closeMenu())}
@@ -332,8 +420,37 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
           checked={props.satelliteOn}
           label={t("basemap.satellite")}
           title={t("basemap.satelliteHint")}
-          onChange={props.onToggleSatellite}
+          onChange={(on) => {
+            props.onToggleSatellite(on);
+            if (on) props.onGoogleMapType(props.googleMapType || "satellite");
+          }}
         />
+        <div className="flex gap-1 px-3 py-1" onMouseDown={(e) => e.stopPropagation()}>
+          {(
+            [
+              ["satellite", t("basemap.mapTypeSatellite")],
+              ["hybrid", t("basemap.mapTypeHybrid")],
+              ["roadmap", t("basemap.mapTypeRoadmap")],
+            ] as Array<[CadGoogleMapType, string]>
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                props.onGoogleMapType(id);
+                if (!props.satelliteOn) props.onToggleSatellite(true);
+              }}
+              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                props.satelliteOn && props.googleMapType === id
+                  ? "bg-[#0f2848] text-white"
+                  : "bg-[#f3f4f6] text-[#374151] hover:bg-[#e5e7eb]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         {props.showOrthophotoToggle ? (
           <CadMenuCheck
             checked={props.orthophotoOn}

@@ -8,6 +8,9 @@ export async function GET(request: NextRequest) {
   const x = Number(searchParams.get("x"));
   const y = Number(searchParams.get("y"));
   const source = searchParams.get("source") ?? "mapbox";
+  const mapType = searchParams.get("type") ?? "satellite";
+  const googleLyrs =
+    mapType === "hybrid" ? "y" : mapType === "roadmap" ? "m" : mapType === "terrain" ? "p" : "s";
 
   if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y) || z < 0 || z > 22) {
     return NextResponse.json({ error: "Parâmetros z/x/y inválidos." }, { status: 400 });
@@ -18,12 +21,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Tile fora do intervalo." }, { status: 400 });
   }
 
+  const googleUrl = `https://mt1.google.com/vt/lyrs=${googleLyrs}&hl=pt-BR&x=${x}&y=${y}&z=${z}`;
+  const esriUrl = esriSatelliteTileUrl(z, x, y);
+  const osmUrl = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
   const upstreamUrl =
-    source === "esri"
-      ? esriSatelliteTileUrl(z, x, y)
-      : source === "google"
-        ? `https://mt1.google.com/vt/lyrs=s&hl=pt-BR&x=${x}&y=${y}&z=${z}`
-        : mapboxSatelliteTileUrl(z, x, y);
+    source === "esri" ? esriUrl : source === "google" ? googleUrl : mapboxSatelliteTileUrl(z, x, y);
+  const fallbackUrl = mapType === "roadmap" ? osmUrl : esriUrl;
 
   if (!upstreamUrl) {
     return NextResponse.json(
@@ -32,28 +35,28 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const tileHeaders = {
+    Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    Referer: source === "google" ? "https://www.google.com/" : "https://www.openstreetmap.org/",
+  };
+
   try {
-    const upstream = await fetch(upstreamUrl, {
-      headers: {
-        Accept: "image/*",
-        "User-Agent": "DatageoNTRIP-CAD/1.0",
-      },
+    let upstream = await fetch(upstreamUrl, {
+      headers: tileHeaders,
       next: { revalidate: 86400 },
     });
 
+    if (!upstream.ok && source !== "esri") {
+      const fallback = await fetch(fallbackUrl, {
+        headers: tileHeaders,
+        next: { revalidate: 86400 },
+      });
+      if (fallback.ok) upstream = fallback;
+    }
+
     if (!upstream.ok) {
-      if (source === "mapbox") {
-        const fallback = await fetch(esriSatelliteTileUrl(z, x, y), { next: { revalidate: 86400 } });
-        if (fallback.ok) {
-          const body = await fallback.arrayBuffer();
-          return new NextResponse(body, {
-            headers: {
-              "Content-Type": fallback.headers.get("content-type") ?? "image/jpeg",
-              "Cache-Control": "public, max-age=86400",
-            },
-          });
-        }
-      }
       return NextResponse.json({ error: "Tile indisponível." }, { status: 502 });
     }
 

@@ -11,6 +11,18 @@ export type CadAiAction =
   | "mover"
   | "copiar"
   | "rotacionar"
+  | "espelhar"
+  | "esticar"
+  | "escala"
+  | "deslocar"
+  | "aparar"
+  | "estender"
+  | "concordar"
+  | "chanfrar"
+  | "matriz"
+  | "explodir"
+  | "unir"
+  | "dividir"
   // Pontos
   | "alterar_id"
   | "alterar_cota"
@@ -116,6 +128,22 @@ export interface CadAiCommand {
   novo_id?: string;
   id_origem?: string;
   distancia?: number;
+  distancia_1?: number;
+  distancia_2?: number;
+  dx?: number;
+  dy?: number;
+  x2?: number;
+  y2?: number;
+  fator?: number;
+  raio?: number;
+  manter_original?: boolean;
+  colunas?: number;
+  linhas?: number;
+  partes?: number;
+  entidade_corte?: string;
+  vertices_indices?: number[];
+  tipo_matriz?: "retangular" | "polar";
+  entity_type?: string;
   /** Largura da seção transversal (m). */
   largura?: number;
   angulo?: number;
@@ -143,7 +171,7 @@ export interface CadAiCommand {
   area_minima_quadra_m2?: number;
   /** Alias de area_minima_quadra_m2 — área alvo da quadra (m²). */
   area_quadra_m2?: number;
-  /** Largura da quadra (m) — gerar_loteamento no modo medidas. */
+  /** Obsoleto. A largura da quadra é 2 × profundidade_quadra_m. */
   largura_quadra_m?: number;
   /** Profundidade/distância da quadra (m) — gerar_loteamento no modo medidas. */
   distancia_quadra_m?: number;
@@ -208,7 +236,9 @@ export interface CadAiCommand {
   minimizar_remanescente?: boolean;
   lotes_esquina_maiores?: boolean;
   /** Pedido de lotes com áreas o mais iguais possível. A geometria continua no motor CAD. */
-  objetivo?: "maximizar_equidade";
+  objetivo?: "maximizar_equidade" | "maximize_valid_lots";
+  require_road_access?: boolean;
+  allow_internal_roads?: boolean;
   excecoes?: Array<{ lote: string; area_alvo_m2: number }>;
   filtro_area_max_m2?: number;
   filtro_area_min_m2?: number;
@@ -218,6 +248,12 @@ export interface CadAiCommand {
   mapeamentos?: Array<{ de: string; para: string }>;
   /** Escopo da operação: um lote, a quadra, ou o lote + vizinhos autorizados. */
   scope?: "single_lot" | "quad" | "local_redistribution";
+  /** Confirmação já dada — aplicar no desenho sem nova prévia. */
+  applyImmediately?: boolean;
+  /** Tipo OSNAP (ENDPOINT, MIDPOINT, CENTER, INTERSECTION, PERPENDICULAR, …). A IA não calcula o ponto. */
+  osnap?: string;
+  osnap_origem?: string;
+  osnap_destino?: string;
 }
 
 export interface CadAiHistoryMessage {
@@ -311,6 +347,7 @@ export interface CadCommandExecutionResult {
   message: string;
   sideEffects?: CadAiSideEffect[];
   redistributionOffer?: { lote: string; areaAlvo: number };
+  pendingAction?: import("@/lib/cad-ai/pending-action").CadPendingAction;
 }
 
 export interface CadCommandExecutorMeta {

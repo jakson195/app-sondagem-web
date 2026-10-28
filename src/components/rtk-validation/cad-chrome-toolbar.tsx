@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import { Hand, Minus, MousePointer2, Pencil, Spline } from "lucide-react";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import type { CadTool } from "@/lib/rtk-validation/cad/types";
 import { CadMenu, CadMenuItem } from "./cad-ui-menu";
@@ -20,7 +21,21 @@ type CadChromeToolbarProps = {
   onZoomOut: () => void;
 };
 
-const PRIMARY: CadTool[] = ["select", "pan", "line", "polyline", "editPolygon"];
+const TOOL_ICONS: Record<"select" | "pan" | "line" | "polyline" | "editPolygon", ReactNode> = {
+  select: <MousePointer2 className="h-4 w-4" />,
+  pan: <Hand className="h-4 w-4" />,
+  line: <Minus className="h-4 w-4" />,
+  polyline: <Spline className="h-4 w-4" />,
+  editPolygon: <Pencil className="h-4 w-4" />,
+};
+
+const PRIMARY: Array<"select" | "pan" | "line" | "polyline" | "editPolygon"> = [
+  "select",
+  "pan",
+  "line",
+  "polyline",
+  "editPolygon",
+];
 
 export function CadChromeToolbar({
   tool,
@@ -40,25 +55,27 @@ export function CadChromeToolbar({
   const t3d = useTranslations("rtkCad.view3d");
   const [moreOpen, setMoreOpen] = useState(false);
 
-  const btn = (id: CadTool, label: string) => (
-    <button
-      key={id}
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={tool === id}
-      onClick={() => onTool(id)}
-      className={`h-7 rounded px-2 text-[11px] font-medium ${
-        tool === id ? "bg-[#00c8f0] text-[#0f2848]" : "text-[#94a3b8] hover:bg-[#1e293b]"
-      }`}
-    >
-      {id === "editPolygon" ? t("chrome.edit") : label}
-    </button>
-  );
-
   return (
-    <div className="flex h-8 shrink-0 items-center gap-0.5 border-b border-[#1e293b] bg-[#0b1220] px-1.5">
-      {PRIMARY.map((id) => btn(id, t(`tools.${id}`)))}
+    <div className="pointer-events-auto relative z-[70] isolate flex h-9 shrink-0 items-center gap-0.5 border-b border-[#1e293b] bg-[#0b1220] px-1.5">
+      {PRIMARY.map((id) => {
+        const label = id === "editPolygon" ? t("chrome.edit") : t(`tools.${id}`);
+        const active = tool === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            title={id === "pan" ? `${label} — espaço + arrastar, ou botão do meio` : label}
+            aria-label={label}
+            aria-pressed={active}
+            onClick={() => onTool(id)}
+            className={`inline-flex h-8 w-8 items-center justify-center rounded ${
+              active ? "bg-[#00c8f0] text-[#0f2848]" : "text-[#e2e8f0] hover:bg-[#1e293b]"
+            }`}
+          >
+            {TOOL_ICONS[id]}
+          </button>
+        );
+      })}
       <CadMenu
         open={moreOpen}
         onOpenChange={setMoreOpen}

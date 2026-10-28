@@ -9,9 +9,15 @@ import {
 } from "@/lib/rtk-validation/cad/loteamento-tools";
 import {
   formatSingleLotBlocked,
+  snapshotLotGeometries,
   tryAdjustSingleLot,
   validateSingleLotModification,
 } from "@/lib/rtk-validation/cad/lot-single-adjust";
+import {
+  createRedistributionPending,
+  redistributionDoneMessage,
+  type CadPendingRedistribution,
+} from "./pending-action";
 import { LoteamentoError, polygonAreaPlanarM2 } from "@/lib/rtk-validation/cad/lot-subdivision";
 import { formatAreaBr } from "@/lib/rtk-validation/cad/polygon-utils";
 import type { CadPolylineEntity, CadProject } from "@/lib/rtk-validation/cad/types";
@@ -387,6 +393,11 @@ export function ajustarLote(
   const isolated = tryAdjustSingleLot(project, lot.entity, inferredArea);
   if (!isolated.ok) {
     const label = formatLotId(lot);
+    const pendingAction = createRedistributionPending({
+      originalCommand: "",
+      targetLot: label,
+      targetArea: inferredArea,
+    });
     return {
       ok: false,
       project,
@@ -395,6 +406,7 @@ export function ajustarLote(
           ? formatSingleLotBlocked(label, inferredArea)
           : isolated.message,
       redistributionOffer: { lote: ref, areaAlvo: inferredArea },
+      pendingAction,
     };
   }
   const check = validateSingleLotModification({
@@ -414,6 +426,50 @@ export function ajustarLote(
     `Lote ${formatLotId(lot)} ajustado para cerca de ${formatAreaBr(isolated.areaM2)}. Os demais lotes permanecem intactos.`,
     { selectedId: isolated.selectedId },
   );
+}
+
+export function countChangedLots(before: CadProject, after: CadProject): string[] {
+  const prev = snapshotLotGeometries(before);
+  const next = snapshotLotGeometries(after);
+  const ids = new Set([...prev.keys(), ...next.keys()]);
+  const changed: string[] = [];
+  for (const id of ids) {
+    const a = prev.get(id);
+    const b = next.get(id);
+    if (!a || !b) {
+      changed.push(id);
+      continue;
+    }
+    if (Math.abs(a.areaM2 - b.areaM2) > 0.25) {
+      changed.push(id);
+      continue;
+    }
+    if (a.vertices.length !== b.vertices.length) {
+      changed.push(id);
+      continue;
+    }
+    const moved = a.vertices.some((vertex, index) => {
+      const other = b.vertices[index];
+      return !other || Math.abs(vertex.x - other.x) > 1e-4 || Math.abs(vertex.y - other.y) > 1e-4;
+    });
+    if (moved) changed.push(id);
+  }
+  return changed;
+}
+
+export function executeRedistributionPending(
+  project: CadProject,
+  action: CadPendingRedistribution,
+  selectedId?: string | null,
+): CadCommandExecutionResult {
+  const result = ajustarLote(project, action.targetLot, action.targetArea, undefined, selectedId, "local_redistribution");
+  if (result.ok === false) return result;
+  const changed = countChangedLots(project, result.project);
+  return {
+    ...result,
+    message: redistributionDoneMessage(action, Math.max(changed.length, 1)),
+    pendingAction: undefined,
+  };
 }
 
 export function redistribuirLotes(

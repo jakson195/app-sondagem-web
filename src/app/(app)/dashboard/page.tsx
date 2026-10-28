@@ -12,7 +12,9 @@ import { prisma } from "@/lib/prisma";
 import { OBRA_STATUS_LABEL, OBRA_STATUS_ORDER } from "@/lib/obra-status";
 import {
   isLoteamentoProductMode,
+  isSondagemProductMode,
   LOTEAMENTO_MODULE_CARDS,
+  SONDAGEM_MODULE_CARDS,
 } from "@/lib/product-mode";
 import { getAuthUserFromCookies } from "@/lib/server-auth";
 
@@ -102,6 +104,7 @@ export default async function DashboardPage({
     statusRows.map((r) => [r.status, r._count._all]),
   );
   const loteamento = isLoteamentoProductMode();
+  const sondagem = isSondagemProductMode();
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
@@ -111,11 +114,13 @@ export default async function DashboardPage({
             Painel DataGeo Digital
           </h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            {loteamento
-              ? "CAD, GEO e estudo de viabilidade para loteamento."
-              : user.systemRole === "USER"
-                ? "Resumo das suas obras de campo."
-                : "Visão multiempresa: empresas contratantes e obras de campo."}
+            {sondagem
+              ? "SPT, rotativa, trado e poços — do registo de campo ao relatório."
+              : loteamento
+                ? "CAD, GEO e estudo de viabilidade para loteamento."
+                : user.systemRole === "USER"
+                  ? "Resumo das suas obras de campo."
+                  : "Visão multiempresa: empresas contratantes e obras de campo."}
           </p>
         </div>
         {!loteamento && (
@@ -137,9 +142,9 @@ export default async function DashboardPage({
         )}
       </div>
 
-      {loteamento && (
-        <div className="grid gap-4 sm:grid-cols-3">
-          {LOTEAMENTO_MODULE_CARDS.map((card) => (
+      {(loteamento || sondagem) && (
+        <div className={`grid gap-4 ${sondagem ? "sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-3"}`}>
+          {(sondagem ? SONDAGEM_MODULE_CARDS : LOTEAMENTO_MODULE_CARDS).map((card) => (
             <Link
               key={card.href}
               href={card.href}

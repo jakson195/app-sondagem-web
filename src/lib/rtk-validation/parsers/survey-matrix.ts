@@ -52,26 +52,66 @@ export function cellToSurveyString(value: unknown): string {
   return String(value).trim();
 }
 
-/** Converte linhas tabulares (CSV, Excel, etc.) em pontos de levantamento. */
-export function parseSurveyMatrix(rawRows: unknown[][]) {
-  const warnings: string[] = [];
-  const rows = rawRows
+export type SurveyColumnMap = {
+  code?: number | null;
+  east: number;
+  north: number;
+  elev?: number | null;
+  headerRow?: boolean;
+};
+
+export function stringifySurveyRows(rawRows: unknown[][]): string[][] {
+  return rawRows
     .map((row) => row.map(cellToSurveyString))
     .filter((row) => row.some((cell) => cell.length > 0));
+}
+
+export function suggestSurveyColumns(rows: string[][]): SurveyColumnMap & { headers: string[] } {
+  const firstCols = rows[0] ?? [];
+  const idIdx = findColumnIndex(firstCols, ID_KEYS);
+  const descIdx = findColumnIndex(firstCols, DESC_KEYS);
+  let eIdx = findColumnIndex(firstCols, E_KEYS);
+  let nIdx = findColumnIndex(firstCols, N_KEYS);
+  let zIdx = findColumnIndex(firstCols, Z_KEYS);
+  const hasHeader = isProjectHeader(firstCols) || (eIdx >= 0 && nIdx >= 0);
+  if (!hasHeader) {
+    const nums = firstCols.map(parseNumeric);
+    if (nums.filter((n) => n !== null).length >= 3) {
+      return { headers: firstCols, code: 0, east: 2, north: 3, elev: nums.length >= 5 ? 4 : -1, headerRow: false };
+    }
+    return { headers: firstCols, code: -1, east: 0, north: 1, elev: nums.length >= 3 ? 2 : -1, headerRow: false };
+  }
+  return {
+    headers: firstCols,
+    code: idIdx >= 0 ? idIdx : descIdx,
+    east: eIdx,
+    north: nIdx,
+    elev: zIdx,
+    headerRow: true,
+  };
+}
+
+/** Converte linhas tabulares (CSV, Excel, etc.) em pontos de levantamento. */
+export function parseSurveyMatrix(rawRows: unknown[][], map?: Partial<SurveyColumnMap>) {
+  const warnings: string[] = [];
+  const rows = stringifySurveyRows(rawRows);
 
   if (rows.length === 0) return { points: [], warnings: ["Arquivo vazio."] };
 
   const firstCols = rows[0];
-  let idIdx = findColumnIndex(firstCols, ID_KEYS);
+  const suggested = suggestSurveyColumns(rows);
+  let idIdx = map?.code ?? suggested.code ?? findColumnIndex(firstCols, ID_KEYS);
   let descIdx = findColumnIndex(firstCols, DESC_KEYS);
-  let eIdx = findColumnIndex(firstCols, E_KEYS);
-  let nIdx = findColumnIndex(firstCols, N_KEYS);
-  let zIdx = findColumnIndex(firstCols, Z_KEYS);
+  let eIdx = map?.east ?? suggested.east;
+  let nIdx = map?.north ?? suggested.north;
+  let zIdx = map?.elev ?? suggested.elev ?? findColumnIndex(firstCols, Z_KEYS);
 
   let startLine = 0;
-  const hasHeader = isProjectHeader(firstCols) || (eIdx >= 0 && nIdx >= 0);
+  const hasHeader = map?.headerRow ?? (isProjectHeader(firstCols) || (eIdx >= 0 && nIdx >= 0));
 
-  if (!hasHeader) {
+  if (map?.east != null && map?.north != null) {
+    startLine = hasHeader ? 1 : 0;
+  } else if (!hasHeader) {
     const nums = firstCols.map(parseNumeric);
     if (nums.filter((n) => n !== null).length >= 3) {
       idIdx = 0;

@@ -14,16 +14,19 @@ function detectDelimiter(firstLine: string) {
   return best[1] > 1 ? best[0] : ",";
 }
 
-export function parseCsvOrTxt(content: string, format: "csv" | "txt") {
+export function parseDelimitedPreview(content: string): string[][] {
   const lines = content
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0 && !l.startsWith("#") && !l.startsWith("//"));
-
-  if (lines.length === 0) return { points: [], warnings: ["Arquivo vazio."] };
-
+  if (lines.length === 0) return [];
   const delimiter = detectDelimiter(lines[0]);
-  const rows = lines.map((line) => parseDelimitedLine(line, delimiter));
+  return lines.map((line) => parseDelimitedLine(line, delimiter));
+}
+
+export function parseCsvOrTxt(content: string, format: "csv" | "txt") {
+  const rows = parseDelimitedPreview(content);
+  if (rows.length === 0) return { points: [], warnings: ["Arquivo vazio."] };
   const result = parseSurveyMatrix(rows);
   if (result.points.length === 0 && result.warnings.length === 1 && result.warnings[0] === "Nenhum ponto válido encontrado.") {
     result.warnings[0] = `Nenhum ponto válido no ${format.toUpperCase()}.`;

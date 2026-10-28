@@ -25,8 +25,9 @@ import {
   type SigefLayerKey,
   type SigefOverlayState,
 } from "@/lib/cad-map/overlay-sources";
+import type { CadGoogleMapType } from "@/lib/google-maps-config";
 
-function CadMapboxChunkFailed() {
+function CadGoogleChunkFailed() {
   const t = useTranslations("rtkCad.basemap");
   return (
     <div className="pointer-events-none absolute inset-0 z-[1] flex items-end justify-center pb-8">
@@ -37,12 +38,12 @@ function CadMapboxChunkFailed() {
   );
 }
 
-async function loadCadMapboxBasemap() {
+async function loadGoogleSatelliteMap() {
   const load = () =>
     import(
-      /* webpackChunkName: "cad-mapbox-basemap" */
-      "./cad-mapbox-basemap"
-    ).then((m) => ({ default: m.CadMapboxBasemap }));
+      /* webpackChunkName: "cad-google-basemap" */
+      "@/components/cad/GoogleSatelliteMap"
+    ).then((m) => ({ default: m.GoogleSatelliteMap }));
   try {
     return await load();
   } catch {
@@ -50,12 +51,12 @@ async function loadCadMapboxBasemap() {
     try {
       return await load();
     } catch {
-      return { default: CadMapboxChunkFailed };
+      return { default: CadGoogleChunkFailed };
     }
   }
 }
 
-const CadMapboxBasemap = dynamic(loadCadMapboxBasemap, {
+const GoogleSatelliteMap = dynamic(loadGoogleSatelliteMap, {
   ssr: false,
   loading: () => null,
 });
@@ -64,12 +65,14 @@ export type { AnmSigmineLayerKey, AnmSigmineOverlayState, SigefLayerKey, SigefOv
 
 export type CadBasemapOverlays = {
   satellite: boolean;
+  googleMapType: CadGoogleMapType;
   anmSigmine: AnmSigmineOverlayState;
   sigef: SigefOverlayState;
 };
 
 export const DEFAULT_CAD_BASEMAP_OVERLAYS: CadBasemapOverlays = {
   satellite: false,
+  googleMapType: "satellite",
   anmSigmine: { ...DEFAULT_ANM_SIGMINE_OVERLAY },
   sigef: { ...DEFAULT_SIGEF_OVERLAY },
 };
@@ -77,6 +80,7 @@ export const DEFAULT_CAD_BASEMAP_OVERLAYS: CadBasemapOverlays = {
 export function cloneDefaultBasemapOverlays(): CadBasemapOverlays {
   return {
     satellite: DEFAULT_CAD_BASEMAP_OVERLAYS.satellite,
+    googleMapType: DEFAULT_CAD_BASEMAP_OVERLAYS.googleMapType,
     anmSigmine: { ...DEFAULT_CAD_BASEMAP_OVERLAYS.anmSigmine },
     sigef: { ...DEFAULT_CAD_BASEMAP_OVERLAYS.sigef },
   };
@@ -388,7 +392,13 @@ export function CadBasemapLayer({ viewport, entities, overlays, crs, georef: geo
       style={{ background: overlays.satellite ? "#1a1a1a" : "#e8eef4" }}
       aria-hidden
     >
-      {showSatellite ? <CadMapboxBasemap viewport={viewport} georef={georef} /> : null}
+      {showSatellite ? (
+        <GoogleSatelliteMap
+          viewport={viewport}
+          georef={georef}
+          mapTypeId={overlays.googleMapType ?? "satellite"}
+        />
+      ) : null}
 
       {overlays.satellite && !showSatellite ? (
         <div

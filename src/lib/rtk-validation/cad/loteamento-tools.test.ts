@@ -31,8 +31,19 @@ import {
   summarizeLoteamento,
   LOTEAMENTO_PONTOS_LAYER,
   LOTEAMENTO_TABELAS_LAYER,
+  LOTEAMENTO_QUADRAS_LAYER_ID,
+  listLoteamentoEixoPolylines,
+  excluirRuaDoLoteamento,
+  EXCLUIR_RUA_NEED_HIT,
 } from "./loteamento-tools";
-import { polygonAreaPlanarM2, polygonInteriorOverlapM2, rebuildQuadraLotes, ringsShareBoundary } from "./lot-subdivision";
+import {
+  generateLoteamento,
+  polygonAreaPlanarM2,
+  polygonInteriorOverlapM2,
+  rebuildQuadraLotes,
+  ringsShareBoundary,
+} from "./lot-subdivision";
+import { pointInPolygon } from "./polygon-utils";
 import { applyReurbLotLabels, REURB_ANNOTATION_LAYER } from "./reurb";
 import type { CadPolylineEntity, CadProject } from "./types";
 
@@ -906,6 +917,132 @@ describe("alterar eixo em 2 pontos", () => {
     assert.ok(eixo.vertices.length >= 2);
     const mid = eixo.vertices.filter((v) => v.x > 70 && v.x < 130);
     assert.ok(mid.length <= 2, "entre as faces só deve restar A–B");
+  });
+});
+
+describe("excluir rua e reprojetar lotes", () => {
+  const rebuildParams = {
+    glebaId: "gleba_1",
+    larguraViaM: 12,
+    profundidadeQuadraM: 24,
+    testadaMinimaM: 12,
+    larguraQuadraM: 48.5,
+    profundidadeBlocoM: 100,
+    percentAreaUtil: 15,
+  };
+  const closedOn = (project: CadProject, layerId: string) =>
+    project.entities.filter(
+      (e): e is CadPolylineEntity => e.type === "polyline" && Boolean(e.closed) && e.layerId === layerId,
+    );
+  const ringOf = (e: CadPolylineEntity) => e.vertices.map((v) => [v.x, v.y] as [number, number]);
+
+  function generatedProject(): CadProject {
+    const coords: [number, number][] = [
+      [0, 0],
+      [260, 0],
+      [260, 190],
+      [0, 190],
+    ];
+    const gen = generateLoteamento(coords, { ...rebuildParams, eixoRua: true });
+    const gleba = square("gleba_1", "draw", [0, 0], 1, "Gleba");
+    gleba.vertices = coords.map(([x, y]) => ({ x, y, z: 0 }));
+    const eixos: CadPolylineEntity[] = gen.eixos.map((line, i) => ({
+      id: `eixo_${i + 1}`,
+      type: "polyline",
+      layerId: "loteamento_eixos",
+      closed: false,
+      name: `Eixo ${i + 1}`,
+      vertices: line.map(([x, y]) => ({ x, y, z: 0 })),
+    }));
+    const src: CadProject = {
+      name: "Gleba",
+      crs: "EPSG:31982",
+      layers: [
+        { id: "draw", name: "DESENHO", color: "#fbbf24", visible: true, locked: false },
+        { id: "loteamento_eixos", name: "EIXOS", color: "#334155", visible: true, locked: false },
+      ],
+      entities: [gleba, ...eixos],
+    };
+    return rebuildLoteamentoFromEixos(src, rebuildParams).project;
+  }
+
+  it("remove só o trecho clicado entre cruzamentos e loteia a área liberada", () => {
+    const before = generatedProject();
+    const quadrasBefore = closedOn(before, LOTEAMENTO_QUADRAS_LAYER_ID).length;
+    assert.ok(quadrasBefore >= 4, `esperava várias quadras, veio ${quadrasBefore}`);
+
+    const internal = listLoteamentoEixoPolylines(before).find((e) => {
+      const xs = e.vertices.map((v) => v.x);
+      const ys = e.vertices.map((v) => v.y);
+      const vertical = Math.max(...xs) - Math.min(...xs) < 1;
+      return vertical && Math.min(...xs) > 30 && Math.max(...xs) < 230;
+    });
+    assert.ok(internal, "deveria existir rua transversal interna");
+    const ys = internal.vertices.map((v) => v.y);
+    const click = { x: internal.vertices[0]!.x + 2, y: Math.max(...ys) - 25 };
+    const eixoCountBefore = listLoteamentoEixoPolylines(before).length;
+
+    const cut = excluirRuaDoLoteamento(before, click.x, click.y, 8, 12);
+    const span = Math.max(...ys) - Math.min(...ys);
+    assert.ok(cut.removedM > 20 && cut.removedM < span - 20, `só o trecho entre cruzamentos: ${cut.removedM} de ${span}`);
+    assert.ok(listLoteamentoEixoPolylines(cut.project).length >= eixoCountBefore);
+
+    const after = rebuildLoteamentoFromEixos(cut.project, rebuildParams).project;
+    const vias = closedOn(after, "loteamento_vias");
+    const lots = closedOn(after, "loteamento_lotes");
+    assert.ok(
+      !vias.some((v) => pointInPolygon(click.x, click.y, v.vertices)),
+      "a rua clicada deveria sumir",
+    );
+    assert.ok(
+      lots.some((l) => pointInPolygon(click.x, click.y, l.vertices)),
+      "a área da rua excluída deveria virar lote",
+    );
+    assert.ok(closedOn(after, LOTEAMENTO_QUADRAS_LAYER_ID).length < quadrasBefore, "quadras vizinhas se unem");
+    for (const lot of lots) {
+      for (const via of vias) {
+        assert.ok(polygonInteriorOverlapM2(ringOf(lot), ringOf(via)) < 1.5, `lote ${lot.name} sobre a via`);
+      }
+    }
+  });
+
+  it("ao excluir a rua de borda, as ruas que chegavam nela vão até a divisa e os lotes mantêm o padrão", () => {
+    let project = generatedProject();
+    const quadrasBefore = closedOn(project, LOTEAMENTO_QUADRAS_LAYER_ID).length;
+    const bottom = listLoteamentoEixoPolylines(project).find((e) => e.vertices.every((v) => v.y < 10));
+    assert.ok(bottom, "deveria existir rua de borda inferior");
+    const xs = bottom.vertices.map((v) => v.x);
+    const crossXs = listLoteamentoEixoPolylines(project)
+      .filter((e) => e.vertices.every((v) => Math.abs(v.x - e.vertices[0]!.x) < 1) && Math.min(...e.vertices.map((v) => v.y)) < 20)
+      .map((e) => e.vertices[0]!.x)
+      .filter((x) => x > Math.min(...xs) + 5 && x < Math.max(...xs) - 5)
+      .sort((a, b) => a - b);
+    const stops = [Math.min(...xs), ...crossXs, Math.max(...xs)];
+    for (let i = 0; i < stops.length - 1; i++) {
+      const cx = (stops[i]! + stops[i + 1]!) / 2;
+      project = excluirRuaDoLoteamento(project, cx, bottom.vertices[0]!.y, 8, 12).project;
+    }
+    for (const x of crossXs) {
+      const axis = listLoteamentoEixoPolylines(project).find((e) => Math.abs(e.vertices[0]!.x - x) < 1);
+      assert.ok(axis, `rua transversal em x=${x} deveria continuar`);
+      assert.ok(Math.min(...axis.vertices.map((v) => v.y)) < 1, `rua em x=${x} deveria ir até a divisa`);
+    }
+
+    const after = rebuildLoteamentoFromEixos(project, rebuildParams).project;
+    assert.equal(closedOn(after, LOTEAMENTO_QUADRAS_LAYER_ID).length, quadrasBefore, "quadras não se fundem em pente");
+    const lots = closedOn(after, "loteamento_lotes");
+    const deep = lots.filter((l) => (l.lote?.profundidadeM ?? 0) > 24 * 1.3);
+    assert.ok(deep.length === 0, `lotes fora do padrão de profundidade: ${deep.map((l) => `${l.name}=${l.lote?.profundidadeM?.toFixed(1)}`).join(", ")}`);
+    const big = lots.filter((l) => polygonAreaPlanarM2(ringOf(l)) > 288 * 2.2);
+    assert.ok(big.length <= Math.ceil(lots.length * 0.06), `lotes grandes demais: ${big.length}/${lots.length}`);
+  });
+
+  it("recusa clique fora das ruas", () => {
+    const before = generatedProject();
+    const lot = closedOn(before, "loteamento_lotes")[0]!;
+    const cx = lot.vertices.reduce((s, v) => s + v.x, 0) / lot.vertices.length;
+    const cy = lot.vertices.reduce((s, v) => s + v.y, 0) / lot.vertices.length;
+    assert.throws(() => excluirRuaDoLoteamento(before, cx, cy, 2, 12), { message: EXCLUIR_RUA_NEED_HIT });
   });
 });
 

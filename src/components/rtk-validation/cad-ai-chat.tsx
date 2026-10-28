@@ -15,9 +15,22 @@ import {
   popUndo,
   pushUndo,
   validateCadCommand,
+  executeRedistributionPending,
+  isCadPendingAction,
+  resolvePendingUserMessage,
+  createTopicSwitchPending,
   type CadAssistantPending,
   type CadAssistantUndoEntry,
+  type CadPendingAction,
 } from "@/lib/cad-ai";
+import {
+  cancelPendingMessage,
+  logPendingAction,
+  pendingRedistributionOf,
+  pendingStillOpenMessage,
+  topicSwitchQuestion,
+  understoodRedistribution,
+} from "@/lib/cad-ai/pending-action";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import { buildCadAiContext } from "@/lib/rtk-validation/cad/ai-context";
 import { resolveCadAiCommands } from "@/lib/rtk-validation/cad/ai-command-resolver";
@@ -31,7 +44,7 @@ import type {
   CadAiSideEffect,
   CadCommandExecutionResult,
 } from "@/lib/rtk-validation/cad/ai-command-types";
-import type { CadProject } from "@/lib/rtk-validation/cad/types";
+import type { CadEntity, CadProject } from "@/lib/rtk-validation/cad/types";
 import { listClosedPolygons } from "@/lib/rtk-validation/cad/polygon-utils";
 import type { MemorialFormDefaults } from "@/lib/rtk-validation/cad/memorial-types";
 import { useCadSpeech } from "@/hooks/use-cad-speech";
@@ -48,6 +61,7 @@ export interface CadAiChatProps {
   onSelectedIdChange: (id: string | null) => void;
   onSideEffect: (effect: CadAiSideEffect) => void;
   hideLauncher?: boolean;
+  onPreviewEntities?: (entities: CadEntity[]) => void;
 }
 
 interface ChatMessage {
@@ -60,6 +74,43 @@ interface ChatMessage {
 
 const ACCEPT_FILES = ".csv,.txt,.xlsx,.xls,.dxf,.geojson,.json,.kml,.kmz,.shp,.tif,.tiff,.ecw";
 const HISTORY_KEY_PREFIX = "datageo:assistente-ia:";
+const CONVERSATION_ID_KEY = "datageo:cad-ai-conversation";
+const PENDING_KEY_PREFIX = "datageo:cad-ai-pending:";
+
+function getOrCreateConversationId(): string {
+  if (typeof window === "undefined") return "cad-ai";
+  const existing = sessionStorage.getItem(CONVERSATION_ID_KEY);
+  if (existing) return existing;
+  const id = `cad_${Date.now().toString(36)}`;
+  sessionStorage.setItem(CONVERSATION_ID_KEY, id);
+  return id;
+}
+
+function loadPendingAction(conversationId: string): CadPendingAction | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(`${PENDING_KEY_PREFIX}${conversationId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    return isCadPendingAction(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistPendingAction(conversationId: string, action: CadPendingAction | null) {
+  if (typeof window === "undefined") return;
+  const key = `${PENDING_KEY_PREFIX}${conversationId}`;
+  if (!action) {
+    sessionStorage.removeItem(key);
+    return;
+  }
+  try {
+    sessionStorage.setItem(key, JSON.stringify(action));
+  } catch {
+    /* quota */
+  }
+}
 
 function msgId() {
   return `m_${Math.random().toString(36).slice(2, 10)}`;
@@ -102,6 +153,7 @@ export function CadAiChat({
   onSelectedIdChange,
   onSideEffect,
   hideLauncher = false,
+  onPreviewEntities,
 }: CadAiChatProps) {
   const t = useTranslations("rtkCad.ai");
   const [input, setInput] = useState("");
@@ -114,11 +166,15 @@ export function CadAiChat({
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileBinary, setFileBinary] = useState<ArrayBuffer | null>(null);
   const [pending, setPending] = useState<CadAssistantPending | null>(null);
-  const [redistributionOffer, setRedistributionOffer] = useState<{ lote: string; areaAlvo: number } | null>(null);
+  const conversationIdRef = useRef(getOrCreateConversationId());
+  const [pendingAction, setPendingActionState] = useState<CadPendingAction | null>(() =>
+    loadPendingAction(conversationIdRef.current),
+  );
   const [canUndo, setCanUndo] = useState(false);
   const undoStackRef = useRef<CadAssistantUndoEntry[]>([]);
   const lastOptimizeRef = useRef<ReturnType<typeof paramsFromCommand> | null>(null);
   const pendingRef = useRef<CadAssistantPending | null>(null);
+  const pendingActionRef = useRef<CadPendingAction | null>(pendingAction);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -140,8 +196,29 @@ export function CadAiChat({
     if (open) textareaRef.current?.focus();
   }, [open]);
 
+  useEffect(() => {
+    if (!onPreviewEntities) return;
+    if (!pending) {
+      onPreviewEntities([]);
+      return;
+    }
+    const before = new Map(pending.snapshot.entities.map((entity) => [entity.id, entity]));
+    onPreviewEntities(
+      pending.nextProject.entities.filter((entity) => {
+        const prev = before.get(entity.id);
+        return !prev || JSON.stringify(prev) !== JSON.stringify(entity);
+      }),
+    );
+  }, [pending, onPreviewEntities]);
+
   const pushMessage = useCallback((role: ChatMessage["role"], text: string, actions?: string[]) => {
     setMessages((prev) => [...prev, { id: msgId(), role, text, timestamp: Date.now(), actions }]);
+  }, []);
+
+  const storePendingAction = useCallback((action: CadPendingAction | null) => {
+    pendingActionRef.current = action;
+    setPendingActionState(action);
+    persistPendingAction(conversationIdRef.current, action);
   }, []);
 
   const appendHistory = useCallback(
@@ -192,7 +269,60 @@ export function CadAiChat({
     [onProjectChange, onSelectedIdChange, onSideEffect, pushMessage, appendHistory, speak, ttsEnabled],
   );
 
+  const runRedistributionPending = useCallback(
+    (userText: string) => {
+      const action = pendingRedistributionOf(pendingActionRef.current);
+      if (!action) {
+        pushMessage("assistant", "Não há alteração pendente para aplicar.");
+        return;
+      }
+      logPendingAction("user response", userText);
+      logPendingAction("pendingAction resolved", action.type);
+      logPendingAction("executing", "redistribute_lots");
+      const start = understoodRedistribution(action);
+      pushMessage("assistant", start);
+      appendHistory(userText, start);
+      speak(start, ttsEnabled);
+      pushUndo(undoStackRef.current, { project, selectedId });
+      setCanUndo(true);
+      const result = executeRedistributionPending(project, action, selectedId);
+      storePendingAction(null);
+      pendingRef.current = null;
+      setPending(null);
+      logPendingAction("pendingAction cleared");
+      if (result.ok === false) {
+        pushMessage("error", result.message);
+        speak(result.message, ttsEnabled);
+        return;
+      }
+      onProjectChange(result.project);
+      if (result.selectedId !== undefined) onSelectedIdChange(result.selectedId);
+      for (const effect of result.sideEffects ?? []) {
+        onSideEffect(effect);
+      }
+      pushMessage("assistant", result.message);
+      appendHistory(userText, result.message);
+      speak(result.message, ttsEnabled);
+    },
+    [
+      project,
+      selectedId,
+      onProjectChange,
+      onSelectedIdChange,
+      onSideEffect,
+      pushMessage,
+      appendHistory,
+      speak,
+      ttsEnabled,
+      storePendingAction,
+    ],
+  );
+
   const applyPending = useCallback(() => {
+    if (pendingRedistributionOf(pendingActionRef.current)) {
+      runRedistributionPending("sim");
+      return;
+    }
     const current = pendingRef.current;
     if (!current) {
       pushMessage("assistant", "Não há alteração pendente para aplicar.");
@@ -209,9 +339,31 @@ export function CadAiChat({
     appendHistory("Aplicar", text);
     speak(text, ttsEnabled);
     logCadAi({ intencao: "aplicar", tool: current.commands.map((cmd) => cmd.acao).join(","), resultado: text });
-  }, [project, selectedId, onProjectChange, onSelectedIdChange, pushMessage, appendHistory, speak, ttsEnabled]);
+  }, [
+    project,
+    selectedId,
+    onProjectChange,
+    onSelectedIdChange,
+    pushMessage,
+    appendHistory,
+    speak,
+    ttsEnabled,
+    runRedistributionPending,
+  ]);
 
   const cancelPending = useCallback(() => {
+    if (pendingActionRef.current) {
+      logPendingAction("user response", "não");
+      logPendingAction("pendingAction cleared");
+      storePendingAction(null);
+      pendingRef.current = null;
+      setPending(null);
+      const text = cancelPendingMessage();
+      pushMessage("assistant", text);
+      appendHistory("não", text);
+      speak(text, ttsEnabled);
+      return;
+    }
     if (!pendingRef.current) {
       pushMessage("assistant", "Não há prévia para cancelar.");
       return;
@@ -221,7 +373,7 @@ export function CadAiChat({
     const text = "Alteração cancelada. O desenho não foi modificado.";
     pushMessage("assistant", text);
     speak(text, ttsEnabled);
-  }, [pushMessage, speak, ttsEnabled]);
+  }, [pushMessage, speak, ttsEnabled, storePendingAction, appendHistory]);
 
   const undoLast = useCallback(() => {
     const prev = popUndo(undoStackRef.current);
@@ -232,6 +384,7 @@ export function CadAiChat({
     }
     pendingRef.current = null;
     setPending(null);
+    storePendingAction(null);
     onProjectChange(prev.project);
     onSelectedIdChange(prev.selectedId);
     const text = "Última alteração desfeita.";
@@ -239,7 +392,7 @@ export function CadAiChat({
     appendHistory("Desfazer", text);
     speak(text, ttsEnabled);
     logCadAi({ intencao: "desfazer", resultado: text });
-  }, [onProjectChange, onSelectedIdChange, pushMessage, appendHistory, speak, ttsEnabled]);
+  }, [onProjectChange, onSelectedIdChange, pushMessage, appendHistory, speak, ttsEnabled, storePendingAction]);
 
   const executeResolved = useCallback(
     (commands: CadAiCommand[], context: ReturnType<typeof buildCadAiContext>, userText: string) => {
@@ -249,6 +402,23 @@ export function CadAiChat({
         if (!last?.areaAlvo) return cmd;
         return { ...cmd, area_alvo_m2: last.areaAlvo, preservar_ruas: cmd.preservar_ruas ?? last.preservarRuas ?? true };
       }));
+      if (hydrated.some((cmd) => cmd.applyImmediately)) {
+        if (pendingRedistributionOf(pendingActionRef.current)) {
+          runRedistributionPending(userText);
+          return;
+        }
+        pushUndo(undoStackRef.current, { project, selectedId });
+        setCanUndo(true);
+        const immediate = executeCadAiCommandChain(project, hydrated, {
+          selectedId,
+          memorialForm,
+          pendingProfileStart,
+          selectedSegmentIndex,
+        });
+        storePendingAction(null);
+        applyResult(immediate, userText, hydrated.map((cmd) => cmd.acao));
+        return;
+      }
       if (hydrated.some((cmd) => isApplyIntentAction(cmd.acao)) || isConfirmPhrase(userText)) {
         applyPending();
         return;
@@ -290,8 +460,34 @@ export function CadAiChat({
           selectedSegmentIndex,
         });
         if (result.ok === false) {
-          if (result.redistributionOffer) {
-            setRedistributionOffer(result.redistributionOffer);
+          if (result.pendingAction?.type === "pending_modify") {
+            storePendingAction(result.pendingAction);
+            logPendingAction("pendingAction created", "pending_modify");
+            pushMessage("assistant", result.message);
+            return;
+          }
+          if (result.pendingAction?.type === "confirm_redistribution") {
+            const action = {
+              ...result.pendingAction,
+              originalCommand: userText || result.pendingAction.originalCommand,
+            };
+            storePendingAction(action);
+            logPendingAction("pendingAction created", action.type);
+            pushMessage("assistant", result.message);
+          } else if (result.redistributionOffer) {
+            storePendingAction({
+              type: "confirm_redistribution",
+              status: "pending",
+              originalCommand: userText,
+              intent: "ajustar_lote",
+              scope: "single_lot",
+              targetLot: result.redistributionOffer.lote,
+              targetArea: result.redistributionOffer.areaAlvo,
+              allowRedistribution: false,
+              affectedLots: [],
+              createdAt: new Date().toISOString(),
+            });
+            logPendingAction("pendingAction created", "confirm_redistribution");
             pushMessage("assistant", result.message);
           } else {
             pushMessage("error", result.message);
@@ -300,7 +496,7 @@ export function CadAiChat({
           speak(result.message, ttsEnabled);
           return;
         }
-        setRedistributionOffer(null);
+        storePendingAction(null);
         for (const cmd of mutating) {
           if (cmd.acao === "otimizar_quadra") lastOptimizeRef.current = paramsFromCommand(cmd, selectedId);
         }
@@ -340,6 +536,8 @@ export function CadAiChat({
       appendHistory,
       speak,
       ttsEnabled,
+      runRedistributionPending,
+      storePendingAction,
     ],
   );
 
@@ -370,14 +568,55 @@ export function CadAiChat({
   );
 
   const runCommand = useCallback(
-    async (commandText: string) => {
+    async (commandText: string, options?: { skipUserMessage?: boolean }) => {
       const trimmed = commandText.trim();
       if (!trimmed) return;
 
-      pushMessage("user", trimmed);
+      if (!options?.skipUserMessage) pushMessage("user", trimmed);
       setProcessing(true);
 
       try {
+        const conversationPending = pendingActionRef.current;
+        if (conversationPending) {
+          const resolution = resolvePendingUserMessage(trimmed, conversationPending);
+          if (resolution.kind === "confirm" || resolution.kind === "continue_pending") {
+            runRedistributionPending(trimmed);
+            return;
+          }
+          if (resolution.kind === "cancel") {
+            cancelPending();
+            return;
+          }
+          if (resolution.kind === "switch_confirmed") {
+            const incoming = resolution.action.incomingCommand;
+            storePendingAction(null);
+            pendingRef.current = null;
+            setPending(null);
+            const cancelled = cancelPendingMessage();
+            pushMessage("assistant", cancelled);
+            appendHistory(trimmed, cancelled);
+            if (incoming) {
+              await runCommand(incoming, { skipUserMessage: true });
+            }
+            return;
+          }
+          if (resolution.kind === "topic_switch") {
+            const next = createTopicSwitchPending(resolution.action, resolution.incomingCommand);
+            storePendingAction(next);
+            logPendingAction("pendingAction created", next.type);
+            const text = topicSwitchQuestion(next);
+            pushMessage("assistant", text);
+            appendHistory(trimmed, text);
+            speak(text, ttsEnabled);
+            return;
+          }
+          if (resolution.kind === "remind") {
+            const text = pendingStillOpenMessage(resolution.action);
+            pushMessage("assistant", text);
+            speak(text, ttsEnabled);
+            return;
+          }
+        }
         if (pendingRef.current && isConfirmPhrase(trimmed)) {
           applyPending();
           return;
@@ -397,15 +636,7 @@ export function CadAiChat({
         }
 
         const context = makeContext();
-        const conversationId =
-          typeof window === "undefined"
-            ? "cad-ai"
-            : sessionStorage.getItem("datageo:cad-ai-conversation") ??
-              (() => {
-                const id = `cad_${Date.now().toString(36)}`;
-                sessionStorage.setItem("datageo:cad-ai-conversation", id);
-                return id;
-              })();
+        const conversationId = conversationIdRef.current;
 
         const res = await fetch("/api/cad/ai", {
           method: "POST",
@@ -419,6 +650,7 @@ export function CadAiChat({
             history: conversationHistory,
             fileContent: fileContent ?? undefined,
             fileName: fileName ?? undefined,
+            pendingAction: pendingActionRef.current,
           }),
         });
 
@@ -427,7 +659,13 @@ export function CadAiChat({
           error?: string;
           resposta?: string;
           source?: string;
+          pendingAction?: CadPendingAction | null;
+          applyImmediately?: boolean;
+          incomingCommand?: string;
         };
+        if (data.pendingAction !== undefined) {
+          storePendingAction(data.pendingAction);
+        }
 
         const tryLocalFallback = () => {
           const localChain = parseLocalCadCommandChain(trimmed, context, conversationHistory);
@@ -503,6 +741,8 @@ export function CadAiChat({
       cancelPending,
       executeResolved,
       makeContext,
+      runRedistributionPending,
+      storePendingAction,
       appendHistory,
       pushMessage,
       speak,
@@ -515,6 +755,7 @@ export function CadAiChat({
   const clearHistory = () => {
     setMessages([]);
     setConversationHistory([]);
+    storePendingAction(null);
     sessionStorage.removeItem(historyStorageKey(project));
   };
 
@@ -723,41 +964,83 @@ export function CadAiChat({
         {fileName ? (
           <p className="mb-2 truncate text-[10px] text-emerald-400">{t("fileReady", { name: fileName })}</p>
         ) : null}
-        {redistributionOffer ? (
+        {pendingAction?.type === "pending_modify" ? (
+          <div className="mb-2 space-y-2 rounded-lg border border-cyan-500/30 bg-cyan-950/30 px-3 py-2 text-[11px] text-cyan-100">
+            <p>{pendingStillOpenMessage(pendingAction)}</p>
+            <button
+              type="button"
+              disabled={processing}
+              onClick={() => {
+                pushMessage("user", "cancelar");
+                storePendingAction(null);
+                pushMessage("assistant", cancelPendingMessage());
+              }}
+              className="rounded-lg border border-[#334155] px-2 py-1.5 text-[11px] text-[#cbd5e1] disabled:opacity-40"
+            >
+              Cancelar operação
+            </button>
+          </div>
+        ) : null}
+        {pendingAction?.type === "confirm_redistribution" ? (
           <div className="mb-2 space-y-2 rounded-lg border border-amber-500/30 bg-amber-950/30 px-3 py-2 text-[11px] text-amber-100">
-            <p>O ajuste individual não cabe sem mexer em outros lotes.</p>
+            <p>Deseja permitir a redistribuição dos lotes afetados?</p>
             <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
+                disabled={processing}
                 onClick={() => {
-                  const offer = redistributionOffer;
-                  setRedistributionOffer(null);
-                  runCommands(
-                    [
-                      {
-                        acao: "ajustar_lote",
-                        lote: offer.lote,
-                        area_alvo_m2: offer.areaAlvo,
-                        scope: "local_redistribution",
-                        resposta: `Redistribuir lotes afetados para ajustar o lote ${offer.lote} para ${offer.areaAlvo} m². Deseja aplicar?`,
-                      },
-                    ],
-                    "Permitir redistribuição",
-                  );
+                  pushMessage("user", "sim");
+                  runRedistributionPending("sim");
                 }}
-                className="rounded-lg bg-amber-600 px-2 py-1.5 text-[11px] font-semibold text-white"
+                className="rounded-lg bg-amber-600 px-2 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40"
               >
-                Permitir redistribuição
+                SIM, CONTINUAR
               </button>
               <button
                 type="button"
+                disabled={processing}
                 onClick={() => {
-                  setRedistributionOffer(null);
-                  pushMessage("assistant", "Operação cancelada. Nenhum lote foi alterado.");
+                  pushMessage("user", "não");
+                  cancelPending();
                 }}
-                className="rounded-lg border border-[#334155] px-2 py-1.5 text-[11px] text-[#cbd5e1]"
+                className="rounded-lg border border-[#334155] px-2 py-1.5 text-[11px] text-[#cbd5e1] disabled:opacity-40"
               >
-                Cancelar
+                NÃO, CANCELAR
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {pendingAction?.type === "confirm_topic_switch" ? (
+          <div className="mb-2 space-y-2 rounded-lg border border-amber-500/30 bg-amber-950/30 px-3 py-2 text-[11px] text-amber-100">
+            <p>{topicSwitchQuestion(pendingAction)}</p>
+            <div className="grid grid-cols-1 gap-1.5">
+              <button
+                type="button"
+                disabled={processing}
+                onClick={() => {
+                  const incoming = pendingAction.incomingCommand;
+                  pushMessage("user", "sim");
+                  storePendingAction(null);
+                  pendingRef.current = null;
+                  setPending(null);
+                  const cancelled = cancelPendingMessage();
+                  pushMessage("assistant", cancelled);
+                  if (incoming) void runCommand(incoming, { skipUserMessage: true });
+                }}
+                className="rounded-lg bg-amber-600 px-2 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40"
+              >
+                {`Cancelar operação e ${pendingAction.incomingSummary}`}
+              </button>
+              <button
+                type="button"
+                disabled={processing}
+                onClick={() => {
+                  pushMessage("user", "continuar operação pendente");
+                  runRedistributionPending("continuar operação pendente");
+                }}
+                className="rounded-lg border border-[#334155] px-2 py-1.5 text-[11px] text-[#cbd5e1] disabled:opacity-40"
+              >
+                Continuar operação pendente
               </button>
             </div>
           </div>

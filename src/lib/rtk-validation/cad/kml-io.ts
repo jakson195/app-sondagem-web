@@ -1,5 +1,6 @@
 import { unzipSync, zipSync, strToU8 } from "fflate";
-import type { CadEntity, CadPointEntity, CadPolylineEntity, CadProject } from "./types";
+import { detectCadGeorefFromProject, enToLatLonGeoref, vertexToEn } from "./georef";
+import type { CadPointEntity, CadPolylineEntity, CadProject } from "./types";
 import type { SurveyPoint } from "../types";
 
 function uid() {
@@ -121,19 +122,97 @@ function escapeXml(s: string) {
     .replace(/"/g, "&quot;");
 }
 
-export function exportCadProjectKml(project: CadProject): string {
-  const placemarks: string[] = [];
+/** Converte "#rrggbb" (ou "#rgb") para a cor KML aabbggrr. */
+function kmlColor(hex: string | undefined, alpha: number): string {
+  let h = (hex ?? "").trim().replace(/^#/, "");
+  if (/^[0-9a-f]{3}$/i.test(h)) h = h.split("").map((c) => c + c).join("");
+  if (!/^[0-9a-f]{6}$/i.test(h)) h = "ffffff";
+  const a = Math.round(Math.min(1, Math.max(0, alpha)) * 255).toString(16).padStart(2, "0");
+  return `${a}${h.slice(4, 6)}${h.slice(2, 4)}${h.slice(0, 2)}`.toLowerCase();
+}
 
-  for (const entity of project.entities) {
-    if (entity.type === "point") {
-      placemarks.push(
-        `<Placemark><name>${escapeXml(entity.label ?? entity.id)}</name><Point><coordinates>${entity.x},${entity.y},${entity.z}</coordinates></Point></Placemark>`,
-      );
+function loteDescription(entity: CadPolylineEntity): string {
+  const lote = entity.lote;
+  if (!lote) return "";
+  const rows = [
+    lote.quadra ? `Quadra: ${lote.quadra}` : "",
+    lote.numero != null ? `Lote: ${lote.numero}` : "",
+    `Área: ${lote.areaM2.toFixed(2)} m²`,
+    lote.testadaM > 0 ? `Testada: ${lote.testadaM.toFixed(2)} m` : "",
+    lote.profundidadeM > 0 ? `Profundidade: ${lote.profundidadeM.toFixed(2)} m` : "",
+    lote.ruas.length ? `Ruas: ${lote.ruas.join(", ")}` : "",
+  ].filter(Boolean);
+  return `<description>${escapeXml(rows.join("\n"))}</description>`;
+}
+
+/**
+ * KML em WGS84 (lon,lat). Coordenadas UTM SIRGAS 2000 são convertidas pela zona detectada no projeto.
+ * Lança erro se o desenho não estiver georreferenciado.
+ */
+export function exportCadProjectKml(project: CadProject): string {
+  const georef = detectCadGeorefFromProject(project);
+  if (!georef.isGeoreferenced) {
+    throw new Error("Desenho sem coordenadas georreferenciadas (UTM SIRGAS 2000 ou WGS84). KML/KMZ exige georreferência.");
+  }
+
+  const lonLat = (x: number, y: number, z: number) => {
+    const v = { x, y, z };
+    const en = vertexToEn(v, georef);
+    const ll = enToLatLonGeoref(en.e, en.n, georef);
+    return `${ll.lon.toFixed(8)},${ll.lat.toFixed(8)},${Number.isFinite(z) ? z.toFixed(3) : 0}`;
+  };
+
+  const styles: string[] = [];
+  const folders: string[] = [];
+  const layerIds = [...new Set(project.entities.map((e) => e.layerId))];
+
+  for (const layerId of layerIds) {
+    const layer = project.layers.find((l) => l.id === layerId);
+    const styleId = `s_${layerId.replace(/[^\w-]/g, "_")}`;
+    const stroke = layer?.color ?? "#ffffff";
+    const fillAlpha = layer?.fillAlpha ?? 0.25;
+    styles.push(
+      `<Style id="${styleId}"><LineStyle><color>${kmlColor(stroke, 1)}</color><width>${Math.max(1, layer?.lineWidth ?? 2)}</width></LineStyle>` +
+        `<PolyStyle><color>${kmlColor(layer?.fillColor ?? stroke, fillAlpha)}</color></PolyStyle>` +
+        `<IconStyle><color>${kmlColor(stroke, 1)}</color><scale>0.7</scale></IconStyle><LabelStyle><scale>0.7</scale></LabelStyle></Style>`,
+    );
+
+    const placemarks: string[] = [];
+    for (const entity of project.entities) {
+      if (entity.layerId !== layerId) continue;
+      if (entity.type === "point") {
+        placemarks.push(
+          `<Placemark><name>${escapeXml(entity.label ?? "")}</name><styleUrl>#${styleId}</styleUrl>` +
+            `<Point><coordinates>${lonLat(entity.x, entity.y, entity.z)}</coordinates></Point></Placemark>`,
+        );
+      } else if (entity.type === "line") {
+        placemarks.push(
+          `<Placemark><styleUrl>#${styleId}</styleUrl><LineString><tessellate>1</tessellate><coordinates>` +
+            `${lonLat(entity.start.x, entity.start.y, entity.start.z)} ${lonLat(entity.end.x, entity.end.y, entity.end.z)}` +
+            `</coordinates></LineString></Placemark>`,
+        );
+      } else if (entity.vertices.length >= 2) {
+        const coords = entity.vertices.map((v) => lonLat(v.x, v.y, v.z));
+        const name = entity.lote?.numero != null
+          ? `${entity.lote.quadra ? `Q${entity.lote.quadra} ` : ""}L${entity.lote.numero}`
+          : (entity.name ?? "");
+        const head = `<Placemark><name>${escapeXml(name)}</name>${loteDescription(entity)}<styleUrl>#${styleId}</styleUrl>`;
+        if (entity.closed && entity.vertices.length >= 3) {
+          placemarks.push(
+            `${head}<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>` +
+              `${[...coords, coords[0]].join(" ")}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>`,
+          );
+        } else {
+          placemarks.push(
+            `${head}<LineString><tessellate>1</tessellate><coordinates>${coords.join(" ")}</coordinates></LineString></Placemark>`,
+          );
+        }
+      }
     }
-    if (entity.type === "polyline" && entity.vertices.length >= 2) {
-      const coords = entity.vertices.map((v) => `${v.x},${v.y},${v.z}`).join(" ");
-      placemarks.push(
-        `<Placemark><name>${escapeXml(entity.name ?? entity.id)}</name><LineString><coordinates>${coords}</coordinates></LineString></Placemark>`,
+
+    if (placemarks.length > 0) {
+      folders.push(
+        `<Folder><name>${escapeXml(layer?.name ?? layerId)}</name><visibility>${layer?.visible === false ? 0 : 1}</visibility>\n${placemarks.join("\n")}\n</Folder>`,
       );
     }
   }
@@ -142,12 +221,13 @@ export function exportCadProjectKml(project: CadProject): string {
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
 <name>${escapeXml(project.name)}</name>
-${placemarks.join("\n")}
+${styles.join("\n")}
+${folders.join("\n")}
 </Document>
 </kml>`;
 }
 
-export function exportCadProjectKmz(project: CadProject): Uint8Array {
+export function exportCadProjectKmz(project: CadProject): Uint8Array<ArrayBuffer> {
   const kml = exportCadProjectKml(project);
   return zipSync({ "doc.kml": strToU8(kml) });
 }

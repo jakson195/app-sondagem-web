@@ -256,6 +256,12 @@ describe("applyNomenclatureToLoteamentoResult", () => {
         minFrontage: 1,
         maxFrontage: 1,
         invalidLots: [],
+        lotsWithoutRoadAccess: 0,
+        lotsWithoutFrontage: 0,
+        internalStreetCount: 0,
+        desvioPadraoArea: 0,
+        coeficienteVariacao: 0,
+        equityByQuadra: [],
       },
       quadraPolys: [[[...ring([0, 80], 40, 40), [0, 80]]], [[...ring([0, 0], 40, 40), [0, 0]]]],
       lotes: [

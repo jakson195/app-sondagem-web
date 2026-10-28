@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { isLoteamentoProductMode } from "@/lib/product-mode";
+import { getProductMode } from "@/lib/product-mode";
 
 type Sector = {
   id: string;
@@ -59,9 +59,13 @@ function TagBadge({ label }: { label: string }) {
 }
 
 export function SiteIndustries() {
-  const visibleSectors = isLoteamentoProductMode()
-    ? sectors.filter((sector) => sector.id === "loteamento" || sector.id === "obras")
-    : sectors;
+  const productMode = getProductMode();
+  const visibleSectors =
+    productMode === "LOTEAMENTO"
+      ? sectors.filter((sector) => sector.id === "loteamento" || sector.id === "obras")
+      : productMode === "SONDAGEM"
+        ? sectors.filter((sector) => sector.id === "geotecnia" || sector.id === "obras")
+        : sectors;
 
   return (
     <section id="setores" className="scroll-mt-24 py-20 sm:py-28">
@@ -76,9 +80,11 @@ export function SiteIndustries() {
             </h2>
           </div>
           <p className="max-w-sm text-sm leading-relaxed text-[var(--dg-muted)]">
-            {isLoteamentoProductMode()
-              ? "Projectos de loteamento com plantas, mapas e análise de custos no mesmo fluxo."
-              : "Consultorias de geotecnia, mineração e engenharia que precisam de campo, relatórios e entrega num só fluxo."}
+            {productMode === "SONDAGEM"
+              ? "Consultorias que registam SPT, rotativa, trado e poços e entregam o relatório no mesmo fluxo."
+              : productMode === "LOTEAMENTO"
+                ? "Projectos de loteamento com plantas, mapas e análise de custos no mesmo fluxo."
+                : "Consultorias de geotecnia, mineração e engenharia que precisam de campo, relatórios e entrega num só fluxo."}
           </p>
         </div>
 

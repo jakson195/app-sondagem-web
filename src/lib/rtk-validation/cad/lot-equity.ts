@@ -680,7 +680,9 @@ function optimizeRow(
   };
 
   consider(currentWidths(lots, azimuthDeg, streetRings, centroid, along));
-  consider(equalWidths(along, n));
+  if (minTestadaM <= 0 || along / n + 0.08 >= minTestadaM) {
+    consider(equalWidths(along, n));
+  }
   const rectangular = isApproximatelyRectangular(row);
   const equalCand = candidates.find((c) => calcularErroDeEquidade(c.areas).coeficienteVariacao <= config.maxCoeficienteVariacao);
   if (!rectangular && !equalCand) {

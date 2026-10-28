@@ -1,5 +1,6 @@
 "use client";
 
+import type { Ref } from "react";
 import { Sparkles } from "lucide-react";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import type { SavedCadProjectRecord } from "@/lib/rtk-validation/cad";
@@ -70,6 +71,10 @@ export function CadStatusBar({
   zoom,
   step,
   hint,
+  osnap,
+  osnapType,
+  xRef,
+  yRef,
 }: {
   crs: string;
   zoneLabel: string;
@@ -78,6 +83,10 @@ export function CadStatusBar({
   zoom: string;
   step: string | null;
   hint?: string;
+  osnap?: "ON" | "OFF";
+  osnapType?: string | null;
+  xRef?: Ref<HTMLSpanElement>;
+  yRef?: Ref<HTMLSpanElement>;
 }) {
   return (
     <div className="flex h-6 shrink-0 items-center gap-3 overflow-hidden border-t border-[#1e293b] bg-[#0b1220] px-3 font-mono text-[10px] text-[#94a3b8]">
@@ -85,9 +94,19 @@ export function CadStatusBar({
         {crs}
         {zoneLabel ? ` • ${zoneLabel}` : ""}
       </span>
-      <span>X: {x}</span>
-      <span>Y: {y}</span>
+      <span>
+        X: <span ref={xRef}>{x}</span>
+      </span>
+      <span>
+        Y: <span ref={yRef}>{y}</span>
+      </span>
       <span>Zoom: {zoom}</span>
+      {osnap ? (
+        <span className={osnap === "ON" ? "text-emerald-400" : "text-[#64748b]"}>
+          OSNAP: {osnap}
+          {osnap === "ON" && osnapType ? ` · ${osnapType}` : ""}
+        </span>
+      ) : null}
       {step ? <span>Passo: {step}</span> : null}
       {hint ? <span className="ml-auto truncate text-[#64748b]">{hint}</span> : null}
     </div>

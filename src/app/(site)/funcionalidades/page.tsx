@@ -3,14 +3,16 @@ import Link from "next/link";
 import { ModulesSection } from "@/components/marketing/modules-section";
 import { SondagemGallerySection } from "@/components/marketing/sondagem-gallery-section";
 import { SiteServiceGuide } from "@/components/marketing/site-service-guide";
-import { isLoteamentoProductMode } from "@/lib/product-mode";
+import { getProductMode } from "@/lib/product-mode";
 
 export const metadata: Metadata = {
   title: "Funcionalidades",
 };
 
 export default function FuncionalidadesPage() {
-  const loteamento = isLoteamentoProductMode();
+  const productMode = getProductMode();
+  const loteamento = productMode === "LOTEAMENTO";
+  const sondagem = productMode === "SONDAGEM";
   return (
     <>
       <section className="border-b border-[var(--dg-border)] px-4 pb-12 pt-28 sm:px-6">
@@ -20,15 +22,17 @@ export default function FuncionalidadesPage() {
           </p>
           <h1 className="mt-2 text-4xl font-bold tracking-tight">Funcionalidades</h1>
           <p className="mt-4 max-w-2xl text-[var(--dg-muted)]">
-            {loteamento
-              ? "Ambiente CAD, GEO e estudo de viabilidade para loteamento — do desenho à análise de custos."
-              : "Catálogo completo de módulos DataGeo Digital — active por empresa o que precisar."}
+            {sondagem
+              ? "SPT, rotativa, trado, poços e relatórios — do furo no campo à entrega ao cliente."
+              : loteamento
+                ? "Ambiente CAD, GEO e estudo de viabilidade para loteamento — do desenho à análise de custos."
+                : "Catálogo completo de módulos DataGeo Digital — active por empresa o que precisar."}
           </p>
         </div>
       </section>
       <ModulesSection
         showCta={false}
-        title={loteamento ? "Módulos do produto" : "Catálogo de módulos"}
+        title={loteamento || sondagem ? "Módulos do produto" : "Catálogo de módulos"}
         subtitle=""
       />
       {!loteamento && <SondagemGallerySection />}

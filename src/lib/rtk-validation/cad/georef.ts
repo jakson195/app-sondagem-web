@@ -47,13 +47,18 @@ function collectVertices(entities: CadEntity[], layerFilter?: Set<string>): CadV
 
 function parseZoneFromCrs(crs?: string): number | null {
   if (!crs) return null;
-  const m =
-    crs.match(/(?:EPSG:|UTM\s*)\s*(\d{2})(?:S|N)?/i) ??
-    crs.match(/319(\d{2})/) ??
-    crs.match(/4674.*?(\d{2})/i);
-  if (!m) return null;
-  const zone = Number(m[1]);
-  return zone >= 18 && zone <= 25 ? zone : null;
+  let zone: number | null = null;
+  const epsg = crs.match(/EPSG:\s*(\d{4,5})/i);
+  if (epsg) {
+    const code = Number(epsg[1]);
+    if (code >= 31978 && code <= 31985) zone = code - 31960;
+    else if (code >= 32718 && code <= 32725) zone = code - 32700;
+  }
+  if (zone == null) {
+    const utm = crs.match(/UTM\s*(?:zone|fuso)?\s*(\d{1,2})\s*[SN]?/i);
+    if (utm) zone = Number(utm[1]);
+  }
+  return zone != null && zone >= 18 && zone <= 25 ? zone : null;
 }
 
 function buildGeoref(
@@ -193,7 +198,7 @@ export function detectCadGeoref(
     (bounds != null && viewportLooksGeoreferenced(bounds));
 
   const crsZone = parseZoneFromCrs(crs);
-  if (crsZone != null && coordMode === "utm" && !isGeoreferenced) {
+  if (crsZone != null && coordMode === "utm") {
     utmZone = crsZone;
   }
 

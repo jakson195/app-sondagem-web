@@ -18,8 +18,29 @@ function parseAreaToken(raw: string | undefined): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+const QUADRA_STOP = new Set([
+  "de",
+  "da",
+  "do",
+  "em",
+  "na",
+  "no",
+  "com",
+  "para",
+  "por",
+  "um",
+  "uma",
+  "essa",
+  "este",
+  "esta",
+  "aquele",
+  "aquela",
+]);
+
 function isQuadraToken(raw: string): boolean {
-  return /^[A-Za-z]$|^[A-Za-z]{1,3}\d{0,2}$|^\d{1,2}$/.test(raw.trim());
+  const token = raw.trim();
+  if (QUADRA_STOP.has(token.toLowerCase())) return false;
+  return /^[A-Za-z]$|^[A-Za-z]{1,3}\d{0,2}$|^\d{1,2}$/.test(token);
 }
 
 const CONFIRM_RE =
@@ -80,17 +101,41 @@ function extractPreserveFlags(text: string): Pick<
   };
 }
 
+function extractQuadraDims(text: string): { width?: number; height?: number } {
+  const match = text.match(
+    /quadra[^\d]{0,40}([\d]+(?:[.,]\d+)?)\s*(?:m(?:etros?)?)?\s*(?:x|por|×)\s*([\d]+(?:[.,]\d+)?)/i,
+  );
+  const width = parseAreaToken(match?.[1]);
+  const height = parseAreaToken(match?.[2]);
+  if (width == null || height == null) return {};
+  return { width, height };
+}
+
+function extractStreetWidth(text: string): number | undefined {
+  const match = text.match(
+    /(?:rua|via)s?\s+(?:internas?\s+)?(?:de|com)?\s*([\d]+(?:[.,]\d+)?)\s*m/i,
+  );
+  return parseAreaToken(match?.[1]);
+}
+
 function extractLotDims(text: string): { testada?: number; profundidade?: number; area?: number } {
   const testada = text.match(/testada(?:\s+m[ií]nima)?\s*(?:de\s+)?([\d]+(?:[.,]\d+)?)/i);
   const prof = text.match(/profundidade\s*(?:de\s+)?([\d]+(?:[.,]\d+)?)/i);
   let front = parseAreaToken(testada?.[1]);
   let depth = parseAreaToken(prof?.[1]);
+  const quadra = extractQuadraDims(text);
   if (front == null || depth == null) {
     const pair = text.match(
+      /(?:lote|lotes|testada)[^\d]{0,24}([\d]+(?:[.,]\d+)?)\s*(?:m(?:etros?)?)?\s*(?:x|por|×)\s+([\d]+(?:[.,]\d+)?)/i,
+    );
+    const generic = text.match(
       /([\d]+(?:[.,]\d+)?)\s*(?:m(?:etros?)?)?\s*(?:x|por|×)\s+([\d]+(?:[.,]\d+)?)/i,
     );
-    front ??= parseAreaToken(pair?.[1]);
-    depth ??= parseAreaToken(pair?.[2]);
+    const useGeneric =
+      generic &&
+      !(quadra.width != null && parseAreaToken(generic[1]) === quadra.width && parseAreaToken(generic[2]) === quadra.height);
+    front ??= parseAreaToken(pair?.[1] ?? (useGeneric ? generic?.[1] : undefined));
+    depth ??= parseAreaToken(pair?.[2] ?? (useGeneric ? generic?.[2] : undefined));
   }
   return {
     testada: front,
@@ -267,6 +312,66 @@ function parseAreaVerdePercent(text: string): CadAiCommand[] | null {
   ];
 }
 
+function parseNaturalGenerateLoteamento(
+  text: string,
+  context?: CadAiProjectContext,
+): CadAiCommand[] | null {
+  const lower = text.toLowerCase();
+  if (/reproj?etar|reporjetar|regerar|refazer\s+(?:todo\s+)?(?:o\s+)?loteamento/i.test(text)) {
+    return null;
+  }
+  const quadra = extractQuadraDims(text);
+  const dims = extractLotDims(text);
+  const area = dims.area;
+  if (
+    /\b(?:lotes?\s+(?:mais\s+)?iguais|mesma\s+[aá]rea|uniformizar|igualar\s+(?:as\s+)?[aá]reas?)\b/.test(lower)
+  ) {
+    return null;
+  }
+  const namedQuadra = /\bquadra\s+([A-Za-z0-9]+)\b/i.exec(text);
+  if (namedQuadra && isQuadraToken(namedQuadra[1])) return null;
+  const mentionsAccess = /n[aã]o\s+quero\s+lote\s+sem\s+acesso|acesso\s+vi[aá]rio|ruas?\s+internas?/.test(lower);
+  const mentionsGenerate =
+    /(?:fa[cç]a|gere|gerar|crie|criar|lotea|lotear|fazer|monte|preencha).*(?:quadra|lote|loteamento)/i.test(text) ||
+    /(?:minha|essa|esta)\s+quadra\s+(?:tem|mede|de)/i.test(text);
+  if (!mentionsGenerate && !(quadra.width != null && area != null) && !mentionsAccess) return null;
+  if (!quadra.width && !area && !dims.testada && !mentionsAccess) return null;
+
+  const hasLots =
+    (context?.loteamento?.lotes?.length ?? 0) > 0 || (context?.loteamento?.quadras?.length ?? 0) > 0;
+  if (hasLots && !/lotea|gerar\s+(?:o\s+)?loteamento|fa[cç]a essa quadra|crie ruas internas/i.test(text)) {
+    return null;
+  }
+
+  const testada = dims.testada ?? 10;
+  const profundidade =
+    dims.profundidade ??
+    (area != null && testada > 0 ? Number((area / testada).toFixed(2)) : 30);
+  const via = extractStreetWidth(text) ?? 10;
+  const parts = [
+    quadra.width != null && quadra.height != null ? `quadra ${quadra.width} × ${quadra.height} m` : null,
+    area != null ? `lotes de cerca de ${area} m²` : null,
+    `testada ${testada} m`,
+    `profundidade ${profundidade} m`,
+    mentionsAccess || /rua\s+intern/.test(lower) ? "ruas internas se necessário" : null,
+  ].filter(Boolean);
+  return [
+    {
+      acao: "gerar_loteamento",
+      largura_quadra_m: quadra.width,
+      distancia_quadra_m: quadra.height,
+      area_minima_m2: area,
+      testada_minima_m: testada,
+      profundidade_quadra_m: profundidade,
+      largura_via_m: via,
+      usarSelecao: true,
+      require_road_access: true,
+      allow_internal_roads: true,
+      resposta: `Entendi. Vou gerar o loteamento com ${parts.join(", ")}. Deseja aplicar?`,
+    },
+  ];
+}
+
 function parseGlobalLotSize(text: string, history?: CadAiHistoryMessage[]): CadAiCommand[] | null {
   const demais = text.match(
     /(?:os\s+)?(?:demais|demias)\s+(?:lotes?\s+)?(?:com|para|pra|de)\s+([\d]+(?:[.,]\d+)?)/i,
@@ -312,6 +417,9 @@ export function parseLoteamentoAssistantCommand(
 
   const globalLots = parseGlobalLotSize(raw, history);
   if (globalLots) return globalLots;
+
+  const naturalLot = parseNaturalGenerateLoteamento(raw, context);
+  if (naturalLot) return naturalLot;
 
   if (isGlebaLotear(raw) && !/\bquadra\s+[A-Za-z0-9]+\b/i.test(raw)) {
     return null;

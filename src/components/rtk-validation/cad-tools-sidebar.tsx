@@ -129,7 +129,7 @@ export function CadToolsSidebar({
 
   if (collapsed) {
     return (
-      <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden border-r border-[#e5e7eb] bg-white">
+      <aside className="cad-tools-panel pointer-events-auto relative z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-r border-[#e5e7eb] bg-white text-[#111827]">
         <button
           type="button"
           onClick={() => onCollapsedChange?.(false)}
@@ -164,7 +164,7 @@ export function CadToolsSidebar({
   }
 
   return (
-    <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden border-r border-[#e5e7eb] bg-white">
+    <aside className="cad-tools-panel pointer-events-auto relative z-40 flex h-full min-h-0 w-full flex-col overflow-hidden border-r border-[#e5e7eb] bg-white text-[#111827]">
       <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-[#e5e7eb] px-2">
         <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-[#0f2848]">{t("title")}</p>
         <button
@@ -215,7 +215,7 @@ export function CadToolsSidebar({
           );
         })}
       </nav>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">{sections[activeTab]}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">{sections[activeTab]}</div>
     </aside>
   );
 }

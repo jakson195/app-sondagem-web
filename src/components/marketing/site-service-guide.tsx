@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { isSondagemProductMode } from "@/lib/product-mode";
 
 type GuideBlock = {
   id: string;
@@ -76,6 +77,36 @@ function accentClass(accent: GuideBlock["accent"]) {
 }
 
 export function SiteServiceGuide() {
+  const sondagem = isSondagemProductMode();
+  const guideBlocks = sondagem
+    ? blocks.map((block) => {
+        if (block.id === "fluxo") {
+          return {
+            ...block,
+            items: [
+              { label: "01", text: "Crie a conta, convide a equipa e abra a obra de sondagem." },
+              { label: "02", text: "Registe SPT, rotativa, trado ou poços, com fotos e coordenadas." },
+              { label: "03", text: "Veja perfis, amostras e resumos técnicos no painel da obra." },
+              { label: "04", text: "Gere o relatório PDF e partilhe no portal do cliente." },
+            ],
+          };
+        }
+        if (block.id === "pacote") {
+          return {
+            ...block,
+            items: [
+              { label: "SPT", text: "Registo de campo, gráficos NSPT e relatórios alinhados ao padrão Soilsul." },
+              { label: "Rotativa", text: "Perfil estratigráfico, RQD e coluna da sondagem." },
+              { label: "Trado", text: "Furos a trado e descrição das camadas." },
+              { label: "Poços", text: "Piezometria e acompanhamento de níveis." },
+              { label: "PDF", text: "Relatórios de campo e portal do cliente." },
+            ],
+          };
+        }
+        return block;
+      })
+    : blocks;
+
   return (
     <section
       id="como-funciona"
@@ -87,7 +118,9 @@ export function SiteServiceGuide() {
             Guia da plataforma
           </p>
           <h2 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">
-            Geotecnia e mineração, explicados de forma directa
+            {sondagem
+              ? "Sondagem de campo, explicada de forma directa"
+              : "Geotecnia e mineração, explicados de forma directa"}
           </h2>
           <p className="mt-3 text-[var(--dg-muted)]">
             Estrutura pensada para consultorias que precisam de rigor técnico, isolamento
@@ -96,7 +129,7 @@ export function SiteServiceGuide() {
         </div>
 
         <div className="mt-12 space-y-6">
-          {blocks.map((block, index) => (
+          {guideBlocks.map((block, index) => (
             <article
               key={block.id}
               className={`flex flex-col overflow-hidden rounded-2xl border border-[var(--dg-border)] bg-[var(--dg-card)]/80 ${

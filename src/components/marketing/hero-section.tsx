@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { isLoteamentoProductMode } from "@/lib/product-mode";
+import { getProductMode } from "@/lib/product-mode";
 import { HeroVideoBackground } from "./hero-video-background";
 
 const highlightsFull = [
@@ -16,9 +16,22 @@ const highlightsLoteamento = [
   { value: "SaaS", label: "Multi-empresa" },
 ];
 
+const highlightsSondagem = [
+  { value: "SPT", label: "Sondagem à percussão" },
+  { value: "Rotativa", label: "Sondagem rotativa" },
+  { value: "Trado", label: "Sondagem a trado" },
+  { value: "PDF", label: "Relatórios de campo" },
+];
+
 export function HeroSection() {
-  const loteamento = isLoteamentoProductMode();
-  const highlights = loteamento ? highlightsLoteamento : highlightsFull;
+  const productMode = getProductMode();
+  const loteamento = productMode === "LOTEAMENTO";
+  const sondagem = productMode === "SONDAGEM";
+  const highlights = sondagem
+    ? highlightsSondagem
+    : loteamento
+      ? highlightsLoteamento
+      : highlightsFull;
   return (
     <section className="relative min-h-[min(88vh,860px)] overflow-hidden pt-24 sm:pt-28">
       <HeroVideoBackground />
@@ -31,13 +44,15 @@ export function HeroSection() {
           <h1 className="mt-4 text-center text-3xl font-bold leading-tight tracking-tight sm:text-left sm:text-4xl lg:text-5xl">
             Plataforma SaaS para{" "}
             <span className="text-gradient-brand">
-              {loteamento ? "loteamento" : "geotecnia e mineração"}
+              {sondagem ? "sondagem de campo" : loteamento ? "loteamento" : "geotecnia e mineração"}
             </span>
           </h1>
           <p className="mt-5 text-center text-base leading-relaxed text-dg-muted sm:text-left sm:text-lg">
-            {loteamento
-              ? "Ambiente CAD, mapas GEO e estudo de viabilidade — do desenho do loteamento à análise de custos."
-              : "SPT, mapas GEO, relatórios PDF e portal white-label — do registo no furo à entrega ao cliente."}
+            {sondagem
+              ? "SPT, rotativa, trado e poços — do registo no furo ao relatório PDF."
+              : loteamento
+                ? "Ambiente CAD, mapas GEO e estudo de viabilidade — do desenho do loteamento à análise de custos."
+                : "SPT, mapas GEO, relatórios PDF e portal white-label — do registo no furo à entrega ao cliente."}
           </p>
 
           <ul className="mt-8 grid grid-cols-2 gap-3 sm:gap-4">

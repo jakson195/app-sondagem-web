@@ -18,6 +18,7 @@ import {
   polygonAreaPlanarM2,
   polygonInteriorOverlapM2,
   rebuildQuadraLotes,
+  rebuildQuadraLotesWithAccess,
   resolveLotSizeSpec,
   reservarRetanguloNoCanto,
   ringsShareBoundary,
@@ -149,11 +150,11 @@ export const AREA_UTIL_LAYER_ID = AREA_UTIL_LAYER.id;
 export const AREA_REMANESCENTE_LAYER: CadLayer = {
   id: "area_remanescente",
   name: "REMANESCENTE",
-  color: "#57534e",
-  fillColor: "#a8a29e",
-  fillAlpha: 0.38,
-  textColor: "#44403c",
-  lineWidth: 1.6,
+  color: "#b91c1c",
+  fillColor: "#ef4444",
+  fillAlpha: 0.42,
+  textColor: "#7f1d1d",
+  lineWidth: 1.8,
   hatchPattern: "diagonal",
   visible: true,
   locked: false,
@@ -544,6 +545,187 @@ export function applyEixoTwoPointEdit(
     eixo: nextEixo,
     removedVertices: Math.max(0, eixo.vertices.length - nextVertices.length),
   };
+}
+
+export const EXCLUIR_RUA_NEED_HIT = "Clique sobre uma rua do loteamento para excluí-la.";
+export const EXCLUIR_RUA_LAST = "O loteamento precisa de pelo menos uma rua.";
+
+const RUA_PIECE_MIN_M = 1;
+const RUA_CUT_MERGE_M = 0.5;
+
+function eixoPointAtStation(vertices: CadVertex[], stations: number[], s: number): CadVertex {
+  for (let i = 0; i < vertices.length - 1; i++) {
+    const s0 = stations[i] ?? 0;
+    const s1 = stations[i + 1] ?? s0;
+    if (s <= s1 + EIXO_STATION_EPS_M || i === vertices.length - 2) {
+      const t = s1 > s0 ? Math.max(0, Math.min(1, (s - s0) / (s1 - s0))) : 0;
+      const a = vertices[i];
+      const b = vertices[i + 1];
+      return { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y), z: (a.z ?? 0) + t * ((b.z ?? 0) - (a.z ?? 0)) };
+    }
+  }
+  return { ...vertices[vertices.length - 1] };
+}
+
+/** Trecho do eixo entre as estacas s0 e s1. */
+export function eixoSliceBetweenStations(vertices: CadVertex[], s0: number, s1: number): CadVertex[] {
+  const stations = eixoVertexStations(vertices);
+  const out: CadVertex[] = [];
+  appendEixoVertexIfDistinct(out, eixoPointAtStation(vertices, stations, s0));
+  for (let i = 0; i < vertices.length; i++) {
+    const s = stations[i] ?? 0;
+    if (s > s0 + EIXO_STATION_EPS_M && s < s1 - EIXO_STATION_EPS_M) appendEixoVertexIfDistinct(out, vertices[i]);
+  }
+  appendEixoVertexIfDistinct(out, eixoPointAtStation(vertices, stations, s1));
+  return out;
+}
+
+/**
+ * Estacas onde o eixo encontra outros eixos: cruzamentos e pontas que chegam em T
+ * (a ponta do eixo transversal fica até `junctionTolM` do traço). Inclui 0 e o comprimento total.
+ */
+export function eixoJunctionStations(
+  eixo: CadPolylineEntity,
+  others: CadPolylineEntity[],
+  junctionTolM: number,
+): number[] {
+  const stations = eixoVertexStations(eixo.vertices);
+  const total = stations[stations.length - 1] ?? 0;
+  const cuts: number[] = [0, total];
+  for (const other of others) {
+    for (let i = 0; i < eixo.vertices.length - 1; i++) {
+      const a = eixo.vertices[i];
+      const b = eixo.vertices[i + 1];
+      const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+      for (let k = 0; k < other.vertices.length - 1; k++) {
+        const hit = intersectOpenSegments(a, b, other.vertices[k], other.vertices[k + 1]);
+        if (hit) cuts.push((stations[i] ?? 0) + hit.t * segLen);
+      }
+    }
+    for (const end of [other.vertices[0], other.vertices[other.vertices.length - 1]]) {
+      if (!end) continue;
+      const proj = projectPointOntoEixoPolyline(eixo.vertices, end.x, end.y);
+      if (proj && proj.distanceM <= junctionTolM) cuts.push(proj.stationM);
+    }
+  }
+  cuts.sort((p, q) => p - q);
+  const merged: number[] = [];
+  for (const c of cuts) {
+    if (merged.length === 0 || c - merged[merged.length - 1]! > RUA_CUT_MERGE_M) merged.push(c);
+  }
+  return merged;
+}
+
+/**
+ * Eixos que terminavam em T no trecho removido e ficaram sem outra rua seguem em frente
+ * até a outra face da rua removida (a divisa, se era rua de borda). Assim as quadras
+ * vizinhas não se fundem pela faixa liberada e mantêm duas fileiras de lotes.
+ */
+function extendOrphanedEixoEnds(
+  removed: CadVertex[],
+  others: CadPolylineEntity[],
+  replacement: CadPolylineEntity[],
+  larguraViaM: number,
+): Map<string, CadPolylineEntity> {
+  const out = new Map<string, CadPolylineEntity>();
+  if (removed.length < 2) return out;
+  const halfW = larguraViaM / 2;
+  const tol = Math.max(1, larguraViaM * 0.75);
+  for (const other of others) {
+    const verts = other.vertices.map((v) => ({ ...v }));
+    let changed = false;
+    for (const endIdx of [0, verts.length - 1]) {
+      const p = verts[endIdx]!;
+      const proj = projectPointOntoEixoPolyline(removed, p.x, p.y);
+      if (!proj || proj.distanceM > tol) continue;
+      const stillJoined = [...others, ...replacement].some((r) => {
+        if (r.id === other.id) return false;
+        const d = projectPointOntoEixoPolyline(r.vertices, p.x, p.y)?.distanceM ?? Infinity;
+        return d <= tol;
+      });
+      if (stillJoined) continue;
+      const q = verts[endIdx === 0 ? 1 : verts.length - 2]!;
+      const len = Math.hypot(p.x - q.x, p.y - q.y);
+      if (len < 1e-6) continue;
+      const dx = (p.x - q.x) / len;
+      const dy = (p.y - q.y) / len;
+      let cos = 1;
+      if (proj.distanceM > 0.01) {
+        cos = Math.abs((dx * (proj.point.x - p.x) + dy * (proj.point.y - p.y)) / proj.distanceM);
+      }
+      const ext = (proj.distanceM + halfW) / Math.max(0.3, cos);
+      verts[endIdx] = { x: p.x + dx * ext, y: p.y + dy * ext, z: p.z ?? 0 };
+      changed = true;
+    }
+    if (changed) out.set(other.id, { ...other, vertices: verts });
+  }
+  return out;
+}
+
+export type ExcluirRuaResult = {
+  project: CadProject;
+  eixoId: string;
+  removedM: number;
+};
+
+/**
+ * Exclui o trecho de rua clicado: o pedaço do eixo entre os dois cruzamentos vizinhos ao clique.
+ * O restante do eixo continua (ganha um id novo se for dividido em dois).
+ */
+export function excluirRuaDoLoteamento(
+  project: CadProject,
+  x: number,
+  y: number,
+  maxDistM: number,
+  larguraViaM: number,
+): ExcluirRuaResult {
+  const eixos = listLoteamentoEixoPolylines(project);
+  if (eixos.length === 0) throw new LoteamentoError(EIXO_NEED_LOTEAMENTO);
+  let target: CadPolylineEntity | null = null;
+  let click: EixoPolylineStation | null = null;
+  for (const eixo of eixos) {
+    const proj = projectPointOntoEixoPolyline(eixo.vertices, x, y);
+    if (proj && proj.distanceM <= maxDistM && (!click || proj.distanceM < click.distanceM)) {
+      target = eixo;
+      click = proj;
+    }
+  }
+  if (!target || !click) throw new LoteamentoError(EXCLUIR_RUA_NEED_HIT);
+
+  const others = eixos.filter((e) => e.id !== target.id);
+  const cuts = eixoJunctionStations(target, others, Math.max(1, larguraViaM * 0.75));
+  const total = cuts[cuts.length - 1] ?? 0;
+  let s0 = 0;
+  let s1 = total;
+  for (const c of cuts) {
+    if (c <= click.stationM + EIXO_STATION_EPS_M) s0 = c;
+    if (c > click.stationM + EIXO_STATION_EPS_M) {
+      s1 = c;
+      break;
+    }
+  }
+  if (s1 <= s0 + EIXO_STATION_EPS_M) s1 = total;
+
+  const pieces: CadVertex[][] = [];
+  if (s0 >= RUA_PIECE_MIN_M) pieces.push(eixoSliceBetweenStations(target.vertices, 0, s0));
+  if (total - s1 >= RUA_PIECE_MIN_M) pieces.push(eixoSliceBetweenStations(target.vertices, s1, total));
+  const replacement: CadPolylineEntity[] = pieces
+    .filter((verts) => verts.length >= 2)
+    .map((verts, i) => ({ ...target, id: i === 0 ? target.id : newId("eixo"), vertices: verts }));
+  if (others.length === 0 && replacement.length === 0) throw new LoteamentoError(EXCLUIR_RUA_LAST);
+
+  const extended = extendOrphanedEixoEnds(
+    eixoSliceBetweenStations(target.vertices, s0, s1),
+    others,
+    replacement,
+    larguraViaM,
+  );
+  const entities: CadEntity[] = [];
+  for (const entity of project.entities) {
+    if (entity.id === target.id) entities.push(...replacement);
+    else entities.push(extended.get(entity.id) ?? entity);
+  }
+  return { project: { ...project, entities }, eixoId: target.id, removedM: s1 - s0 };
 }
 
 export const RESERVA_LEGAL_NEED_POLYGON =
@@ -1018,6 +1200,7 @@ export type RebuildLoteamentoFromEixosResult = {
   lotCount: number;
   viaCount: number;
   eixoCount: number;
+  coverage?: OrangeQuadraCoverage;
 };
 
 function toClosedPolyline(
@@ -1195,6 +1378,8 @@ export function rebuildLoteamentoFromEixos(
       testadaM: input.testadaMinimaM,
       profundidadeM: input.profundidadeQuadraM,
     }),
+    testadaMinimaM: input.testadaMinimaM,
+    profundidadeMinimaM: input.profundidadeQuadraM,
   }).project;
 
   return {
@@ -1202,6 +1387,7 @@ export function rebuildLoteamentoFromEixos(
     lotCount: result.lotes.length,
     viaCount: result.vias.length,
     eixoCount: eixoRings.length,
+    coverage: summarizeOrangeQuadraCoverage(next),
   };
 }
 
@@ -2015,6 +2201,8 @@ function buildLotListText(summary: LoteamentoSummary): string {
 export type ApplyLoteamentoTablesInput = {
   percentualEsquina?: number;
   areaMinimaInterno?: number;
+  testadaMinimaM?: number;
+  profundidadeMinimaM?: number;
 };
 
 export function applyLoteamentoTables(
@@ -2033,6 +2221,8 @@ export function applyLoteamentoTables(
       input?.areaMinimaInterno ??
       prevInterno ??
       resolveAreaMinimaInterno({ testadaM: 10, profundidadeM: 25 }),
+    testadaMinimaM: input?.testadaMinimaM,
+    profundidadeMinimaM: input?.profundidadeMinimaM,
   });
   const named = applyLoteamentoNomenclature(classified).project;
   const summary = summarizeLoteamento(named);
@@ -2171,6 +2361,49 @@ export function isLoteamentoQuadraEntity(
     entity.vertices.length >= 3 &&
     entity.layerId === LOTEAMENTO_QUADRAS_LAYER_ID
   );
+}
+
+export type OrangeQuadraCoverage = {
+  quadras: number;
+  processadas: number;
+  comLotes: number;
+  vazias: number;
+  lotes: number;
+  areaLoteadaM2: number;
+  areaRestanteM2: number;
+};
+
+export function summarizeOrangeQuadraCoverage(project: CadProject): OrangeQuadraCoverage {
+  const quadras = project.entities.filter(isLoteamentoQuadraEntity);
+  const lots = project.entities.filter(isLoteamentoLotEntity);
+  let comLotes = 0;
+  let areaLoteadaM2 = 0;
+  let areaRestanteM2 = 0;
+  for (const quadra of quadras) {
+    const qRing = polylineToRing(quadra);
+    const qArea = computePolygonMetrics(quadra.vertices, true).areaM2;
+    let lotsArea = 0;
+    let lotCount = 0;
+    for (const lot of lots) {
+      const lRing = polylineToRing(lot);
+      if (polygonInteriorOverlapM2(qRing, lRing) > 1) {
+        lotCount += 1;
+        lotsArea += computePolygonMetrics(lot.vertices, true).areaM2;
+      }
+    }
+    if (lotCount > 0) comLotes += 1;
+    areaLoteadaM2 += lotsArea;
+    areaRestanteM2 += Math.max(0, qArea - lotsArea);
+  }
+  return {
+    quadras: quadras.length,
+    processadas: quadras.length,
+    comLotes,
+    vazias: Math.max(0, quadras.length - comLotes),
+    lotes: lots.length,
+    areaLoteadaM2,
+    areaRestanteM2,
+  };
 }
 
 function polylineToRing(poly: CadPolylineEntity): [number, number][] {
@@ -2396,6 +2629,7 @@ export function applyLoteamentoLotSize(
   ];
 
   let packed;
+  let extraVias: number[][][][] = [];
   if (input.mode === "lote") {
     const lot = host.lot ?? host.lots.find((item) => item.id === input.entityId) ?? host.lots[0];
     if (!lot) throw new LoteamentoError(AJUSTE_LOTES_NEED_SELECTION);
@@ -2425,7 +2659,7 @@ export function applyLoteamentoLotSize(
       { testadaM: input.testadaM, profundidadeM: input.profundidadeM, areaM2: input.areaM2 },
       current,
     );
-    packed = rebuildQuadraLotes(
+    const rebuilt = rebuildQuadraLotesWithAccess(
       host.quadraRing,
       size.testadaM,
       size.profundidadeM,
@@ -2433,6 +2667,8 @@ export function applyLoteamentoLotSize(
       origin,
       host.quadraName,
     );
+    packed = rebuilt.lotes;
+    extraVias = rebuilt.vias;
   }
   if (packed.length === 0) {
     throw new LoteamentoError("Não foi possível reempacotar os lotes desta quadra com as medidas informadas.");
@@ -2464,6 +2700,21 @@ export function applyLoteamentoLotSize(
     ...project,
     entities: extras.length > 0 ? [...withoutUnused, ...extras] : withoutUnused,
   };
+  if (extraVias.length > 0) {
+    const viaEntities = extraVias.map((poly, i) => ({
+      id: newId("via"),
+      type: "polyline" as const,
+      layerId: LOTEAMENTO_VIAS_LAYER_ID,
+      vertices: ringToVertices(poly[0] ?? [], z0),
+      closed: true,
+      name: formatStreetPlanName(`Via interna ${i + 1}`, i),
+    }));
+    next = {
+      ...next,
+      layers: ensureLayer(next, LOTEAMENTO_VIAS_LAYER),
+      entities: [...next.entities, ...viaEntities],
+    };
+  }
   next = applyLoteamentoNomenclature(next).project;
   const labeled = applyReurbLotLabels(next, { includeCotas: true, includeArea: true });
   if (labeled.lotCount > 0) next = labeled.project;
@@ -2482,11 +2733,15 @@ export function applyLoteamentoLotSize(
     next = applyLoteamentoTables(next, {
       percentualEsquina: DEFAULT_PERCENTUAL_ESQUINA,
       areaMinimaInterno,
+      testadaMinimaM: input.testadaM,
+      profundidadeMinimaM: input.profundidadeM,
     }).project;
   } else {
     next = applyLoteamentoLotClassification(next, {
       percentualEsquina: DEFAULT_PERCENTUAL_ESQUINA,
       areaMinimaInterno,
+      testadaMinimaM: input.testadaM,
+      profundidadeMinimaM: input.profundidadeM,
     });
     next = applyLoteamentoNomenclature(next).project;
   }

@@ -1,5 +1,6 @@
 import { parseLoteamentoAssistantCommand } from "@/lib/cad-ai/parse";
 import { normalizeCadAiCommand } from "./ai-command-catalog";
+import { parseModifyNaturalCommand } from "./modify-ai";
 import { parseLabeledPointToken, parsePointReferenceList } from "./ai-point-utils";
 import type { CadAiCommand, CadAiHistoryMessage, CadAiProjectContext } from "./ai-command-types";
 
@@ -26,6 +27,61 @@ export function parseLocalCadCommand(
   const raw = norm(text)
     .replace(/^(?:ia|assistente|chat)[,:\s-]+/i, "")
     .trim();
+  const lineFromLotEarly = raw.match(
+    /(?:desenh[ae]|criar|crie|fa[cç]a)\s+(?:uma\s+)?linha.{0,40}(?:canto|v[eé]rtice|endpoint).{0,20}lote\s+([A-Za-z0-9-]+)/i,
+  );
+  if (lineFromLotEarly) {
+    return normalizeCadAiCommand({
+      acao: "criar_linha",
+      osnap_origem: "ENDPOINT",
+      lote: lineFromLotEarly[1],
+      resposta: `Linha a partir do ENDPOINT do lote ${lineFromLotEarly[1]}.`,
+    });
+  }
+  const midNamedEarly = raw.match(/ponto\s+m[eé]dio.{0,32}quadra\s+([A-Za-z0-9]+)/i);
+  const midThisEarly = /ponto\s+m[eé]dio\s+dessa\s+quadra/i.test(raw);
+  if (midNamedEarly || midThisEarly) {
+    return normalizeCadAiCommand({
+      acao: "criar_ponto",
+      osnap: "MIDPOINT",
+      quadra: midNamedEarly?.[1],
+      usarSelecao: !midNamedEarly?.[1],
+      resposta: "Ponto no MIDPOINT da quadra (motor OSNAP).",
+    });
+  }
+  const perpStreetEarly = raw.match(
+    /(?:linha|crie|criar|desenh[ae]).{0,20}perpendicular.{0,20}(?:[aà]\s+)?(?:rua|via)\s+(.+)$/i,
+  );
+  if (perpStreetEarly) {
+    return normalizeCadAiCommand({
+      acao: "criar_linha",
+      osnap_destino: "PERPENDICULAR",
+      nome: perpStreetEarly[1].trim(),
+      usarSelecao: true,
+      resposta: `Linha perpendicular à ${perpStreetEarly[1].trim()}.`,
+    });
+  }
+  const copyLotVertexEarly = raw.match(
+    /cop(?:ie|iar)\s+(?:o\s+)?lote.{0,40}(?:v[eé]rtice|canto).{0,20}quadra/i,
+  );
+  if (copyLotVertexEarly) {
+    return normalizeCadAiCommand({
+      acao: "copiar",
+      osnap: "ENDPOINT",
+      usarSelecao: true,
+      resposta: "Copiar lote com referência no vértice da quadra (OSNAP ENDPOINT).",
+    });
+  }
+  const modify = parseModifyNaturalCommand(raw);
+  if (modify) return normalizeCadAiCommand(modify);
+  const selectLots = raw.match(/selecion(?:e|ar)\s+todos\s+os\s+lotes(?:\s+da\s+quadra\s+([a-z0-9]+))?/i);
+  if (selectLots) {
+    return normalizeCadAiCommand({
+      acao: "selecionar",
+      quadra: selectLots[1],
+      resposta: raw,
+    });
+  }
   const loteamento = parseLoteamentoAssistantCommand(raw, context, history);
   if (loteamento?.length === 1) return normalizeCadAiCommand(loteamento[0]);
   const lower = raw.toLowerCase();
@@ -180,6 +236,7 @@ export function parseLocalCadCommand(
       resposta: `Linha de ${lineMatch[1].trim()} a ${lineMatch[2].trim()}.`,
     });
   }
+
   if (/^(?:gerar|criar)\s+(?:mapa\s+)?hipsom[eé]trico$/i.test(lower) || lower === "mapa hipsométrico") {
     return normalizeCadAiCommand({ acao: "mapa_hipsometrico" });
   }
