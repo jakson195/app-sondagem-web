@@ -28,6 +28,10 @@ export type ViabilidadeSessionPayload = {
   glebaId?: string | null;
   larguraViaFallbackM?: number;
   larguraCalcadaM?: number;
+  /** Preferências da viabilidade automática do CAD (aplicadas ao abrir o estudo completo). */
+  uf?: string;
+  tipoSinapi?: "DESONERADO" | "NAO_DESONERADO";
+  precoVendaM2?: string;
   areaTotal: number;
   quantidadeLotes: number;
   areaLotes: number;
@@ -56,6 +60,9 @@ export function buildViabilidadeSessionPayload(input: {
   glebaId?: string | null;
   larguraViaFallbackM?: number;
   larguraCalcadaM?: number;
+  uf?: string;
+  tipoSinapi?: "DESONERADO" | "NAO_DESONERADO";
+  precoVendaM2?: string;
 }): ViabilidadeSessionPayload {
   const adapter = adaptCadProjectToLoteamentoInput(input.project, {
     projetoId: input.savedProjectId ?? "local",
@@ -73,6 +80,9 @@ export function buildViabilidadeSessionPayload(input: {
     glebaId: input.glebaId ?? null,
     larguraViaFallbackM: input.larguraViaFallbackM,
     larguraCalcadaM: input.larguraCalcadaM,
+    ...(input.uf ? { uf: input.uf } : {}),
+    ...(input.tipoSinapi ? { tipoSinapi: input.tipoSinapi } : {}),
+    ...(input.precoVendaM2?.trim() ? { precoVendaM2: input.precoVendaM2.trim() } : {}),
     areaTotal: extraido.areaTotal,
     quantidadeLotes: extraido.quantidadeLotes,
     areaLotes: extraido.areaLotes,
@@ -91,6 +101,9 @@ export function writeViabilidadeSession(payload: ViabilidadeSessionPayload): { o
       glebaId: payload.glebaId,
       larguraViaFallbackM: payload.larguraViaFallbackM,
       larguraCalcadaM: payload.larguraCalcadaM,
+      uf: payload.uf,
+      tipoSinapi: payload.tipoSinapi,
+      precoVendaM2: payload.precoVendaM2,
       areaTotal: payload.areaTotal,
       quantidadeLotes: payload.quantidadeLotes,
       areaLotes: payload.areaLotes,

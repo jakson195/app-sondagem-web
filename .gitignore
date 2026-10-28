@@ -48,3 +48,7 @@ android/.gradle-local/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Segredos locais
+sk-proj-*.txt
+*.jks

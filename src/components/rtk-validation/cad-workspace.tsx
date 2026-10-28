@@ -59,6 +59,7 @@ import {
   defaultMemorialForm,
   DEFAULT_MEMORIAL_FOOTER,
   resolveDrawVertex,
+  resolveDrawSnap,
   vertexFromPolar,
   vertexFromDistance,
   parseDrawNumber,
@@ -100,7 +101,6 @@ import {
   isAreaVerdeLabel,
   isFaixaDominioLabel,
   cadLayerPublicName,
-  computeLoteamentoAreaUtilBreakdown,
   EIXO_NEED_LOTEAMENTO,
   EIXO_TWO_POINT_NEED_DISTINCT,
   EIXO_TWO_POINT_NEED_HIT,
@@ -109,8 +109,12 @@ import {
   applyLoteamentoLotSize,
   findLoteamentoLotAtPoint,
   hitTestEixoEditPoint,
+  excluirRuaDoLoteamento,
+  EXCLUIR_RUA_NEED_HIT,
+  EXCLUIR_RUA_LAST,
   isLoteamentoEixoPolyline,
   isLoteamentoLotEntity,
+  summarizeOrangeQuadraCoverage,
   loteamentoSizeTarget,
   rebuildLoteamentoFromEixos,
   syncReservaLegalLabel,
@@ -182,6 +186,7 @@ import {
   defaultSecaoTipo,
   secaoTipoFromInputs,
   exportCadProjectKml,
+  exportCadProjectKmz,
   listLoteamentoEixos,
   loteamentoMaqueteReadiness,
   drainageNetwork3dReadiness,
@@ -261,7 +266,7 @@ import {
   type StreetProfileDraft,
 } from "@/lib/rtk-validation/cad";
 import { isCoordLabelEntity, resolveCoordLabelLayout } from "@/lib/rtk-validation/cad/label-layout";
-import { parseSurveyUpload } from "@/lib/rtk-validation/parsers";
+import { parseSurveyUpload, peekSurveyTable, type SurveyColumnMap } from "@/lib/rtk-validation/parsers";
 import { resolveBrazilCitySearch } from "@/lib/geofisica/dipolo2d/city-geocode";
 import type { MemorialFormDefaults, MemorialKind, SavedCadProjectRecord } from "@/lib/rtk-validation/cad";
 import type {
@@ -301,6 +306,43 @@ import {
 } from "@/components/rtk-validation/cad-tools-sidebar";
 import { CadChromeHeader } from "@/components/rtk-validation/cad-chrome-header";
 import { CadChromeToolbar } from "@/components/rtk-validation/cad-chrome-toolbar";
+import { CadModifyPanel } from "@/components/rtk-validation/cad-modify-panel";
+import { CadOsnapPanel } from "@/components/rtk-validation/cad-osnap-panel";
+import { CadImportPanel } from "@/components/rtk-validation/cad-import-panel";
+import { CadInsertPanel } from "@/components/rtk-validation/cad-insert-panel";
+import {
+  importAccept,
+  importAllowsMultiple,
+  isPointsImport,
+  type CadImportKind,
+  type CadInsertKind,
+} from "@/lib/rtk-validation/cad/cad-io-kinds";
+import { arcVertices, circleVertices } from "@/lib/rtk-validation/cad/cad-insert-geometry";
+import { importGeoJsonFile, importShapefileFile } from "@/lib/rtk-validation/cad/import-vector";
+import { CadOsnapContextMenu, CadOsnapOverlay } from "@/components/rtk-validation/cad-osnap-overlay";
+import {
+  DEFAULT_OSNAP_SETTINGS,
+  SpatialIndex,
+  loadOsnapSettings,
+  saveOsnapSettings,
+  type OsnapSettings,
+  type OsnapType,
+  type SnapResult,
+} from "@/lib/rtk-validation/cad/snap-engine";
+import { applyModifyCommand } from "@/lib/rtk-validation/cad/modify-ops";
+import { offsetSideFromPick, translateEntity } from "@/lib/rtk-validation/cad/modify-geometry";
+import {
+  CAD_TOOL_TO_MODIFY,
+  CAD_MODIFY_TOOL_SET,
+  commandFromSession,
+  createModifySession,
+  resolveShortcutBuffer,
+  commitShortcutBuffer,
+  sessionWithHint,
+  type CadModifyTool,
+  type ModifySession,
+} from "@/lib/rtk-validation/cad/modify-session";
+import { popUndo, pushUndo, type CadAssistantUndoEntry } from "@/lib/cad-ai";
 import {
   CadIaLauncher,
   CadLotInfoCard,
@@ -310,6 +352,8 @@ import {
 import { CadHatchDefs } from "@/components/rtk-validation/cad-hatch-defs";
 import { CadSvgMultilineText } from "@/components/rtk-validation/cad-svg-multiline-text";
 import { buildViabilidadeSessionPayload, writeViabilidadeSession } from "@/lib/viabilidade/cad-session";
+import { hasLotes, loteamentoSignature, type ViabilidadeAutoPrefs } from "@/lib/viabilidade/auto-cad";
+import { CadViabilidadeAutoCard } from "@/components/viabilidade/cad-viabilidade-auto-card";
 import { CadProfileView } from "@/components/rtk-validation/cad-profile-view";
 import { CadDrainageWaterProfileChart } from "@/components/rtk-validation/cad-drainage-water-profile-chart";
 import { CadDrainagePlanilha } from "@/components/rtk-validation/cad-drainage-planilha";
@@ -513,8 +557,20 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [project, setProject] = useState<CadProject>(() => emptyProject("Projeto CAD"));
   const [activeLayerId, setActiveLayerId] = useState("draw");
   const [tool, setTool] = useState<CadTool>("select");
+  const spacePanRef = useRef(false);
+  const panRafRef = useRef<number | null>(null);
+  const pendingPanRef = useRef<ViewBounds | null>(null);
   const [viewMode, setViewMode] = useState<"plan" | "3d">("plan");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [modifySession, setModifySession] = useState<ModifySession | null>(null);
+  const modifyUndoRef = useRef<CadAssistantUndoEntry[]>([]);
+  const modifyRedoRef = useRef<CadAssistantUndoEntry[]>([]);
+  const shortcutBufferRef = useRef("");
+  const shortcutTimerRef = useRef<number | null>(null);
+  const [selectBox, setSelectBox] = useState<{ x0: number; y0: number; x1: number; y1: number; shift: boolean } | null>(null);
+  const [aiPreviewEntities, setAiPreviewEntities] = useState<CadEntity[]>([]);
+  const selectBoxRef = useRef<{ x0: number; y0: number; x1: number; y1: number; shift: boolean } | null>(null);
   const [viewBounds, setViewBounds] = useState<ViewBounds | null>(null);
   const [draft, setDraft] = useState<CadVertex[]>([]);
   const [panning, setPanning] = useState<{ startX: number; startY: number; bounds: ViewBounds } | null>(null);
@@ -561,6 +617,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const orthoFileRef = useRef<HTMLInputElement>(null);
   const projectFileRef = useRef<HTMLInputElement>(null);
   const drawingFileRef = useRef<HTMLInputElement>(null);
+  const importPickerRef = useRef<HTMLInputElement>(null);
   const drenagemInpRef = useRef<HTMLInputElement>(null);
   const loteamentoFaixaPanelRef = useRef<HTMLDivElement>(null);
   const [hoverSnapId, setHoverSnapId] = useState<string | null>(null);
@@ -568,6 +625,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [pointSearch, setPointSearch] = useState("");
   const [activeTab, setActiveTab] = useState<CadTabId>("desenho");
   const [snapToRtkPoints, setSnapToRtkPoints] = useState(true);
+  const [osnapSettings, setOsnapSettings] = useState<OsnapSettings>(DEFAULT_OSNAP_SETTINGS);
+  const [osnapOverride, setOsnapOverride] = useState<OsnapType | null>(null);
+  const [osnapHover, setOsnapHover] = useState<SnapResult | null>(null);
+  const [osnapMenu, setOsnapMenu] = useState<{ x: number; y: number } | null>(null);
   const [orthogonalMode, setOrthogonalMode] = useState(false);
   const [polarDistance, setPolarDistance] = useState("");
   const [polarAngle, setPolarAngle] = useState("");
@@ -594,8 +655,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [hoverLotId, setHoverLotId] = useState<string | null>(null);
   const [loteamentoAreaQuadra, setLoteamentoAreaQuadra] = useState("2000");
   const [loteamentoQuadraModo, setLoteamentoQuadraModo] = useState<"area" | "medidas">("area");
-  const [loteamentoLarguraQuadra, setLoteamentoLarguraQuadra] = useState("80");
-  const [loteamentoDistanciaQuadra, setLoteamentoDistanciaQuadra] = useState("50");
+  const [loteamentoDistanciaQuadra, setLoteamentoDistanciaQuadra] = useState("150");
   const [loteamentoOrientacao, setLoteamentoOrientacao] = useState("");
   const [loteamentoPrefixo, setLoteamentoPrefixo] = useState("Quadra");
   const [loteamentoViasExistentes, setLoteamentoViasExistentes] = useState(false);
@@ -624,6 +684,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const loteamentoAlterarEixoRef = useRef(loteamentoAlterarEixo);
   loteamentoAlterarEixoRef.current = loteamentoAlterarEixo;
   const alterarEixoIgnoreUpRef = useRef(false);
+  const [loteamentoExcluirRua, setLoteamentoExcluirRua] = useState(false);
   const [loteamentoNotice, setLoteamentoNotice] = useState<string | null>(null);
   const [loteamentoError, setLoteamentoError] = useState<string | null>(null);
   const [loteamentoBusy, setLoteamentoBusy] = useState(false);
@@ -660,10 +721,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
   } | null>(null);
   const [maqueteOpen, setMaqueteOpen] = useState(false);
   const [drenagem3dOpen, setDrenagem3dOpen] = useState(false);
-  const [loteamentoAreaUtil, setLoteamentoAreaUtil] = useState("15");
+  const [loteamentoAreaUtil] = useState("15");
   const [reservaPercent, setReservaPercent] = useState("20");
   const [reservaCanto, setReservaCanto] = useState<ReservaCanto>("superior_direita");
-  const [areaUtilCanto, setAreaUtilCanto] = useState<ReservaCanto>("superior_direita");
+  const [areaUtilCanto] = useState<ReservaCanto>("superior_direita");
   const [appWidth, setAppWidth] = useState("30");
   const [appSide, setAppSide] = useState<AppBufferSide>("both");
   const [appPickMode, setAppPickMode] = useState(false);
@@ -738,6 +799,20 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [profilePickIds, setProfilePickIds] = useState<string[]>([]);
   const [alignmentPickMode, setAlignmentPickMode] = useState(false);
   const [toolsTab, setToolsTab] = useState<CadToolsTab>("draw");
+  const [importKind, setImportKind] = useState<CadImportKind | null>(null);
+  const importKindRef = useRef<CadImportKind | null>(null);
+  importKindRef.current = importKind;
+  const [insertKind, setInsertKind] = useState<CadInsertKind | null>(null);
+  const [importReturnTab, setImportReturnTab] = useState<CadToolsTab>("draw");
+  const [insertText, setInsertText] = useState("");
+  const [pointsPreview, setPointsPreview] = useState<{
+    fileName: string;
+    format: string;
+    headers: string[];
+    rows: string[][];
+    map: SurveyColumnMap;
+    file: File;
+  } | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [lotCardMinimized, setLotCardMinimized] = useState(false);
   useEffect(() => {
@@ -754,6 +829,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const loteamentoRebuildTimerRef = useRef<number | null>(null);
   const cursorRafRef = useRef<number | null>(null);
   const pendingCursorRef = useRef<{ x: number; y: number; z: number } | null>(null);
+  const hudXRef = useRef<HTMLSpanElement>(null);
+  const hudYRef = useRef<HTMLSpanElement>(null);
   const projectLiveRef = useRef(project);
   projectLiveRef.current = project;
   const [polygonEditNotice, setPolygonEditNotice] = useState<string | null>(null);
@@ -767,7 +844,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   );
 
   const handleExportCad = useCallback(
-    async (format: "dxf" | "dwg" | "shp", projectOverride?: CadProject) => {
+    async (format: "dxf" | "dwg" | "shp" | "kmz", projectOverride?: CadProject) => {
       const src = projectOverride ?? project;
       const baseName = src.name.replace(/[^\w\-]+/g, "_").slice(0, 80) || "projeto_cad";
       if (src.entities.length === 0) {
@@ -780,6 +857,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
         if (format === "shp") {
           const zip = await exportCadProjectShapefileZip(src);
           downloadBlob(new Blob([zip], { type: "application/zip" }), `${baseName}_cad.zip`);
+          return;
+        }
+        if (format === "kmz") {
+          const kmz = exportCadProjectKmz(src);
+          downloadBlob(new Blob([new Uint8Array(kmz)], { type: "application/vnd.google-earth.kmz" }), `${baseName}.kmz`);
           return;
         }
         const res = await fetch("/api/cad/export", {
@@ -817,6 +899,12 @@ export function CadWorkspace({ userId }: { userId: string }) {
     [project.entities, project.layers, coordLabelsVisible],
   );
 
+  const viabilidadeReady = useMemo(() => hasLotes(project.entities), [project.entities]);
+  const viabilidadeSignature = useMemo(
+    () =>
+      `${loteamentoSignature(project.entities)}|${volPlateauZ.trim()}|${loteamentoLarguraCalcada.trim()}|${streetProfiles.length}`,
+    [project.entities, volPlateauZ, loteamentoLarguraCalcada, streetProfiles.length],
+  );
   const hasTinLayer = useMemo(
     () => project.entities.some((e) => e.layerId === "tin"),
     [project.entities],
@@ -874,6 +962,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
     () => ({ ...bounds, width, height, padding }),
     [bounds, width, height, padding],
   );
+
+  const snapIndex = useMemo(() => new SpatialIndex(visibleEntities), [visibleEntities]);
+
+  useEffect(() => {
+    setOsnapSettings(loadOsnapSettings());
+  }, []);
+
+  function persistOsnap(next: OsnapSettings) {
+    setOsnapSettings(next);
+    saveOsnapSettings(next);
+  }
 
   const basemapViewport = useMemo(() => {
     if (!panning) return viewport;
@@ -1034,7 +1133,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
   function patchBasemapOverlay(key: "satellite", value: boolean) {
     if (value && !projectGeoref.isGeoreferenced) {
       setOverlayNotice(t("basemap.needGeoref"));
-      return;
     }
     setBasemapOverlays((prev) => ({ ...prev, [key]: value }));
   }
@@ -1042,7 +1140,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
   function patchAnmSigmineOverlay(key: AnmSigmineLayerKey, value: boolean) {
     if (value && !projectGeoref.isGeoreferenced) {
       setOverlayNotice(t("basemap.needGeoref"));
-      return;
     }
     setBasemapOverlays((prev) => ({
       ...prev,
@@ -1053,7 +1150,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
   function patchSigefOverlay(key: SigefLayerKey, value: boolean) {
     if (value && !projectGeoref.isGeoreferenced) {
       setOverlayNotice(t("basemap.needGeoref"));
-      return;
     }
     setBasemapOverlays((prev) => ({
       ...prev,
@@ -1141,13 +1237,13 @@ export function CadWorkspace({ userId }: { userId: string }) {
 
   const reurbLotCount = listReurbLots(project).length;
 
-  async function handleImportOrthoFiles(files: File[]) {
+  async function handleImportOrthoFiles(files: File[]): Promise<boolean> {
     const picked = pickRasterImportFiles(files);
     if (!picked) {
       const msg = t("import.orthoFormat");
       setReurbNotice(msg);
       setImportNotice(msg);
-      return;
+      return false;
     }
 
     setImportingOrtho(true);
@@ -1173,10 +1269,12 @@ export function CadWorkspace({ userId }: { userId: string }) {
       const ok = t("import.orthoOk", { name: raster.name });
       setReurbNotice(ok);
       setImportNotice(ok);
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : t("import.error");
       setReurbNotice(msg);
       setImportNotice(msg);
+      return false;
     } finally {
       setImportingOrtho(false);
       setImportingDrawing(false);
@@ -1332,18 +1430,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
     });
   }, [project.entities, project.layers, loteamentoGlebas]);
 
-  const areaUtilBreakdown = useMemo(() => {
-    const glebaId = loteamentoGlebaId.trim() || selectedId;
-    const gleba = glebaId
-      ? project.entities.find((entity) => entity.id === glebaId)
-      : null;
-    if (!gleba || gleba.type !== "polyline" || !gleba.closed || gleba.vertices.length < 3) return null;
-    const raw = loteamentoAreaUtil.trim();
-    const pct = raw === "" ? 15 : parseDrawNumber(raw);
-    if (pct === null || pct < 0 || pct >= 100) return null;
-    return computeLoteamentoAreaUtilBreakdown(project, gleba.vertices, pct);
-  }, [project, loteamentoGlebaId, selectedId, loteamentoAreaUtil]);
-
   const maqueteReady = useMemo(() => loteamentoMaqueteReadiness(project), [project]);
   const drenagem3dReady = useMemo(() => drainageNetwork3dReadiness(project), [project]);
 
@@ -1391,6 +1477,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
     [project.entities],
   );
 
+  const orangeQuadraCoverage = useMemo(
+    () => summarizeOrangeQuadraCoverage(project),
+    [project],
+  );
+
   useEffect(
     () =>
       runQueuedInEffect(() => {
@@ -1417,29 +1508,16 @@ export function CadWorkspace({ userId }: { userId: string }) {
   }, [paperTone]);
 
   useEffect(() => {
+    if (toolsTab !== "contour") return;
     let cancelled = false;
-    void fetch("/api/cad-map/elevation-grid?test=1")
+    void fetch("/api/cad-map/elevation-grid")
       .then(async (r) => {
-        const data = (await r.json()) as {
-          googleConfigured?: boolean;
-          googleTest?: { ok?: boolean; message?: string; elevationM?: number | null };
-        };
+        const data = (await r.json()) as { googleConfigured?: boolean };
         if (cancelled) return;
         const configured = Boolean(data.googleConfigured);
-        const tested = Boolean(data.googleTest?.ok);
-        setGoogleElevationAvailable(configured && tested);
-        setGoogleTestElevationM(
-          tested && data.googleTest?.elevationM != null ? data.googleTest.elevationM : null,
-        );
-        if (!configured) {
-          setGoogleElevationNotice("missing_key");
-          return;
-        }
-        if (tested) {
-          setGoogleElevationNotice("ready");
-          return;
-        }
-        setGoogleElevationNotice(data.googleTest?.message ?? "test_failed");
+        setGoogleElevationAvailable(configured);
+        setGoogleTestElevationM(null);
+        setGoogleElevationNotice(configured ? "ready" : "missing_key");
       })
       .catch(() => {
         if (!cancelled) {
@@ -1451,7 +1529,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [toolsTab]);
 
   useEffect(
     () => runQueuedInEffect(() => setSelectedVertexIndex(null)),
@@ -1612,16 +1690,36 @@ export function CadWorkspace({ userId }: { userId: string }) {
   }
 
   const isDrawWithPoints = tool === "polyline" || tool === "line";
-  const isDrawTool = isDrawWithPoints;
+  const isDrawTool =
+    isDrawWithPoints ||
+    insertKind === "polygon" ||
+    insertKind === "circle" ||
+    insertKind === "arc" ||
+    insertKind === "dimension";
   const drawReference = draft.length > 0 ? draft[draft.length - 1] : null;
   const canUsePolar = isDrawTool && draft.length >= 1;
+  const snapReference =
+    drawReference ??
+    (modifySession && modifySession.picks.length > 0
+      ? modifySession.picks[modifySession.picks.length - 1]
+      : null);
 
-  function resolveClickVertex(sx: number, sy: number): CadVertex {
-    return resolveDrawVertex(sx, sy, viewport, project.entities, {
+  function currentSnap(sx: number, sy: number, excludeIds?: string[]): SnapResult {
+    return resolveDrawSnap(sx, sy, viewport, visibleEntities, {
       snapToPoints: snapToRtkPoints,
       orthogonalMode,
-      reference: drawReference,
+      reference: snapReference,
+      osnap: osnapSettings,
+      overrideType: osnapOverride,
+      index: snapIndex,
+      excludeIds,
     });
+  }
+
+  function resolveClickVertex(sx: number, sy: number, consumeOverride = false): CadVertex {
+    const snap = currentSnap(sx, sy);
+    if (consumeOverride && osnapOverride) setOsnapOverride(null);
+    return snap.point;
   }
 
   function updateDrawPreview(sx: number, sy: number) {
@@ -1833,6 +1931,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     setLoteamentoPickFaixa(false);
     setLoteamentoAlterarEixo(null);
     setLoteamentoAlterarEixoPreview(null);
+    setLoteamentoExcluirRua(false);
     setDrenagemPick(null);
     setDrenagemPipeFromId(null);
     setPvDrag(null);
@@ -1904,9 +2003,39 @@ export function CadWorkspace({ userId }: { userId: string }) {
   }, [applyCadFullscreenState]);
 
   useEffect(() => {
+    function isTypingTarget(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.code === "Space" && !e.repeat && !isTypingTarget(e.target)) {
+        e.preventDefault();
+        spacePanRef.current = true;
+      }
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.code === "Space") spacePanRef.current = false;
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
+  useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      if (areaPickMode || distancePickMode || profilePickMode || alignmentPickMode || appPickMode || loteamentoPickLado || loteamentoPickFaixa || loteamentoAlterarEixo || drenagemPick) {
+      if (insertKind) {
+        setInsertKind(null);
+        setDraft([]);
+        setDrawHint(null);
+        setTool("select");
+        return;
+      }
+      if (areaPickMode || distancePickMode || profilePickMode || alignmentPickMode || appPickMode || loteamentoPickLado || loteamentoPickFaixa || loteamentoAlterarEixo || loteamentoExcluirRua || drenagemPick) {
         resetWorkspaceModes();
         return;
       }
@@ -1926,11 +2055,13 @@ export function CadWorkspace({ userId }: { userId: string }) {
     loteamentoPickLado,
     loteamentoPickFaixa,
     loteamentoAlterarEixo,
+    loteamentoExcluirRua,
     drenagemPick,
     resetWorkspaceModes,
     exitCadFullscreen,
     keyboardDistance,
     drawHint,
+    insertKind,
   ]);
 
   const applyCadSnapshot = useCallback(
@@ -2473,11 +2604,84 @@ export function CadWorkspace({ userId }: { userId: string }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedId, isDrawTool, draft.length, keyboardDistance, project.entities]);
 
+  useEffect(() => {
+    function isTypingTarget(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (isTypingTarget(e.target)) return;
+      if (isDrawTool && (draft.length > 0 || keyboardDistance.trim())) return;
+
+      if (e.key === "Escape" && modifySession) {
+        e.preventDefault();
+        cancelModify();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redoModifyOperation();
+        else undoModifyOperation();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redoModifyOperation();
+        return;
+      }
+      if (e.key === "Enter" && modifySession) {
+        e.preventDefault();
+        applyActiveModify(false, modifySession);
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!/^[a-zA-Z]$/.test(e.key)) return;
+      if (shortcutTimerRef.current) window.clearTimeout(shortcutTimerRef.current);
+      shortcutBufferRef.current = `${shortcutBufferRef.current}${e.key.toLowerCase()}`.slice(-3);
+      const resolved = resolveShortcutBuffer(shortcutBufferRef.current);
+      if (resolved && resolved !== "pending") {
+        e.preventDefault();
+        startModifyTool(resolved);
+        shortcutBufferRef.current = "";
+        return;
+      }
+      shortcutTimerRef.current = window.setTimeout(() => {
+        const toolName = commitShortcutBuffer(shortcutBufferRef.current);
+        if (toolName) startModifyTool(toolName);
+        shortcutBufferRef.current = "";
+      }, 800);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isDrawTool, draft.length, keyboardDistance, modifySession, project, selectedId]);
+
+  useEffect(() => {
+    function isTypingTarget(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "F3") return;
+      if (isTypingTarget(e.target)) return;
+      e.preventDefault();
+      persistOsnap({ ...osnapSettings, enabled: !osnapSettings.enabled });
+      setDrawHint(osnapSettings.enabled ? "OSNAP: OFF" : "OSNAP: ON");
+      window.setTimeout(() => setDrawHint(null), 1600);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [osnapSettings]);
+
   function finishPolyline(closed = false) {
     if (draft.length < 2) {
       setDraft([]);
       return;
     }
+    if (insertKind === "polygon" && draft.length >= 3) closed = true;
     const polyCount = project.entities.filter((e) => e.type === "polyline").length;
     const entity: CadPolylineEntity = {
       id: newId("pl"),
@@ -2545,7 +2749,324 @@ export function CadWorkspace({ userId }: { userId: string }) {
     });
   }
 
-  function handleCanvasClick(sx: number, sy: number) {
+  function hitEntityAtScreen(sx: number, sy: number): string | null {
+    const point = screenToWorld(sx, sy, viewport);
+    let hit: string | null = null;
+    for (const entity of [...visibleEntities].reverse()) {
+      if (entity.type === "point") {
+        const { sx: px, sy: py } = worldToScreen(entity.x, entity.y, viewport);
+        if (Math.hypot(px - sx, py - sy) < 10) {
+          hit = entity.id;
+          break;
+        }
+      }
+      if (entity.type === "polyline") {
+        const wts = (x: number, y: number) => worldToScreen(x, y, viewport);
+        if (hitTestPolyline(sx, sy, entity.vertices, Boolean(entity.closed), wts)) {
+          hit = entity.id;
+          break;
+        }
+      }
+      if (entity.type === "line") {
+        const wts = (x: number, y: number) => worldToScreen(x, y, viewport);
+        if (hitTestPolyline(sx, sy, [entity.start, entity.end], false, wts)) {
+          hit = entity.id;
+          break;
+        }
+      }
+    }
+    const lotAtClick = findLoteamentoLotAtPoint(project, point.x, point.y);
+    if (lotAtClick) hit = lotAtClick.id;
+    return hit;
+  }
+
+  function commitModifyProject(next: CadProject, nextSelected?: string | null) {
+    pushUndo(modifyUndoRef.current, { project, selectedId });
+    modifyRedoRef.current = [];
+    setProject(next);
+    if (nextSelected !== undefined) {
+      setSelectedId(nextSelected);
+      setSelectedIds(nextSelected ? [nextSelected] : []);
+    }
+  }
+
+  function applyActiveModify(preview = false, session = modifySession) {
+    if (!session) return;
+    const cmd = commandFromSession(session);
+    if (session.tool === "array") {
+      cmd.dx = session.value ?? 0;
+      cmd.dy = session.value2 ?? 0;
+      cmd.tipo_matriz = session.arrayKind === "polar" ? "polar" : "retangular";
+    }
+    if (session.tool === "offset" && session.picks[0] && session.entityIds[0]) {
+      const host = project.entities.find((e) => e.id === session.entityIds[0]);
+      if (host) cmd.lado = offsetSideFromPick(host, session.picks[0]) === 1 ? "esquerda" : "direita";
+    }
+    const result = applyModifyCommand(project, cmd, {
+      selectedId,
+      extraIds: session.entityIds,
+      preview,
+    });
+    if (preview) {
+      setModifySession({ ...session, previewEntities: result.previewEntities ?? [], phase: "preview", hint: result.message });
+      return;
+    }
+    if (!result.ok) {
+      setDrawHint(result.message);
+      setPointActionNotice(result.message);
+      return;
+    }
+    commitModifyProject(result.project, result.selectedIds[0] ?? selectedId);
+    setPointActionNotice(result.message);
+    setDrawHint(null);
+    setModifySession(null);
+    setTool("select");
+  }
+
+  function cancelModify() {
+    setModifySession(null);
+    setDrawHint(null);
+    setTool("select");
+  }
+
+  function undoModifyOperation() {
+    const prev = popUndo(modifyUndoRef.current);
+    if (!prev) return;
+    pushUndo(modifyRedoRef.current, { project, selectedId });
+    setProject(prev.project);
+    setSelectedId(prev.selectedId);
+    setSelectedIds(prev.selectedId ? [prev.selectedId] : []);
+    setModifySession(null);
+    setDrawHint("Operação desfeita.");
+  }
+
+  function redoModifyOperation() {
+    const next = popUndo(modifyRedoRef.current);
+    if (!next) return;
+    pushUndo(modifyUndoRef.current, { project, selectedId });
+    setProject(next.project);
+    setSelectedId(next.selectedId);
+    setSelectedIds(next.selectedId ? [next.selectedId] : []);
+    setDrawHint("Operação refeita.");
+  }
+
+  function startModifyTool(toolName: CadModifyTool) {
+    const cadTool = (
+      {
+        move: "move",
+        rotate: "rotate",
+        copy: "copy",
+        mirror: "mirror",
+        stretch: "stretch",
+        scale: "scale",
+        offset: "offset",
+        trim: "trim",
+        extend: "extend",
+        fillet: "fillet",
+        chamfer: "chamfer",
+        array: "array",
+        explode: "explode",
+        join: "join",
+        split: "split",
+      } as const
+    )[toolName];
+    activateCadTool(cadTool);
+  }
+
+  function handleModifyCanvasClick(sx: number, sy: number, shiftKey = false): boolean {
+    if (!modifySession) return false;
+    const world = resolveClickVertex(sx, sy, true);
+    const hit = hitEntityAtScreen(sx, sy);
+    const accumulate = shiftKey || ["join", "fillet", "chamfer"].includes(modifySession.tool);
+
+    if (modifySession.phase === "select") {
+      if (!hit) {
+        setDrawHint("Nenhum objeto neste clique.");
+        return true;
+      }
+      const ids = accumulate ? [...new Set([...modifySession.entityIds, hit])] : [hit];
+      setSelectedId(hit);
+      setSelectedIds(ids);
+      const nextPhase: ModifySession["phase"] =
+        modifySession.tool === "trim" || modifySession.tool === "extend"
+          ? "boundary"
+          : ["explode", "join", "array", "split"].includes(modifySession.tool)
+            ? "value"
+            : modifySession.tool === "fillet" || modifySession.tool === "chamfer"
+              ? ids.length >= 2
+                ? "preview"
+                : "select"
+              : modifySession.tool === "offset" || modifySession.tool === "scale"
+                ? "value"
+                : "base";
+      const next = sessionWithHint({ ...modifySession, entityIds: ids }, nextPhase);
+      setModifySession(next);
+      setDrawHint(next.hint);
+      if (nextPhase === "preview") applyActiveModify(true, next);
+      return true;
+    }
+
+    if (modifySession.phase === "boundary") {
+      if (!hit) {
+        setDrawHint("Clique o objeto limite.");
+        return true;
+      }
+      setModifySession({ ...modifySession, entityIds: [hit], phase: "target", hint: "Clique o objeto a aparar/estender." });
+      return true;
+    }
+
+    if (modifySession.phase === "target") {
+      if (!hit) {
+        setDrawHint("Clique o objeto alvo.");
+        return true;
+      }
+      const ids = [...modifySession.entityIds, hit];
+      const next = { ...modifySession, entityIds: ids, picks: [...modifySession.picks, world], phase: "preview" as const };
+      setModifySession(next);
+      applyActiveModify(true, next);
+      return true;
+    }
+
+    const picks = [...modifySession.picks, world];
+    if (modifySession.phase === "base" || modifySession.phase === "value") {
+      const nextPhase =
+        modifySession.tool === "offset"
+          ? "preview"
+          : modifySession.tool === "scale" || modifySession.tool === "rotate"
+            ? "preview"
+            : "dest";
+      const next = sessionWithHint({ ...modifySession, picks }, nextPhase);
+      setModifySession(next);
+      setDrawHint(next.hint);
+      if (nextPhase === "preview") applyActiveModify(true, next);
+      return true;
+    }
+
+    if (modifySession.phase === "dest") {
+      if (modifySession.tool === "stretch" && picks.length < 3) {
+        const next = sessionWithHint({ ...modifySession, picks }, "dest");
+        next.hint = "Clique o deslocamento da parte esticada.";
+        setModifySession(next);
+        setDrawHint(next.hint);
+        return true;
+      }
+      const next = sessionWithHint({ ...modifySession, picks }, "preview");
+      setModifySession(next);
+      applyActiveModify(true, next);
+      return true;
+    }
+    return false;
+  }
+
+  function handleCanvasClick(sx: number, sy: number, shiftKey = false) {
+    if (modifySession && handleModifyCanvasClick(sx, sy, shiftKey)) return;
+    if (insertKind === "point" || insertKind === "text" || insertKind === "circle" || insertKind === "arc" || insertKind === "dimension") {
+      const snapped = resolveClickVertex(sx, sy, true);
+      if (insertKind === "point") {
+        const n = project.entities.filter((e) => e.type === "point").length;
+        addEntity({
+          id: newId("pt"),
+          type: "point",
+          layerId: resolveDrawLayerId(),
+          x: snapped.x,
+          y: snapped.y,
+          z: snapped.z,
+          label: `P${n + 1}`,
+        });
+        return;
+      }
+      if (insertKind === "text") {
+        const label = insertText.trim() || "Texto";
+        setProject((prev) => ({
+          ...prev,
+          layers: prev.layers.some((l) => l.id === CAD_TEXT_LAYER.id) ? prev.layers : [...prev.layers, { ...CAD_TEXT_LAYER }],
+          entities: [
+            ...prev.entities,
+            {
+              id: newId("txt"),
+              type: "point",
+              layerId: CAD_TEXT_LAYER.id,
+              x: snapped.x,
+              y: snapped.y,
+              z: snapped.z,
+              label,
+            },
+          ],
+        }));
+        return;
+      }
+      if (insertKind === "circle") {
+        if (draft.length === 0) {
+          setDraft([snapped]);
+          return;
+        }
+        const radius = Math.hypot(snapped.x - draft[0].x, snapped.y - draft[0].y);
+        addEntity({
+          id: newId("pl"),
+          type: "polyline",
+          layerId: resolveDrawLayerId(),
+          vertices: circleVertices(draft[0], radius),
+          closed: true,
+          name: "Círculo",
+        });
+        setDraft([]);
+        return;
+      }
+      if (insertKind === "arc") {
+        if (draft.length < 2) {
+          setDraft([...draft, snapped]);
+          return;
+        }
+        const verts = arcVertices(draft[0], draft[1], snapped);
+        if (verts) {
+          addEntity({
+            id: newId("pl"),
+            type: "polyline",
+            layerId: resolveDrawLayerId(),
+            vertices: verts,
+            closed: false,
+            name: "Arco",
+          });
+        }
+        setDraft([]);
+        return;
+      }
+      if (draft.length === 0) {
+        setDraft([snapped]);
+        return;
+      }
+      const dist = Math.hypot(snapped.x - draft[0].x, snapped.y - draft[0].y);
+      const dimLayer = {
+        id: "dimensions",
+        name: "COTAS",
+        color: "#a855f7",
+        visible: true,
+        locked: false,
+      };
+      setProject((prev) => ({
+        ...prev,
+        layers: prev.layers.some((l) => l.id === "dimensions") ? prev.layers : [...prev.layers, dimLayer],
+        entities: [
+          ...prev.entities,
+          { id: newId("dim"), type: "line", layerId: "dimensions", start: draft[0], end: snapped },
+          {
+            id: newId("dimlbl"),
+            type: "point",
+            layerId: "dimensions",
+            x: (draft[0].x + snapped.x) / 2,
+            y: (draft[0].y + snapped.y) / 2,
+            z: 0,
+            label: `${dist.toFixed(2)} m`,
+          },
+        ],
+      }));
+      setDraft([]);
+      return;
+    }
+    if (loteamentoExcluirRua) {
+      excluirRuaAtScreen(sx, sy);
+      return;
+    }
     if (loteamentoAlterarEixo) {
       const world = screenToWorld(sx, sy, viewport);
       if (loteamentoAlterarEixo.phase === "a") {
@@ -3011,7 +3532,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     }
 
     if (tool === "polyline") {
-      if (snapToRtkPoints) {
+      if (!osnapSettings.enabled && snapToRtkPoints) {
         const hit = findPointAtScreen(sx, sy, project.entities, viewport, 16);
         if (!hit) {
           setDrawHint(t("draw.pointRequired"));
@@ -3023,6 +3544,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
             snapToPoints: true,
             orthogonalMode: true,
             reference: drawReference,
+            osnap: osnapSettings,
           });
         }
         addDraftVertex(vertex);
@@ -3030,13 +3552,13 @@ export function CadWorkspace({ userId }: { userId: string }) {
         return;
       }
 
-      const point = resolveClickVertex(sx, sy);
+      const point = resolveClickVertex(sx, sy, true);
       addDraftVertex(point);
       setHoverSnapId(null);
       return;
     }
 
-    const point = resolveClickVertex(sx, sy);
+    const point = resolveClickVertex(sx, sy, true);
 
     if (tool === "select") {
       let hit: string | null = null;
@@ -3077,8 +3599,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
       }
       setSelectedId(hit);
       if (hit) {
+        setSelectedIds((prev) => (shiftKey ? (prev.includes(hit) ? prev.filter((id) => id !== hit) : [...prev, hit]) : [hit]));
         const hitEntity = project.entities.find((e) => e.id === hit);
         focusDrainageCalc(hit, Boolean(hitEntity && isDrainagePipeEntity(hitEntity)));
+      } else if (!shiftKey) {
+        setSelectedIds([]);
       }
       return;
     }
@@ -3205,6 +3730,15 @@ export function CadWorkspace({ userId }: { userId: string }) {
       }
       if (effect.type === "set_tool") {
         setTool(effect.tool);
+        const modify = CAD_TOOL_TO_MODIFY[effect.tool];
+        if (modify) {
+          const ids = selectedId ? [selectedId] : [];
+          const session = createModifySession(modify, ids);
+          setModifySession(session);
+          setDrawHint(session.hint);
+        } else {
+          setModifySession(null);
+        }
       }
       if (effect.type === "start_alterar_eixo") {
         startAlterarEixoTwoPoints();
@@ -3261,7 +3795,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
     const testadaMinimaM = parseDrawNumber(loteamentoTestada);
     const areaQuadraRaw = loteamentoAreaQuadra.trim();
     const areaMinimaQuadraM2 = areaQuadraRaw === "" ? 2000 : parseDrawNumber(areaQuadraRaw);
-    const larguraQuadraM = parseDrawNumber(loteamentoLarguraQuadra);
     const distanciaQuadraM = parseDrawNumber(loteamentoDistanciaQuadra);
     const larguraCalcadaRaw = loteamentoLarguraCalcada.trim();
     const larguraCalcadaM = larguraCalcadaRaw === "" ? 0 : parseDrawNumber(larguraCalcadaRaw);
@@ -3272,8 +3805,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     const existRaw = loteamentoLarguraViaExistente.trim();
     const larguraViaExistenteM = existRaw === "" ? undefined : parseDrawNumber(existRaw);
     const medidasOk =
-      loteamentoQuadraModo !== "medidas" ||
-      (larguraQuadraM !== null && larguraQuadraM > 0 && distanciaQuadraM !== null && distanciaQuadraM > 0);
+      loteamentoQuadraModo !== "medidas" || (distanciaQuadraM !== null && distanciaQuadraM > 0);
     if (
       larguraViaM === null ||
       larguraViaM <= 0 ||
@@ -3323,7 +3855,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
         profundidadeQuadraM,
         testadaMinimaM,
         areaMinimaQuadraM2: loteamentoQuadraModo === "area" ? areaMinimaQuadraM2 : 0,
-        larguraQuadraM: loteamentoQuadraModo === "medidas" ? larguraQuadraM ?? undefined : undefined,
+        larguraQuadraM:
+          loteamentoQuadraModo === "medidas" && profundidadeQuadraM != null
+            ? profundidadeQuadraM * 2 + 0.5
+            : undefined,
         profundidadeBlocoM: loteamentoQuadraModo === "medidas" ? distanciaQuadraM ?? undefined : undefined,
         larguraCalcadaM,
         eixoRua: loteamentoEixoRua,
@@ -3356,19 +3891,19 @@ export function CadWorkspace({ userId }: { userId: string }) {
     return resolveAreaMinimaInterno({ testadaM: testada, profundidadeM: profundidade });
   }
 
-  function applyEditedEixosToLoteamento(source?: typeof project) {
-    if (loteamentoRebuildInFlightRef.current) return;
+  function applyEditedEixosToLoteamento(source?: typeof project): boolean {
+    if (loteamentoRebuildInFlightRef.current) return false;
     setLoteamentoNotice(null);
     setLoteamentoError(null);
     const parsed = parseLoteamentoRebuildInput();
     if (!parsed.ok) {
       setLoteamentoError(parsed.error);
-      return;
+      return false;
     }
     const src = source ?? projectLiveRef.current;
     if (!src.entities.some(isLoteamentoEixoPolyline)) {
       setLoteamentoError(t("loteamento.eixoNeed"));
-      return;
+      return false;
     }
     loteamentoRebuildInFlightRef.current = true;
     setLoteamentoBusy(true);
@@ -3376,7 +3911,12 @@ export function CadWorkspace({ userId }: { userId: string }) {
       const result = rebuildLoteamentoFromEixos(src, parsed.input);
       projectLiveRef.current = result.project;
       setProject(result.project);
-      setLoteamentoNotice(t("loteamento.eixoApplied", { lots: result.lotCount, vias: result.viaCount }));
+      const cover = result.coverage ?? summarizeOrangeQuadraCoverage(result.project);
+      const emptyWarn = cover.vazias > 0 ? ` ${t("loteamento.coverageEmptyWarn")}` : "";
+      setLoteamentoNotice(
+        `${t("loteamento.eixoApplied", { lots: result.lotCount, vias: result.viaCount })} ${t("loteamento.coverageQuadras", { n: cover.quadras })} · ${t("loteamento.coverageComLotes", { n: cover.comLotes })} · ${t("loteamento.coverageVazias", { n: cover.vazias })}.${emptyWarn}`,
+      );
+      return true;
     } catch (err) {
       const raw = err instanceof Error ? err.message : t("commands.error");
       setLoteamentoError(
@@ -3386,9 +3926,56 @@ export function CadWorkspace({ userId }: { userId: string }) {
             ? t("loteamento.needPolygon")
             : raw,
       );
+      return false;
     } finally {
       loteamentoRebuildInFlightRef.current = false;
       setLoteamentoBusy(false);
+    }
+  }
+
+  function startExcluirRua() {
+    setLoteamentoNotice(null);
+    setLoteamentoError(null);
+    if (!projectLiveRef.current.entities.some(isLoteamentoEixoPolyline)) {
+      setLoteamentoError(t("loteamento.eixoNeed"));
+      return;
+    }
+    resetWorkspaceModes();
+    setToolsTab("loteamento");
+    setLoteamentoExcluirRua(true);
+    setDrawHint(t("loteamento.excluirRuaPick"));
+  }
+
+  function stopExcluirRua() {
+    setLoteamentoExcluirRua(false);
+    setDrawHint(null);
+  }
+
+  function excluirRuaAtScreen(sx: number, sy: number) {
+    if (loteamentoRebuildInFlightRef.current) return;
+    const world = screenToWorld(sx, sy, viewport);
+    const larguraViaM = parseDrawNumber(loteamentoLarguraVia) ?? 12;
+    const maxDistM = Math.max(larguraViaM / 2 + 0.5, worldMetersPerPixel(viewport) * 14);
+    const before = projectLiveRef.current;
+    let cutProject: CadProject;
+    try {
+      cutProject = excluirRuaDoLoteamento(before, world.x, world.y, maxDistM, larguraViaM).project;
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : t("commands.error");
+      setDrawHint(
+        raw === EXCLUIR_RUA_NEED_HIT
+          ? t("loteamento.excluirRuaMiss")
+          : raw === EXCLUIR_RUA_LAST
+            ? t("loteamento.excluirRuaLast")
+            : raw,
+      );
+      setTimeout(() => setDrawHint(t("loteamento.excluirRuaPick")), 3000);
+      return;
+    }
+    if (applyEditedEixosToLoteamento(cutProject)) {
+      pushUndo(modifyUndoRef.current, { project: before, selectedId });
+      modifyRedoRef.current = [];
+      setDrawHint(t("loteamento.excluirRuaPick"));
     }
   }
 
@@ -3408,6 +3995,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     }
     setLoteamentoPickLado(false);
     setLoteamentoPickFaixa(false);
+    setLoteamentoExcluirRua(false);
     setAppPickMode(false);
     setAppApplyAfterPick(false);
     setDrenagemPick(null);
@@ -3465,14 +4053,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
     return hitTestEixoEditPoint(projectLiveRef.current, world.x, world.y, maxDistM, preferEixoId);
   }
 
-  function openEstudoViabilidade() {
+  function buildCurrentViabilidadePayload(prefs?: ViabilidadeAutoPrefs) {
     const live = projectLiveRef.current ?? project;
     const plateauRaw = volPlateauZ.trim().replace(",", ".");
     const plateau = plateauRaw ? Number(plateauRaw) : null;
     const calcadaRaw = loteamentoLarguraCalcada.trim().replace(",", ".");
     const viaRaw = parseDrawNumber(loteamentoLarguraVia);
     const glebaId = loteamentoGlebaId.trim() || selectedId || null;
-    const payload = buildViabilidadeSessionPayload({
+    return buildViabilidadeSessionPayload({
       project: live,
       savedProjectId,
       streetProfiles,
@@ -3480,7 +4068,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
       glebaId,
       larguraViaFallbackM: viaRaw != null && viaRaw > 0 ? viaRaw : undefined,
       larguraCalcadaM: calcadaRaw ? Number(calcadaRaw) : undefined,
+      uf: prefs?.uf,
+      tipoSinapi: prefs?.tipo,
+      precoVendaM2: prefs?.precoVendaM2,
     });
+  }
+
+  function openEstudoViabilidade(prefs?: ViabilidadeAutoPrefs) {
+    const payload = buildCurrentViabilidadePayload(prefs);
     const stored = writeViabilidadeSession(payload);
     if (!stored.ok && !savedProjectId) {
       setLoteamentoError(
@@ -3540,7 +4135,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
     const testadaMinimaM = parseDrawNumber(loteamentoTestada);
     const areaQuadraRaw = loteamentoAreaQuadra.trim();
     const areaMinimaQuadraM2 = areaQuadraRaw === "" ? 2000 : parseDrawNumber(areaQuadraRaw);
-    const larguraQuadraM = parseDrawNumber(loteamentoLarguraQuadra);
     const distanciaQuadraM = parseDrawNumber(loteamentoDistanciaQuadra);
     const larguraCalcadaRaw = loteamentoLarguraCalcada.trim();
     const larguraCalcadaM = larguraCalcadaRaw === "" ? 0 : parseDrawNumber(larguraCalcadaRaw);
@@ -3551,8 +4145,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     const existRaw = loteamentoLarguraViaExistente.trim();
     const larguraViaExistenteM = existRaw === "" ? undefined : parseDrawNumber(existRaw);
     const medidasOk =
-      loteamentoQuadraModo !== "medidas" ||
-      (larguraQuadraM !== null && larguraQuadraM > 0 && distanciaQuadraM !== null && distanciaQuadraM > 0);
+      loteamentoQuadraModo !== "medidas" || (distanciaQuadraM !== null && distanciaQuadraM > 0);
     if (
       larguraViaM === null ||
       larguraViaM <= 0 ||
@@ -3612,7 +4205,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
           profundidade_quadra_m: profundidadeQuadraM,
           testada_minima_m: testadaMinimaM,
           area_minima_quadra_m2: loteamentoQuadraModo === "area" ? areaMinimaQuadraM2 : 0,
-          largura_quadra_m: loteamentoQuadraModo === "medidas" ? larguraQuadraM ?? undefined : undefined,
           distancia_quadra_m: loteamentoQuadraModo === "medidas" ? distanciaQuadraM ?? undefined : undefined,
           largura_calcada_m: larguraCalcadaM,
           eixo_rua: loteamentoEixoRua,
@@ -3746,10 +4338,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
     }
   }
 
-  function definirAreaUtil() {
-    generateLoteamentoFromPanel();
-  }
-
   function aplicarAppBuffer(sourceId: string) {
     setLoteamentoNotice(null);
     setLoteamentoError(null);
@@ -3871,7 +4459,13 @@ export function CadWorkspace({ userId }: { userId: string }) {
 
   function exportarLoteamentoKml() {
     setLoteamentoError(null);
-    const kml = exportCadProjectKml(project);
+    let kml: string;
+    try {
+      kml = exportCadProjectKml(project);
+    } catch (err) {
+      setLoteamentoError(err instanceof Error ? err.message : t("export.error"));
+      return;
+    }
     if (!kml.includes("<Placemark>")) {
       setLoteamentoError(t("loteamento.urbano.kmlEmpty"));
       return;
@@ -4644,7 +5238,131 @@ export function CadWorkspace({ userId }: { userId: string }) {
     setHypsometricError(null);
   }
 
-  function handleImportSurveyPoints(file: File) {
+  function openImportPanel(kind: CadImportKind) {
+    importKindRef.current = kind;
+    setImportReturnTab(toolsTab);
+    setImportKind(kind);
+    setInsertKind(null);
+    setPointsPreview(null);
+    setToolsTab("draw");
+    setSidebarCollapsed(false);
+  }
+
+  function closeImportPanel() {
+    setImportKind(null);
+    setPointsPreview(null);
+    setToolsTab(importReturnTab);
+  }
+
+  function openInsertPanel(kind: CadInsertKind) {
+    setImportKind(null);
+    setInsertKind(kind);
+    setToolsTab("draw");
+    setSidebarCollapsed(false);
+    setDraft([]);
+    if (kind === "line") activateCadTool("line");
+    else if (kind === "polyline" || kind === "polygon") activateCadTool("polyline");
+    else {
+      setTool("select");
+      setModifySession(null);
+    }
+    const hints: Record<CadInsertKind, string> = {
+      point: "Clique para inserir o ponto.",
+      line: "Clique início e fim da linha.",
+      polyline: "Clique os vértices da polilinha.",
+      polygon: "Clique os vértices e feche o polígono.",
+      circle: "Clique o centro e o raio.",
+      arc: "Clique início, ponto intermediário e fim.",
+      text: "Clique a posição do texto.",
+      dimension: "Clique os dois pontos da cota.",
+      block: "Escolha um DWG/DXF.",
+      image: "Escolha a imagem.",
+    };
+    setDrawHint(hints[kind]);
+  }
+
+  function closeInsertPanel() {
+    setInsertKind(null);
+    setDrawHint(null);
+    setDraft([]);
+  }
+
+  async function loadPointsPreview(file: File) {
+    const data = /\.xlsx?$/i.test(file.name) ? await file.arrayBuffer() : await file.text();
+    const peeked = await peekSurveyTable(file.name, data);
+    setPointsPreview({
+      fileName: file.name,
+      format: peeked.format,
+      headers: peeked.headers,
+      rows: peeked.rows,
+      map: {
+        code: peeked.code,
+        east: peeked.east,
+        north: peeked.north,
+        elev: peeked.elev,
+        headerRow: peeked.headerRow,
+      },
+      file,
+    });
+  }
+
+  async function runImportFiles(kind: CadImportKind, files: File[]) {
+    const file = files[0];
+    if (!file) return;
+    if (isPointsImport(kind)) {
+      await loadPointsPreview(file);
+      return;
+    }
+    if (kind === "shp") {
+      setImportingDrawing(true);
+      try {
+        const result = await importShapefileFile(file, project);
+        if (result.error || result.count === 0) {
+          setImportNotice(result.error || t("import.drawingEmpty", { name: file.name }));
+          return;
+        }
+        setProject(result.project);
+        setViewBounds(computeViewportBoundsSafe(result.project.entities));
+        setImported(true);
+        setImportNotice(t("import.drawingOk", { count: result.count, name: file.name }));
+        closeImportPanel();
+      } catch (err) {
+        setImportNotice(err instanceof Error ? err.message : t("import.error"));
+      } finally {
+        setImportingDrawing(false);
+      }
+      return;
+    }
+    if (kind === "geojson") {
+      setImportingDrawing(true);
+      try {
+        const result = await importGeoJsonFile(file, project);
+        if (result.error || result.count === 0) {
+          setImportNotice(result.error || t("import.drawingEmpty", { name: file.name }));
+          return;
+        }
+        setProject(result.project);
+        setViewBounds(computeViewportBoundsSafe(result.project.entities));
+        setImported(true);
+        setImportNotice(t("import.drawingOk", { count: result.count, name: file.name }));
+        closeImportPanel();
+      } catch (err) {
+        setImportNotice(err instanceof Error ? err.message : t("import.error"));
+      } finally {
+        setImportingDrawing(false);
+      }
+      return;
+    }
+    if (kind === "kml" || kind === "dwg" || kind === "dxf") {
+      const ok = await handleImportCadDrawingFile(file);
+      if (ok) closeImportPanel();
+      return;
+    }
+    const ok = await handleImportOrthoFiles(files);
+    if (ok) closeImportPanel();
+  }
+
+  function handleImportSurveyPoints(file: File, map?: SurveyColumnMap, layerName?: string) {
     setImportNotice(null);
     setImportingPoints(true);
     const isExcel = /\.xlsx?$/i.test(file.name);
@@ -4664,14 +5382,15 @@ export function CadWorkspace({ userId }: { userId: string }) {
           const parsed = await parseSurveyUpload(
             file.name,
             isExcel ? (data as ArrayBuffer) : String(data),
+            map,
           );
           if (parsed.points.length === 0) {
             setImportNotice(parsed.warnings.join(" ") || t("import.noPoints"));
             return;
           }
           setProject((prev) => {
-            const layerName = isExcel ? "PONTOS_EXCEL" : "PONTOS_TXT";
-            const next = importSurveyPointsToProject(prev, parsed.points, layerName);
+            const resolvedLayer = layerName ?? (isExcel ? "PONTOS_EXCEL" : "PONTOS_TXT");
+            const next = importSurveyPointsToProject(prev, parsed.points, resolvedLayer);
             setViewBounds(computeViewportBoundsSafe(next.entities));
             const det = detectUtmZoneFromCoordinates(next.entities, undefined, next.crs);
             if (det.isGeoreferenced && det.coordMode === "utm") {
@@ -4690,6 +5409,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
             return next;
           });
           setImported(true);
+          closeImportPanel();
         } catch (err) {
           setImportNotice(err instanceof Error ? err.message : t("import.error"));
         } finally {
@@ -4701,22 +5421,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
     else reader.readAsText(file, "utf-8");
   }
 
-  function openSurveyImport() {
-    window.requestAnimationFrame(() => surveyFileRef.current?.click());
-  }
-
-  function openExcelImport() {
-    window.requestAnimationFrame(() => excelFileRef.current?.click());
-  }
-
-  async function handleImportCadDrawingFile(file: File) {
+  async function handleImportCadDrawingFile(file: File): Promise<boolean> {
     setImportingDrawing(true);
     setImportNotice(null);
     try {
       const result = await importCadDrawingFile(file, project);
       if (result.error || result.count === 0) {
         setImportNotice(result.error || t("import.drawingEmpty", { name: file.name }));
-        return;
+        return false;
       }
       setProject(result.project);
       setViewBounds(computeViewportBoundsSafe(result.importedEntities));
@@ -4725,8 +5437,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
         setBasemapOverlays((prev) => ({ ...prev, satellite: true }));
       }
       setImportNotice(t("import.drawingOk", { count: result.count, name: file.name }));
+      return true;
     } catch (err) {
       setImportNotice(err instanceof Error ? err.message : t("import.error"));
+      return false;
     } finally {
       setImportingDrawing(false);
     }
@@ -4738,8 +5452,20 @@ export function CadWorkspace({ userId }: { userId: string }) {
     return clientToViewBox(clientX, clientY, rect, width, height);
   }
 
+  function writeHud(x: number, y: number) {
+    if (hudXRef.current) hudXRef.current.textContent = x.toFixed(3);
+    if (hudYRef.current) hudYRef.current.textContent = y.toFixed(3);
+  }
+
   function scheduleCursor(x: number, y: number) {
     pendingCursorRef.current = { x, y, z: 0 };
+    writeHud(x, y);
+    const liveGhost =
+      modifySession != null &&
+      !modifySession.previewEntities.length &&
+      Boolean(modifySession.picks[0]) &&
+      (modifySession.tool === "move" || modifySession.tool === "copy");
+    if (!liveGhost) return;
     if (cursorRafRef.current != null) return;
     cursorRafRef.current = window.requestAnimationFrame(() => {
       cursorRafRef.current = null;
@@ -4907,13 +5633,71 @@ export function CadWorkspace({ userId }: { userId: string }) {
     });
   }
 
+  function renderModifyGhost(entity: CadEntity, key: string) {
+    if (entity.type === "point") {
+      const { sx, sy } = worldToScreen(entity.x, entity.y, viewport);
+      return <circle key={key} cx={sx} cy={sy} r={5} fill="none" stroke="#22d3ee" strokeDasharray="4 3" />;
+    }
+    if (entity.type === "line") {
+      const a = worldToScreen(entity.start.x, entity.start.y, viewport);
+      const b = worldToScreen(entity.end.x, entity.end.y, viewport);
+      return (
+        <line
+          key={key}
+          x1={a.sx}
+          y1={a.sy}
+          x2={b.sx}
+          y2={b.sy}
+          stroke="#22d3ee"
+          strokeDasharray="6 4"
+          strokeWidth={2}
+        />
+      );
+    }
+    const pts = entity.vertices.map((v) => worldToScreen(v.x, v.y, viewport));
+    const d =
+      pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.sx} ${p.sy}`).join(" ") + (entity.closed ? " Z" : "");
+    return (
+      <path
+        key={key}
+        d={d}
+        fill={entity.closed ? "rgba(34,211,238,0.12)" : "none"}
+        stroke="#22d3ee"
+        strokeDasharray="6 4"
+        strokeWidth={2}
+      />
+    );
+  }
+
+  function entitiesInScreenBox(x0: number, y0: number, x1: number, y1: number): string[] {
+    const minX = Math.min(x0, x1);
+    const maxX = Math.max(x0, x1);
+    const minY = Math.min(y0, y1);
+    const maxY = Math.max(y0, y1);
+    const ids: string[] = [];
+    for (const entity of visibleEntities) {
+      const verts =
+        entity.type === "point"
+          ? [{ x: entity.x, y: entity.y }]
+          : entity.type === "line"
+            ? [entity.start, entity.end]
+            : entity.vertices;
+      const hit = verts.some((v) => {
+        const p = worldToScreen(v.x, v.y, viewport);
+        return p.sx >= minX && p.sx <= maxX && p.sy >= minY && p.sy <= maxY;
+      });
+      if (hit) ids.push(entity.id);
+    }
+    return ids;
+  }
+
   function renderEntity(entity: CadEntity) {
     const layer = layerMap.get(entity.layerId);
     const lineColor = cadPaperScreenStroke(getLayerLineColor(layer), paperTone);
     const selectStroke = cadPaperSelectStroke(paperTone);
     const layerTextColor = getLayerTextColor(layer);
     const layerTextSize = getLayerTextSize(layer);
-    const selected = entity.id === selectedId;
+    const selected = entity.id === selectedId || selectedIds.includes(entity.id);
     const isLotAnnotation =
       entity.layerId.startsWith("loteamento_") ||
       entity.layerId.startsWith("drenagem_") ||
@@ -5211,37 +5995,59 @@ export function CadWorkspace({ userId }: { userId: string }) {
       : null;
 
   function resolveLotEsquinaInfo(lot: CadPolylineEntity, index = 0) {
-    if (lot.lote?.tipo === "ESQUINA") {
+    const testadaMinimaM = parseDrawNumber(loteamentoTestada);
+    const profundidadeMinimaM = parseDrawNumber(loteamentoProfundidade);
+    const mins = {
+      testadaMinimaM: testadaMinimaM != null && testadaMinimaM > 0 ? testadaMinimaM : undefined,
+      profundidadeMinimaM:
+        profundidadeMinimaM != null && profundidadeMinimaM > 0 ? profundidadeMinimaM : undefined,
+    };
+    const streets = listLoteamentoStreetPolys(project);
+    if (streets.length > 0) {
+      const classified = classifyLot({
+        lot,
+        streets,
+        areaMinimaInterno: resolveCurrentAreaMinimaInterno(),
+        percentualEsquina: parseEsquinaPercent(),
+        testadaMinimaM: mins.testadaMinimaM,
+        profundidadeMinimaM: mins.profundidadeMinimaM,
+        index,
+      });
+      if (classified.tipo !== "ESQUINA") return null;
       return {
-        ...lot.lote,
+        ...classified,
         tooltip: formatLoteEsquinaTooltip({
           name: lot.name,
           index,
-          areaM2: lot.lote.areaM2,
-          areaMinimaM2: lot.lote.areaMinimaM2,
-          atende: lot.lote.atende,
+          areaM2: classified.areaM2,
+          areaMinimaM2: classified.areaMinimaM2,
+          atende: classified.atende,
+          testadaM: classified.testadaM,
+          profundidadeM: classified.profundidadeM,
+          testadaMinimaM: mins.testadaMinimaM,
+          profundidadeMinimaM: mins.profundidadeMinimaM,
         }),
       };
     }
-    if (lot.lote?.tipo === "INTERNO") return null;
-    const streets = listLoteamentoStreetPolys(project);
-    if (streets.length === 0) return null;
-    const classified = classifyLot({
-      lot,
-      streets,
-      areaMinimaInterno: resolveCurrentAreaMinimaInterno(),
-      percentualEsquina: parseEsquinaPercent(),
-      index,
-    });
-    if (classified.tipo !== "ESQUINA") return null;
+    if (lot.lote?.tipo !== "ESQUINA") return null;
+    const frenteOk =
+      mins.testadaMinimaM == null || lot.lote.testadaM + 0.05 >= mins.testadaMinimaM;
+    const profOk =
+      mins.profundidadeMinimaM == null || lot.lote.profundidadeM + 0.05 >= mins.profundidadeMinimaM;
+    const atende = lot.lote.atende && frenteOk && profOk;
     return {
-      ...classified,
+      ...lot.lote,
+      atende,
       tooltip: formatLoteEsquinaTooltip({
         name: lot.name,
         index,
-        areaM2: classified.areaM2,
-        areaMinimaM2: classified.areaMinimaM2,
-        atende: classified.atende,
+        areaM2: lot.lote.areaM2,
+        areaMinimaM2: lot.lote.areaMinimaM2,
+        atende,
+        testadaM: lot.lote.testadaM,
+        profundidadeM: lot.lote.profundidadeM,
+        testadaMinimaM: mins.testadaMinimaM,
+        profundidadeMinimaM: mins.profundidadeMinimaM,
       }),
     };
   }
@@ -5286,12 +6092,24 @@ export function CadWorkspace({ userId }: { userId: string }) {
 
   function activateCadTool(id: CadTool) {
     setTool(id);
+    if (id === "line") setInsertKind((k) => (k === "line" ? k : null));
+    else if (id === "polyline") setInsertKind((k) => (k === "polyline" || k === "polygon" ? k : null));
+    else setInsertKind(null);
     setDraft([]);
     setDrawHint(null);
     setHoverSnapId(null);
     setDrawPreview(null);
     setKeyboardDistance("");
     if (id !== "editPolygon") setSelectedVertexIndex(null);
+    const modify = CAD_TOOL_TO_MODIFY[id];
+    if (modify) {
+      const ids = selectedIds.length ? selectedIds : selectedId ? [selectedId] : [];
+      const session = createModifySession(modify, ids);
+      setModifySession(session);
+      setDrawHint(session.hint);
+    } else if (!CAD_MODIFY_TOOL_SET.has(id)) {
+      setModifySession(null);
+    }
   }
 
   function setRasterLayerVisible(layerId: "orthophoto" | "hypsometric", visible: boolean) {
@@ -5369,6 +6187,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
         showGrid={showGrid}
         paperTone={paperTone}
         satelliteOn={basemapOverlays.satellite}
+        googleMapType={basemapOverlays.googleMapType}
         orthophotoOn={orthophotoLayer?.visible !== false}
         showOrthophotoToggle={showOrthophotoToggle}
         reliefOn={reliefLayer?.visible !== false}
@@ -5386,13 +6205,15 @@ export function CadWorkspace({ userId }: { userId: string }) {
         onOpenFile={() => projectFileRef.current?.click()}
         onSaveLocal={() => void handleSaveLocal()}
         onSaveCloud={() => void handleSaveCloudDwg()}
-        onImportDrawing={() => drawingFileRef.current?.click()}
+        onImportKind={openImportPanel}
+        onInsertKind={openInsertPanel}
         onExport={(format) => void handleExportCad(format)}
         onExportOds={() => downloadOdsBlob(exportCadProjectOds(project), `${project.name}.ods`)}
         onToggleAi={() => setAiChatOpen((v) => !v)}
         onToggleGrid={setShowGrid}
         onPaperTone={setPaperTone}
         onToggleSatellite={(next) => patchBasemapOverlay("satellite", next)}
+        onGoogleMapType={(type) => setBasemapOverlays((prev) => ({ ...prev, googleMapType: type }))}
         onToggleOrthophoto={(next) => setRasterLayerVisible("orthophoto", next)}
         onToggleRelief={(next) => setRasterLayerVisible("hypsometric", next)}
         onFitView={resetView}
@@ -5419,16 +6240,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
           {exportError ?? importNotice}
         </p>
       ) : null}
-      <div className="pointer-events-none absolute inset-x-0 top-12 z-30 flex justify-center px-16">
-        <div className="pointer-events-auto w-full max-w-xl">
-          <CadPointObservations
-            entities={project.entities}
-            layers={project.layers}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onUpdatePoint={updatePoint}
-          />
-        </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-10 z-20 flex justify-center px-16">
+        <CadPointObservations
+          entities={project.entities}
+          layers={project.layers}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          onUpdatePoint={updatePoint}
+        />
       </div>
       <CadProjectsDialog
         open={openProjectsPanel}
@@ -5631,7 +6450,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
           >
             {isCadFullscreen ? t("actions.exitFullscreen") : t("actions.fullscreen")}
           </button>
-          {(["dxf", "dwg", "shp"] as const).map((format) => (
+          {(["dxf", "dwg", "kmz", "shp"] as const).map((format) => (
             <button
               key={format}
               type="button"
@@ -5649,7 +6468,9 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   ? t("actions.exportDxf")
                   : format === "dwg"
                     ? t("actions.exportDwg")
-                    : t("actions.exportShp")}
+                    : format === "kmz"
+                      ? t("actions.exportKmz")
+                      : t("actions.exportShp")}
             </button>
           ))}
           <button
@@ -5664,7 +6485,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
       </div>
       */}
 
-          <div className="flex min-h-0 flex-1 flex-col">
+          <div className="relative z-[60] flex min-h-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 gap-0">
           <div
             className="flex h-full min-h-0 shrink-0 flex-col"
@@ -5677,119 +6498,158 @@ export function CadWorkspace({ userId }: { userId: string }) {
             onCollapsedChange={setSidebarCollapsed}
             sections={{
               draw: (
-                <div className="space-y-4">
-                  <section>
-                    <h3 className="text-sm font-semibold text-[#0f2848]">{t("import.title")}</h3>
-                    <p className="mt-1 text-xs text-[#6b7280]">{t("import.hint")}</p>
-                    <div className="mt-3 flex flex-col gap-2">
+                <div className="space-y-2">
+                  {importKind ? (
+                    <CadImportPanel
+                      kind={importKind}
+                      busy={importingDrawing || importingPoints || importingOrtho}
+                      notice={importNotice}
+                      preview={
+                        pointsPreview
+                          ? {
+                              fileName: pointsPreview.fileName,
+                              format: pointsPreview.format,
+                              headers: pointsPreview.headers,
+                              rows: pointsPreview.rows,
+                              map: pointsPreview.map,
+                            }
+                          : null
+                      }
+                      onMapChange={(map) => setPointsPreview((prev) => (prev ? { ...prev, map } : prev))}
+                      onClose={closeImportPanel}
+                      onPickFile={(files) => void runImportFiles(importKind, files)}
+                      onImportPoints={(file, map) =>
+                        handleImportSurveyPoints(
+                          file,
+                          {
+                            ...map,
+                            code: map.code != null && map.code >= 0 ? map.code : null,
+                            elev: map.elev != null && map.elev >= 0 ? map.elev : null,
+                          },
+                          importKind === "rtk" ? "PONTOS_RTK" : undefined,
+                        )
+                      }
+                    />
+                  ) : insertKind ? (
+                    <CadInsertPanel
+                      kind={insertKind}
+                      text={insertText}
+                      onTextChange={setInsertText}
+                      onClose={closeInsertPanel}
+                      onPickBlock={() => openImportPanel("dwg")}
+                      onPickImage={() => openImportPanel("jpg")}
+                      canClosePolygon={insertKind === "polygon" && draft.length >= 3}
+                      onClosePolygon={() => finishPolyline(true)}
+                    />
+                  ) : null}
+                  {importKind ? null : (
+                  <>
+                  <section className="space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-1">
                       <button
                         type="button"
-                        disabled={importingDrawing}
-                        onClick={() => drawingFileRef.current?.click()}
-                        title={t("import.drawingHint")}
-                        className="rounded-lg border border-[#0e7490] px-3 py-2 text-xs font-medium text-[#0e7490] hover:bg-[#ecfeff] disabled:opacity-50"
+                        title={t("draw.snapRtk")}
+                        aria-pressed={snapToRtkPoints}
+                        onClick={() => {
+                          setSnapToRtkPoints((v) => !v);
+                          setDrawHint(null);
+                        }}
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          snapToRtkPoints
+                            ? "bg-[#0f2848] text-white"
+                            : "bg-[#f3f4f6] text-[#374151] hover:bg-[#e5e7eb]"
+                        }`}
                       >
-                        {importingDrawing ? t("import.drawingWorking") : t("actions.importDrawing")}
-                      </button>
-                      <p className="text-[10px] text-[#9ca3af]">{t("import.drawingHint")}</p>
-                      <button
-                        type="button"
-                        disabled={importingOrtho}
-                        onClick={() => window.requestAnimationFrame(() => orthoFileRef.current?.click())}
-                        title={t("import.orthoFormats")}
-                        className="rounded-lg border border-emerald-700 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-50 disabled:opacity-50"
-                      >
-                        {importingOrtho ? t("reurb.orthoWorking") : t("import.orthophoto")}
-                      </button>
-                      <p className="text-[10px] text-[#9ca3af]">{t("import.orthoFormats")}</p>
-                      <button
-                        type="button"
-                        disabled={importingPoints}
-                        onClick={openSurveyImport}
-                        className="rounded-lg border border-[#38bdf8] px-3 py-2 text-xs font-medium text-[#0369a1] hover:bg-[#f0f9ff] disabled:opacity-50"
-                      >
-                        {importingPoints ? t("import.working") : t("import.pointsFile")}
+                        Snap RTK
                       </button>
                       <button
                         type="button"
-                        disabled={importingPoints}
-                        onClick={openExcelImport}
-                        className="rounded-lg border border-[#0f2848] px-3 py-2 text-xs font-medium text-[#0f2848] hover:bg-[#f0f4f8] disabled:opacity-50"
+                        title={t("draw.orthogonal")}
+                        aria-pressed={orthogonalMode}
+                        onClick={() => setOrthogonalMode((v) => !v)}
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          orthogonalMode
+                            ? "bg-[#0f2848] text-white"
+                            : "bg-[#f3f4f6] text-[#374151] hover:bg-[#e5e7eb]"
+                        }`}
                       >
-                        {importingPoints ? t("import.working") : t("import.excel")}
+                        Orto
                       </button>
-                    </div>
-                    <p className="mt-2 text-[10px] text-[#9ca3af]">{t("import.excelHint")}</p>
-                  </section>
-                  <section>
-                    <h3 className="text-sm font-semibold text-[#0f2848]">{t("draw.optionsTitle")}</h3>
-                    <div className="mt-3 space-y-2">
-                      <label className="flex items-center gap-2 text-xs text-[#374151]">
-                        <input
-                          type="checkbox"
-                          checked={snapToRtkPoints}
-                          onChange={(e) => {
-                            setSnapToRtkPoints(e.target.checked);
-                            setDrawHint(null);
-                          }}
-                        />
-                        {t("draw.snapRtk")}
-                      </label>
-                      <label className="flex items-center gap-2 text-xs text-[#374151]">
-                        <input
-                          type="checkbox"
-                          checked={orthogonalMode}
-                          onChange={(e) => setOrthogonalMode(e.target.checked)}
-                        />
-                        {t("draw.orthogonal")}
-                      </label>
                     </div>
                     {canUsePolar ? (
-                      <div className="mt-4 space-y-2 border-t border-[#e5e7eb] pt-4">
-                        <p className="text-xs font-medium text-[#374151]">{t("draw.polarTitle")}</p>
-                        <p className="text-[10px] text-[#6b7280]">{t("draw.polarHint")}</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <label className="text-[10px] text-[#6b7280]">
-                            {t("draw.distance")}
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={polarDistance}
-                              onChange={(e) => setPolarDistance(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") applyPolarVertex();
-                              }}
-                              placeholder="10.00"
-                              className="mt-1 w-full rounded-lg border border-[#d1d5db] px-2 py-1.5 font-mono text-xs"
-                            />
-                          </label>
-                          <label className="text-[10px] text-[#6b7280]">
-                            {t("draw.angle")}
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={polarAngle}
-                              onChange={(e) => setPolarAngle(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") applyPolarVertex();
-                              }}
-                              placeholder="45"
-                              className="mt-1 w-full rounded-lg border border-[#d1d5db] px-2 py-1.5 font-mono text-xs"
-                            />
-                          </label>
-                        </div>
+                      <div className="flex items-end gap-1">
+                        <label className="min-w-0 flex-1 text-[9px] text-[#6b7280]">
+                          {t("draw.distance")}
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={polarDistance}
+                            onChange={(e) => setPolarDistance(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") applyPolarVertex();
+                            }}
+                            placeholder="10.00"
+                            title={t("draw.polarHint")}
+                            className="mt-0.5 w-full rounded border border-[#d1d5db] px-1.5 py-1 font-mono text-[11px]"
+                          />
+                        </label>
+                        <label className="min-w-0 flex-1 text-[9px] text-[#6b7280]">
+                          {t("draw.angle")}
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={polarAngle}
+                            onChange={(e) => setPolarAngle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") applyPolarVertex();
+                            }}
+                            placeholder="45"
+                            title={t("draw.polarHint")}
+                            className="mt-0.5 w-full rounded border border-[#d1d5db] px-1.5 py-1 font-mono text-[11px]"
+                          />
+                        </label>
                         <button
                           type="button"
                           onClick={() => applyPolarVertex()}
-                          className="w-full rounded-lg bg-[#0f2848] px-3 py-2 text-xs font-medium text-white"
+                          title={t("draw.applyPolar")}
+                          className="h-[26px] shrink-0 rounded bg-[#0f2848] px-2 text-[10px] font-medium text-white"
                         >
-                          {t("draw.applyPolar")}
+                          OK
                         </button>
                       </div>
-                    ) : (
-                      <p className="mt-3 text-[10px] text-[#9ca3af]">{t("draw.polarNeedReference")}</p>
-                    )}
+                    ) : null}
                   </section>
+                  <CadOsnapPanel
+                    settings={osnapSettings}
+                    overrideType={osnapOverride}
+                    onChange={persistOsnap}
+                  />
+                  {insertKind ? null : (
+                  <CadModifyPanel
+                    session={modifySession}
+                    activeTool={modifySession?.tool ?? CAD_TOOL_TO_MODIFY[tool] ?? null}
+                    onTool={startModifyTool}
+                    onChangeSession={(patch) => {
+                      setModifySession((prev) => {
+                        if (!prev) return prev;
+                        const next = { ...prev, ...patch };
+                        if (prev.phase === "preview") {
+                          window.setTimeout(() => applyActiveModify(true, next), 0);
+                        }
+                        return next;
+                      });
+                    }}
+                    onApply={() => applyActiveModify(false)}
+                    onCancel={cancelModify}
+                    canApply={Boolean(
+                      modifySession &&
+                        (modifySession.phase === "preview" ||
+                          (["explode", "join", "split", "array"].includes(modifySession.tool) &&
+                            modifySession.entityIds.length > 0) ||
+                          (["fillet", "chamfer"].includes(modifySession.tool) && modifySession.entityIds.length >= 2)),
+                    )}
+                  />
+                  )}
                   {tool === "polyline" && snapToRtkPoints ? (
                     <section>
                       <h3 className="text-sm font-semibold text-[#0f2848]">{t("draw.pointPicker")}</h3>
@@ -5833,6 +6693,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       </ul>
                     </section>
                   ) : null}
+                  </>
+                  )}
                 </div>
               ),
               layers: (
@@ -7464,7 +8326,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                         <p className="mt-2 text-xs text-amber-700">{t("loteamento.glebaEmpty")}</p>
                       ) : (
                         <select
-                          className="mt-1 w-full rounded-lg border border-[#d1d5db] px-2 py-1.5 text-xs"
+                          className="mt-1 w-full rounded-lg border border-[#d1d5db] bg-white px-2 py-1.5 text-xs text-[#111827]"
                           value={loteamentoGlebaId}
                           onChange={(e) => {
                             const nextId = e.target.value;
@@ -7823,16 +8685,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       ) : (
                         <>
                           <label className="mt-1 block text-xs font-medium text-[#111827]">
-                            {t("loteamento.larguraQuadra")}
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={loteamentoLarguraQuadra}
-                              onChange={(e) => setLoteamentoLarguraQuadra(e.target.value)}
-                              className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-sm text-[#111827]"
-                            />
-                          </label>
-                          <label className="mt-1 block text-xs font-medium text-[#111827]">
                             {t("loteamento.distanciaQuadra")}
                             <input
                               type="text"
@@ -7922,6 +8774,19 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       {loteamentoAlterarEixo ? t("loteamento.alterarEixoOn") : t("loteamento.alterarEixo")}
                     </button>
                     <p className="mt-1 text-[10px] text-[#9ca3af]">{t("loteamento.alterarEixoHint")}</p>
+                    <button
+                      type="button"
+                      disabled={loteamentoBusy}
+                      onClick={() => (loteamentoExcluirRua ? stopExcluirRua() : startExcluirRua())}
+                      className={`mt-2 w-full rounded-lg border px-3 py-1.5 text-xs font-medium ${
+                        loteamentoExcluirRua
+                          ? "border-red-500 bg-red-50 text-red-800"
+                          : "border-red-700 text-red-800 hover:bg-red-50"
+                      } disabled:opacity-50`}
+                    >
+                      {loteamentoExcluirRua ? t("loteamento.excluirRuaOn") : t("loteamento.excluirRua")}
+                    </button>
+                    <p className="mt-1 text-[10px] text-[#9ca3af]">{t("loteamento.excluirRuaHint")}</p>
                     <label className="mt-2 block text-[10px] text-[#6b7280]">
                       {t("loteamento.prefixoQuadra")}
                       <input
@@ -7939,6 +8804,21 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     >
                       {loteamentoBusy ? t("loteamento.working") : t("loteamento.generate")}
                     </button>
+                    {orangeQuadraCoverage.quadras > 0 ? (
+                      <div className="mt-3 space-y-0.5 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-[11px] text-[#7c2d12]">
+                        <p className="font-semibold uppercase tracking-wide">{t("loteamento.coverageTitle")}</p>
+                        <p>{t("loteamento.coverageQuadras", { n: orangeQuadraCoverage.quadras })}</p>
+                        <p>{t("loteamento.coverageProcessadas", { n: orangeQuadraCoverage.processadas })}</p>
+                        <p>{t("loteamento.coverageComLotes", { n: orangeQuadraCoverage.comLotes })}</p>
+                        <p>{t("loteamento.coverageVazias", { n: orangeQuadraCoverage.vazias })}</p>
+                        <p>{t("loteamento.coverageLotes", { n: orangeQuadraCoverage.lotes })}</p>
+                        <p>{t("loteamento.coverageAreaLoteada", { area: formatAreaBr(orangeQuadraCoverage.areaLoteadaM2) })}</p>
+                        <p>{t("loteamento.coverageAreaRestante", { area: formatAreaBr(orangeQuadraCoverage.areaRestanteM2) })}</p>
+                        {orangeQuadraCoverage.vazias > 0 ? (
+                          <p className="font-medium text-amber-800">{t("loteamento.coverageEmptyWarn")}</p>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {project.layers.some((layer) => layer.id === LOTEAMENTO_LOTES_LAYER_ID) ? (
                       <label className="mt-3 flex items-start gap-2 text-xs font-medium text-[#111827]">
                         <input
@@ -8062,67 +8942,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     ) : null}
                     {loteamentoNotice ? (
                       <p className="text-xs text-emerald-700">{loteamentoNotice}</p>
-                    ) : null}
-                  </div>
-                  <div className="rounded-lg border border-orange-200 bg-orange-50/70 px-3 py-2 space-y-2">
-                    <h4 className="text-xs font-semibold text-[#9a3412]">{t("loteamento.areaUtilTitle")}</h4>
-                    <p className="text-[10px] text-[#6b7280]">{t("loteamento.areaUtilHint")}</p>
-                    <label className="block text-[10px] text-[#6b7280]">
-                      {t("loteamento.areaUtilPercent")}
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={loteamentoAreaUtil}
-                        onChange={(e) => setLoteamentoAreaUtil(e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                      />
-                    </label>
-                    <label className="block text-[10px] text-[#6b7280]">
-                      {t("loteamento.areaUtilCanto")}
-                      <select
-                        className="mt-1 w-full rounded-lg border border-[#d1d5db] px-2 py-1.5 text-xs"
-                        value={areaUtilCanto}
-                        onChange={(e) => setAreaUtilCanto(e.target.value as ReservaCanto)}
-                      >
-                        <option value="superior_direita">{t("loteamento.cantoSuperiorDireita")}</option>
-                        <option value="superior_esquerda">{t("loteamento.cantoSuperiorEsquerda")}</option>
-                        <option value="inferior_direita">{t("loteamento.cantoInferiorDireita")}</option>
-                        <option value="inferior_esquerda">{t("loteamento.cantoInferiorEsquerda")}</option>
-                      </select>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={definirAreaUtil}
-                      className="w-full rounded-lg bg-orange-700 px-3 py-2 text-xs font-medium text-white hover:bg-orange-800"
-                    >
-                      {t("loteamento.areaUtilApply")}
-                    </button>
-                    {areaUtilBreakdown ? (
-                      <ul className="space-y-0.5 text-[10px] text-[#9a3412]">
-                        <li>
-                          {t("loteamento.areaUtilBreakdownTotal", {
-                            area: formatAreaBr(areaUtilBreakdown.totalM2),
-                          })}
-                        </li>
-                        <li>
-                          {t("loteamento.areaUtilBreakdownRl", {
-                            area: formatAreaBr(areaUtilBreakdown.reservaM2),
-                            pct: areaUtilBreakdown.reservaPct.toFixed(1).replace(".", ","),
-                          })}
-                        </li>
-                        <li>
-                          {t("loteamento.areaUtilBreakdownRuas", {
-                            area: formatAreaBr(areaUtilBreakdown.viasM2),
-                            pct: areaUtilBreakdown.viasPct.toFixed(1).replace(".", ","),
-                          })}
-                        </li>
-                        <li className="font-semibold">
-                          {t("loteamento.areaUtilBreakdownCalc", {
-                            pct: String(areaUtilBreakdown.percent.toFixed(0)),
-                            area: formatAreaBr(areaUtilBreakdown.alvoM2),
-                          })}
-                        </li>
-                      </ul>
                     ) : null}
                   </div>
                   <div className="rounded-lg border border-teal-200 bg-teal-50/70 px-3 py-2 space-y-2">
@@ -8398,13 +9217,12 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   >
                     {t("drenagem.title")}
                   </button>
-                  <button
-                    type="button"
-                    onClick={openEstudoViabilidade}
-                    className="w-full rounded-lg bg-teal-700 px-3 py-2 text-xs font-medium text-white hover:bg-teal-800"
-                  >
-                    {t("loteamento.estudoViabilidade")}
-                  </button>
+                  <CadViabilidadeAutoCard
+                    signature={viabilidadeSignature}
+                    ready={viabilidadeReady}
+                    buildPayload={() => buildCurrentViabilidadePayload()}
+                    onOpenEstudo={(prefs) => openEstudoViabilidade(prefs)}
+                  />
                   <button
                     type="button"
                     onClick={() => setToolsTab("reurb")}
@@ -9395,6 +10213,19 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   {t("commands.areaOps.cancelPick")}
                 </button>
               </div>
+            ) : loteamentoExcluirRua ? (
+              <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
+                <span className="text-red-400">
+                  {loteamentoBusy ? t("loteamento.aplicarEixoWorking") : t("loteamento.excluirRuaPick")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => stopExcluirRua()}
+                  className="rounded border border-[#334155] px-2 py-0.5 text-[10px] text-[#cbd5e1] hover:bg-[#1e293b]"
+                >
+                  {t("loteamento.excluirRuaDone")}
+                </button>
+              </div>
             ) : loteamentoAlterarEixo ? (
               <div className="flex items-center justify-between border-b border-[#1e293b] bg-[#0f172a] px-3 py-1 text-xs text-[#94a3b8]">
                 <span className="text-amber-400">
@@ -9465,37 +10296,33 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 <p className="min-w-0 flex-1 text-xs text-[#94a3b8]">{t("empty.description")}</p>
                 <button
                   type="button"
-                  disabled={importingDrawing}
-                  onClick={() => drawingFileRef.current?.click()}
+                  onClick={() => openImportPanel("dxf")}
                   title={t("import.drawingHint")}
-                  className="rounded-md border border-[#0e7490] px-2.5 py-1 text-xs font-medium text-[#67e8f9] hover:bg-[#164e63] disabled:opacity-50"
+                  className="rounded-md border border-[#0e7490] px-2.5 py-1 text-xs font-medium text-[#67e8f9] hover:bg-[#164e63]"
                 >
-                  {importingDrawing ? t("import.drawingWorking") : t("actions.importDrawing")}
+                  {t("actions.importDrawing")}
                 </button>
                 <button
                   type="button"
-                  disabled={importingOrtho}
-                  onClick={() => window.requestAnimationFrame(() => orthoFileRef.current?.click())}
+                  onClick={() => openImportPanel("geotiff")}
                   title={t("import.orthoFormats")}
-                  className="rounded-md border border-emerald-700 px-2.5 py-1 text-xs font-medium text-emerald-300 hover:bg-emerald-950 disabled:opacity-50"
+                  className="rounded-md border border-emerald-700 px-2.5 py-1 text-xs font-medium text-emerald-300 hover:bg-emerald-950"
                 >
-                  {importingOrtho ? t("reurb.orthoWorking") : t("import.orthophoto")}
+                  {t("import.orthophoto")}
                 </button>
                 <button
                   type="button"
-                  disabled={importingPoints}
-                  onClick={openSurveyImport}
-                  className="rounded-md border border-[#38bdf8] px-2.5 py-1 text-xs font-medium text-[#7dd3fc] hover:bg-[#0c4a6e] disabled:opacity-50"
+                  onClick={() => openImportPanel("points-txt")}
+                  className="rounded-md border border-[#38bdf8] px-2.5 py-1 text-xs font-medium text-[#7dd3fc] hover:bg-[#0c4a6e]"
                 >
-                  {importingPoints ? t("import.working") : t("import.pointsFile")}
+                  {t("import.pointsFile")}
                 </button>
                 <button
                   type="button"
-                  disabled={importingPoints}
-                  onClick={openExcelImport}
-                  className="rounded-md border border-[#64748b] px-2.5 py-1 text-xs font-medium text-[#e2e8f0] hover:bg-[#1e293b] disabled:opacity-50"
+                  onClick={() => openImportPanel("points-xlsx")}
+                  className="rounded-md border border-[#64748b] px-2.5 py-1 text-xs font-medium text-[#e2e8f0] hover:bg-[#1e293b]"
                 >
-                  {importingPoints ? t("import.working") : t("import.excel")}
+                  {t("import.excel")}
                 </button>
                 <button
                   type="button"
@@ -9546,21 +10373,113 @@ export function CadWorkspace({ userId }: { userId: string }) {
               height="100%"
               viewBox={`0 0 ${width} ${height}`}
               preserveAspectRatio="xMidYMid meet"
-              className={`relative z-10 ${areaPickMode || distancePickMode || profilePickMode || alignmentPickMode || appPickMode || loteamentoPickLado || loteamentoPickFaixa || loteamentoAlterarEixo || drenagemPick || tool === "editPolygon" || tool === "confrontacao" || tool !== "pan" ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"}`}
+              className={`relative z-10 ${
+                panning
+                  ? "cursor-grabbing"
+                  : tool === "pan"
+                    ? "cursor-grab active:cursor-grabbing"
+                    : areaPickMode ||
+                        distancePickMode ||
+                        profilePickMode ||
+                        alignmentPickMode ||
+                        appPickMode ||
+                        loteamentoPickLado ||
+                        loteamentoPickFaixa ||
+                        loteamentoAlterarEixo ||
+                        loteamentoExcluirRua ||
+                        drenagemPick ||
+                        isDrawTool ||
+                        insertKind ||
+                        modifySession ||
+                        tool === "editPolygon" ||
+                        tool === "confrontacao"
+                      ? "cursor-crosshair"
+                      : "cursor-default"
+              }`}
               style={{ background: hasUnderlay ? "transparent" : cadPaperFill(paperTone) }}
+              onContextMenu={(e) => {
+                if (!e.shiftKey) return;
+                e.preventDefault();
+                setOsnapMenu({ x: e.clientX, y: e.clientY });
+              }}
               onMouseMove={(e) => {
                 const { sx, sy } = toViewBoxCoords(e.clientX, e.clientY);
+                if (panning) {
+                  const dx = sx - panning.startX;
+                  const dy = sy - panning.startY;
+                  const innerW = width - padding * 2;
+                  const innerH = height - padding * 2;
+                  const worldDx =
+                    (dx / innerW) * (panning.bounds.maxX - panning.bounds.minX);
+                  const worldDy =
+                    (dy / innerH) * (panning.bounds.maxY - panning.bounds.minY);
+                  pendingPanRef.current = {
+                    minX: panning.bounds.minX - worldDx,
+                    maxX: panning.bounds.maxX - worldDx,
+                    minY: panning.bounds.minY + worldDy,
+                    maxY: panning.bounds.maxY + worldDy,
+                  };
+                  if (panRafRef.current == null) {
+                    panRafRef.current = window.requestAnimationFrame(() => {
+                      panRafRef.current = null;
+                      if (pendingPanRef.current) setViewBounds(pendingPanRef.current);
+                    });
+                  }
+                  return;
+                }
                 const w = screenToWorld(sx, sy, viewport);
-                scheduleCursor(w.x, w.y);
-
-                if (isDrawWithPoints && snapToRtkPoints) {
+                const liveSnap =
+                  isDrawTool ||
+                  Boolean(insertKind) ||
+                  Boolean(modifySession) ||
+                  Boolean(areaPickMode) ||
+                  Boolean(distancePickMode) ||
+                  Boolean(profilePickMode) ||
+                  Boolean(alignmentPickMode) ||
+                  Boolean(appPickMode) ||
+                  Boolean(loteamentoPickLado) ||
+                  Boolean(loteamentoPickFaixa) ||
+                  Boolean(loteamentoAlterarEixo) ||
+                  loteamentoExcluirRua ||
+                  Boolean(drenagemPick) ||
+                  tool === "editPolygon" ||
+                  tool === "confrontacao" ||
+                  vertexDragIndex !== null ||
+                  Boolean(entityMove) ||
+                  Boolean(pvDrag) ||
+                  Boolean(selectBoxRef.current);
+                if (tool === "pan" || !liveSnap) {
+                  writeHud(w.x, w.y);
+                  return;
+                }
+                const snap = currentSnap(sx, sy);
+                scheduleCursor(snap.point.x, snap.point.y);
+                setOsnapHover((prev) => {
+                  if (
+                    prev &&
+                    prev.snapped === snap.snapped &&
+                    Math.abs(prev.point.x - snap.point.x) < 1e-6 &&
+                    Math.abs(prev.point.y - snap.point.y) < 1e-6 &&
+                    (!prev.snapped ||
+                      !snap.snapped ||
+                      (prev.type === snap.type && prev.entityId === snap.entityId))
+                  ) {
+                    return prev;
+                  }
+                  return snap;
+                });
+                if (snap.snapped) {
+                  setHoverSnapId(snap.entityId);
+                } else if (isDrawWithPoints && snapToRtkPoints) {
                   const hit = findPointAtScreen(sx, sy, project.entities, viewport, 16);
                   setHoverSnapId(hit?.entityId ?? null);
                 } else {
                   setHoverSnapId(null);
                 }
-                const lotHit = findLoteamentoLotAtPoint(project, w.x, w.y);
-                setHoverLotId(lotHit?.id ?? null);
+                if (toolsTab === "loteamento") {
+                  const lotHit = findLoteamentoLotAtPoint(project, w.x, w.y);
+                  setHoverLotId((prev) => (prev === (lotHit?.id ?? null) ? prev : lotHit?.id ?? null));
+                }
 
                 if (loteamentoAlterarEixo?.phase === "b") {
                   const snap = loteamentoAlterarEixo.dragging
@@ -9586,6 +10505,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   }
                 }
 
+                if (selectBoxRef.current) {
+                  const next = { ...selectBoxRef.current, x1: sx, y1: sy };
+                  selectBoxRef.current = next;
+                  setSelectBox(next);
+                }
                 updateDrawPreview(sx, sy);
                 if (isDrawTool && draft.length > 0) {
                   const preview = keyboardDistance.trim()
@@ -9605,23 +10529,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   if (drawReference) {
                     cursorAzimuthRef.current = segmentAzimuthDeg(drawReference, preview);
                   }
-                }
-
-                if (panning) {
-                  const dx = sx - panning.startX;
-                  const dy = sy - panning.startY;
-                  const innerW = width - padding * 2;
-                  const innerH = height - padding * 2;
-                  const worldDx =
-                    (dx / innerW) * (panning.bounds.maxX - panning.bounds.minX);
-                  const worldDy =
-                    (dy / innerH) * (panning.bounds.maxY - panning.bounds.minY);
-                  setViewBounds({
-                    minX: panning.bounds.minX - worldDx,
-                    maxX: panning.bounds.maxX - worldDx,
-                    minY: panning.bounds.minY + worldDy,
-                    maxY: panning.bounds.maxY + worldDy,
-                  });
                 }
 
                 if (entityMove) {
@@ -9682,7 +10589,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   const entity = project.entities.find((e) => e.id === selectedId);
                   if (entity?.type === "polyline") {
                     const current = entity.vertices[vertexDragIndex];
-                    const world = screenToWorld(sx, sy, viewport);
+                    const world = currentSnap(sx, sy, [entity.id]).point;
                     const isReserva =
                       Boolean(entity.closed) && entity.layerId === AREA_RESERVA_LEGAL_LAYER_ID;
                     const isAreaUtil =
@@ -9756,15 +10663,26 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   loteamentoPickLado ||
                   loteamentoPickFaixa ||
                   loteamentoAlterarEixo ||
+                  loteamentoExcluirRua ||
                   Boolean(drenagemPick) ||
                   areaPickMode ||
                   distancePickMode ||
                   profilePickMode ||
                   alignmentPickMode ||
                   appPickMode;
-                if (tool === "pan" && !picking) {
+                if ((tool === "pan" || spacePanRef.current || e.button === 1) && !picking) {
+                  if (e.button === 1) e.preventDefault();
                   setPanning({ startX: sx, startY: sy, bounds: { ...bounds } });
                   return;
+                }
+                if (tool === "select" && !modifySession && !picking) {
+                  const hit = hitEntityAtScreen(sx, sy);
+                  if (!hit) {
+                    const box = { x0: sx, y0: sy, x1: sx, y1: sy, shift: e.shiftKey };
+                    selectBoxRef.current = box;
+                    setSelectBox(box);
+                    return;
+                  }
                 }
                 if (tool === "editPolygon" && selectedId) {
                   const entity = project.entities.find((e) => e.id === selectedId);
@@ -9784,6 +10702,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   !loteamentoPickLado &&
                   !loteamentoPickFaixa &&
                   !loteamentoAlterarEixo &&
+                  !loteamentoExcluirRua &&
                   !drenagemPick &&
                   !areaPickMode &&
                   !distancePickMode &&
@@ -9886,6 +10805,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   !loteamentoPickLado &&
                   !loteamentoPickFaixa &&
                   !loteamentoAlterarEixo &&
+                  !loteamentoExcluirRua &&
                   !drenagemPick &&
                   !areaPickMode &&
                   !distancePickMode &&
@@ -9930,7 +10850,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     return;
                   }
                 }
-                if (tool === "select" && !drenagemPick && !loteamentoPickLado && !loteamentoPickFaixa && !loteamentoAlterarEixo && !appPickMode) {
+                if (tool === "select" && !drenagemPick && !loteamentoPickLado && !loteamentoPickFaixa && !loteamentoAlterarEixo && !loteamentoExcluirRua && !appPickMode) {
                   const wts = (x: number, y: number) => worldToScreen(x, y, viewport);
                   const hitPv = hitDrainagePvAtScreen(sx, sy, project, wts, 14);
                   if (hitPv) {
@@ -9947,9 +10867,24 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     return;
                   }
                 }
-                handleCanvasClick(sx, sy);
+                handleCanvasClick(sx, sy, e.shiftKey);
               }}
               onMouseUp={() => {
+                const box = selectBoxRef.current;
+                if (box) {
+                  selectBoxRef.current = null;
+                  setSelectBox(null);
+                  if (Math.hypot(box.x1 - box.x0, box.y1 - box.y0) >= 8) {
+                    const ids = entitiesInScreenBox(box.x0, box.y0, box.x1, box.y1);
+                    if (ids.length) {
+                      setSelectedIds((prev) => (box.shift ? [...new Set([...prev, ...ids])] : ids));
+                      setSelectedId(ids[ids.length - 1]);
+                    } else if (!box.shift) {
+                      setSelectedIds([]);
+                      setSelectedId(null);
+                    }
+                  }
+                }
                 if (alterarEixoIgnoreUpRef.current) {
                   alterarEixoIgnoreUpRef.current = false;
                 } else {
@@ -9998,6 +10933,38 @@ export function CadWorkspace({ userId }: { userId: string }) {
               <CadRasterSvgLayer rasters={canvasRasters} viewport={viewport} />
               {renderCoordinateGrid()}
               {visibleEntities.map(renderEntity)}
+              {(modifySession?.previewEntities?.length
+                ? modifySession.previewEntities
+                : aiPreviewEntities
+              ).map((entity, index) => renderModifyGhost(entity, `preview-${index}`))}
+              {modifySession &&
+              !modifySession.previewEntities.length &&
+              modifySession.picks[0] &&
+              cursor &&
+              (modifySession.tool === "move" || modifySession.tool === "copy")
+                ? modifySession.entityIds
+                    .map((id) => project.entities.find((e) => e.id === id))
+                    .filter((e): e is CadEntity => Boolean(e))
+                    .map((entity, index) =>
+                      renderModifyGhost(
+                        translateEntity(entity, cursor.x - modifySession.picks[0].x, cursor.y - modifySession.picks[0].y),
+                        `live-${index}`,
+                      ),
+                    )
+                : null}
+              {selectBox ? (
+                <rect
+                  x={Math.min(selectBox.x0, selectBox.x1)}
+                  y={Math.min(selectBox.y0, selectBox.y1)}
+                  width={Math.abs(selectBox.x1 - selectBox.x0)}
+                  height={Math.abs(selectBox.y1 - selectBox.y0)}
+                  fill="rgba(34,211,238,0.08)"
+                  stroke="#22d3ee"
+                  strokeDasharray="5 4"
+                  strokeWidth={1.2}
+                  pointerEvents="none"
+                />
+              ) : null}
 
               {selectedPolyline &&
               ((tool === "editPolygon" && canEditSelectedPolyline) ||
@@ -10305,7 +11272,20 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   ) : null}
                 </g>
               ) : null}
+              <CadOsnapOverlay snap={osnapHover} viewport={viewport} />
             </svg>
+            {osnapMenu ? (
+              <CadOsnapContextMenu
+                x={osnapMenu.x}
+                y={osnapMenu.y}
+                onPick={(type) => {
+                  setOsnapOverride(type);
+                  setDrawHint(`Snap temporário: ${type}`);
+                  window.setTimeout(() => setDrawHint(null), 1800);
+                }}
+                onClose={() => setOsnapMenu(null)}
+              />
+            ) : null}
             {lotCardLote && lotCardEntity ? (
               <CadLotInfoCard
                 name={lotCardEntity.name}
@@ -10331,8 +11311,12 @@ export function CadWorkspace({ userId }: { userId: string }) {
               }
               x={cursor ? cursor.x.toFixed(3) : "—"}
               y={cursor ? cursor.y.toFixed(3) : "—"}
+              xRef={hudXRef}
+              yRef={hudYRef}
               zoom={zoomLabel}
               step={showGrid ? `${grid.stepE.toFixed(2)} m` : null}
+              osnap={osnapSettings.enabled ? "ON" : "OFF"}
+              osnapType={osnapHover?.snapped ? osnapHover.type : osnapOverride}
               hint={
                 viewMode === "3d"
                   ? t3d("statusHint")
@@ -10494,6 +11478,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
         onSelectedIdChange={setSelectedId}
         onSideEffect={handleAiSideEffect}
         hideLauncher
+        onPreviewEntities={setAiPreviewEntities}
       />
       <input
         ref={surveyFileRef}
@@ -10541,10 +11526,21 @@ export function CadWorkspace({ userId }: { userId: string }) {
         }}
       />
       <input
+        ref={importPickerRef}
+        type="file"
+        className="sr-only"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          e.target.value = "";
+          const kind = importKindRef.current;
+          if (files.length && kind) void runImportFiles(kind, files);
+        }}
+      />
+      <input
         ref={drawingFileRef}
         type="file"
         multiple
-        accept=".dwg,.dxf,.kmz,.kml,.tif,.tiff,.ecw,.tfw,.tifw,.wld,application/dxf,application/acad,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz,image/tiff"
+        accept=".dwg,.dxf,.kmz,.kml,.tif,.tiff,.ecw,.tfw,.tifw,.wld"
         className="hidden"
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);

@@ -194,6 +194,8 @@ export function EstudoViabilidadeClient({ projetoId }: { projetoId: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const localPayloadRef = useRef<ViabilidadeSessionPayload | null>(null);
   const autoSyncRef = useRef(false);
+  /** UF/encargos/preço vindos da viabilidade automática do CAD — usados só na primeira carga. */
+  const cadPrefsPendingRef = useRef(true);
   const skipUfRecalcRef = useRef(true);
   const skipCompRecalcRef = useRef(false);
   const catalogReqRef = useRef(0);
@@ -279,9 +281,15 @@ export function EstudoViabilidadeClient({ projetoId }: { projetoId: string }) {
       areaTotal: payload.areaTotal,
       quantidadeLotes: payload.quantidadeLotes,
       areaLotes: payload.areaLotes,
-      uf,
+      uf: (cadPrefsPendingRef.current && payload.uf) || uf,
       competenciaSinapi: competenciaRef.current || competencia || null,
-      premissas: premissasAtuais(),
+      premissas: cadPrefsPendingRef.current
+        ? {
+            ...premissasAtuais(),
+            ...(payload.tipoSinapi ? { tipoCustoSinapi: payload.tipoSinapi } : {}),
+            ...(!precoM2.trim() && payload.precoVendaM2 ? { precoVendaM2: payload.precoVendaM2 } : {}),
+          }
+        : premissasAtuais(),
       ...indiretosBody(),
     };
   }
@@ -530,6 +538,7 @@ export function EstudoViabilidadeClient({ projetoId }: { projetoId: string }) {
       try {
         if (isLocal) await loadLocal();
         else await loadSaved();
+        cadPrefsPendingRef.current = false;
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Erro ao carregar o estudo.");
       } finally {
