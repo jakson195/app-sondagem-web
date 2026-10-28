@@ -662,6 +662,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [loteamentoLarguraViaExistente, setLoteamentoLarguraViaExistente] = useState("");
   const [loteamentoEixoIds, setLoteamentoEixoIds] = useState<string[]>([]);
   const [loteamentoLados, setLoteamentoLados] = useState<number[]>([]);
+  /** Lados da gleba que recebem rua de contorno nova (por dentro). Vazio = nenhuma rua na divisa. */
+  const [loteamentoLadosRua, setLoteamentoLadosRua] = useState<number[]>([]);
+  /** Para onde vai o clique no lado da gleba: via existente (fora) ou rua de contorno (dentro). */
+  const [loteamentoPickAlvo, setLoteamentoPickAlvo] = useState<"existente" | "contorno">("existente");
   const [loteamentoPickLado, setLoteamentoPickLado] = useState(false);
   const [loteamentoFaixaDominio, setLoteamentoFaixaDominio] = useState(false);
   const [loteamentoLarguraFaixaDominio, setLoteamentoLarguraFaixaDominio] = useState("15");
@@ -3262,11 +3266,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
         setLoteamentoLadosFaixa((prev) =>
           prev.includes(seg) ? prev.filter((i) => i !== seg) : [...prev, seg].sort((a, b) => a - b),
         );
+      } else if (loteamentoPickAlvo === "contorno") {
+        setLoteamentoLadosRua((prev) =>
+          prev.includes(seg) ? prev.filter((i) => i !== seg) : [...prev, seg].sort((a, b) => a - b),
+        );
+        setLoteamentoLados((prev) => prev.filter((i) => i !== seg));
       } else {
         setLoteamentoViasExistentes(true);
         setLoteamentoLados((prev) =>
           prev.includes(seg) ? prev.filter((i) => i !== seg) : [...prev, seg].sort((a, b) => a - b),
         );
+        setLoteamentoLadosRua((prev) => prev.filter((i) => i !== seg));
       }
       return;
     }
@@ -4214,6 +4224,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
           lados_aresta: loteamentoLados.length > 0 ? loteamentoLados : undefined,
           lados_faixa_dominio: loteamentoLadosFaixa.length > 0 ? loteamentoLadosFaixa : undefined,
           largura_faixa_dominio_m: faixaOn ? larguraFaixaDominioM ?? undefined : undefined,
+          ruas_contorno: "indicadas",
+          lados_rua_contorno: loteamentoLadosRua.length > 0 ? loteamentoLadosRua : undefined,
           entidade_ids: loteamentoEixoIds.length > 0 ? loteamentoEixoIds : undefined,
           orientacao: orientacao ?? undefined,
           prefixo_quadra: loteamentoPrefixo.trim() || "Quadra",
@@ -8333,6 +8345,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                             setLoteamentoGlebaId(nextId);
                             setLoteamentoError(null);
                             setLoteamentoLados([]);
+                            setLoteamentoLadosRua([]);
                             setLoteamentoLadosFaixa([]);
                             setLoteamentoPickLado(false);
                             setLoteamentoPickFaixa(false);
@@ -8456,6 +8469,73 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       </span>
                     </label>
                   </div>
+                  <div className="rounded-lg border border-sky-300 bg-sky-50 px-2.5 py-2">
+                    <p className="text-xs font-semibold text-sky-900">{t("loteamento.ruaContorno")}</p>
+                    <p className="mt-0.5 text-[10px] text-sky-800">{t("loteamento.ruaContornoHint")}</p>
+                    <div className="mt-2 space-y-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const glebaId = loteamentoGlebaId.trim() || selectedId;
+                          const gleba = glebaId
+                            ? project.entities.find((entity) => entity.id === glebaId)
+                            : null;
+                          if (!gleba || gleba.type !== "polyline" || !gleba.closed || gleba.vertices.length < 3) {
+                            setLoteamentoError(t("loteamento.needPolygon"));
+                            return;
+                          }
+                          setLoteamentoGlebaId(gleba.id);
+                          setSelectedId(gleba.id);
+                          setLoteamentoPickFaixa(false);
+                          const ativo = loteamentoPickLado && loteamentoPickAlvo === "contorno";
+                          setLoteamentoPickAlvo("contorno");
+                          setLoteamentoPickLado(!ativo);
+                          setTool("select");
+                          setLoteamentoError(null);
+                        }}
+                        className={`w-full rounded-lg border px-3 py-1.5 text-xs font-medium ${
+                          loteamentoPickLado && loteamentoPickAlvo === "contorno"
+                            ? "border-sky-600 bg-sky-100 text-sky-900"
+                            : "border-sky-700 bg-white text-sky-900 hover:bg-sky-100"
+                        }`}
+                      >
+                        {loteamentoPickLado && loteamentoPickAlvo === "contorno"
+                          ? t("loteamento.pickRuaContornoOn")
+                          : t("loteamento.pickRuaContorno")}
+                      </button>
+                      {loteamentoLadosRua.length > 0 ? (
+                        <ul className="space-y-1">
+                          {loteamentoLadosRua.map((index) => {
+                            const glebaId = loteamentoGlebaId.trim() || selectedId;
+                            const gleba = glebaId
+                              ? project.entities.find((entity) => entity.id === glebaId)
+                              : null;
+                            const verts = gleba?.type === "polyline" ? gleba.vertices : [];
+                            const a = verts[index];
+                            const b = verts[(index + 1) % Math.max(verts.length, 1)];
+                            const len = a && b ? Math.hypot(b.x - a.x, b.y - a.y) : 0;
+                            return (
+                              <li
+                                key={`rua-${index}`}
+                                className="flex items-center justify-between rounded border border-sky-200 bg-white px-2 py-1 text-[10px] text-sky-900"
+                              >
+                                <span>{t("loteamento.ladoMarked", { n: index + 1, len: len.toFixed(1) })}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setLoteamentoLadosRua((prev) => prev.filter((i) => i !== index))}
+                                  className="text-sky-800 hover:text-red-700"
+                                >
+                                  {t("loteamento.ladoRemove")}
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : (
+                        <p className="text-[10px] text-sky-800">{t("loteamento.ruaContornoNenhum")}</p>
+                      )}
+                    </div>
+                  </div>
                   <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-2">
                     <label className="flex items-start gap-2 text-[10px] text-emerald-900">
                       <input
@@ -8499,17 +8579,21 @@ export function CadWorkspace({ userId }: { userId: string }) {
                           setSelectedId(gleba.id);
                           setLoteamentoViasExistentes(true);
                           setLoteamentoPickFaixa(false);
-                          setLoteamentoPickLado((prev) => !prev);
+                          const ativo = loteamentoPickLado && loteamentoPickAlvo === "existente";
+                          setLoteamentoPickAlvo("existente");
+                          setLoteamentoPickLado(!ativo);
                           setTool("select");
                           setLoteamentoError(null);
                         }}
                         className={`w-full rounded-lg border px-3 py-1.5 text-xs font-medium ${
-                          loteamentoPickLado
+                          loteamentoPickLado && loteamentoPickAlvo === "existente"
                             ? "border-emerald-600 bg-emerald-100 text-emerald-900"
                             : "border-emerald-700 bg-white text-emerald-900 hover:bg-emerald-100"
                         }`}
                       >
-                        {loteamentoPickLado ? t("loteamento.pickLadoOn") : t("loteamento.pickLado")}
+                        {loteamentoPickLado && loteamentoPickAlvo === "existente"
+                          ? t("loteamento.pickLadoOn")
+                          : t("loteamento.pickLado")}
                       </button>
                       {loteamentoLados.length > 0 ? (
                         <ul className="space-y-1">

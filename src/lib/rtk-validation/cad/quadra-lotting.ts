@@ -971,7 +971,9 @@ export function lotearQuadraCompleta(quadra: QuadraPoly, opts: LotearQuadraOpts)
 
   const areaLotes = closed.reduce((s, l) => s + quadraPolyAreaM2(l), 0);
   const residuo = residuoQuadraM2(block, closed);
-  if (Math.abs(areaLotes - blockArea) >= RESIDUO_TOL_M2 || residuo > RESIDUO_TOL_M2) {
+  /** Ruído numérico cresce com a quadra: 0,01 m² fixo reprova quadras grandes e inclinadas. */
+  const tol = Math.max(RESIDUO_TOL_M2, blockArea * 5e-6);
+  if (Math.abs(areaLotes - blockArea) >= tol || residuo > tol) {
     throw new CoberturaQuadraError(
       `Quadra não fechou: área ${blockArea.toFixed(3)} m², lotes ${areaLotes.toFixed(3)} m², resíduo ${residuo.toFixed(3)} m².`,
     );

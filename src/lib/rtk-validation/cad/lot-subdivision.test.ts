@@ -1842,3 +1842,61 @@ describe("cobertura de quadras laranja", () => {
     }
   });
 });
+
+describe("ruas de contorno só quando indicadas + lotes no tamanho pedido", () => {
+  const ox = 625000;
+  const oy = 775500;
+  const g: [number, number][] = [
+    [0, 0],
+    [240, -60],
+    [300, 110],
+    [60, 170],
+  ].map(([x, y]) => [ox + x, oy + y]);
+  const base = {
+    larguraViaM: 12,
+    profundidadeQuadraM: 25,
+    testadaMinimaM: 12,
+    larguraCalcadaM: 2,
+    areaMinimaQuadraM2: 2000,
+    ruasContorno: "indicadas" as const,
+  };
+  /** Faixa de 1,5 m por dentro da aresta i tem rua ao longo dela? */
+  const edgeHasStreet = (vias: number[][][][], i: number) => {
+    const a = g[i];
+    const b = g[(i + 1) % g.length];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const ux = (b[0] - a[0]) / len;
+    const uy = (b[1] - a[1]) / len;
+    const inside = (p: number[], ring: number[][]) => {
+      let ok = false;
+      for (let k = 0, j = ring.length - 1; k < ring.length; j = k++) {
+        const [xi, yi] = ring[k];
+        const [xj, yj] = ring[j];
+        if (yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) ok = !ok;
+      }
+      return ok;
+    };
+    /** Rua de contorno cobre a aresta toda; uma rua interna só a cruza num ponto. */
+    const hits = [0.3, 0.5, 0.7].filter((t) => {
+      const p = [a[0] + (b[0] - a[0]) * t - uy * 1.5, a[1] + (b[1] - a[1]) * t + ux * 1.5];
+      return vias.some((v) => inside(p, v[0]));
+    }).length;
+    return hits >= 2;
+  };
+
+  it("sem lados indicados não cria rua em nenhuma divisa", () => {
+    const res = generateLoteamento(g, base);
+    for (let i = 0; i < g.length; i++) assert.equal(edgeHasStreet(res.vias, i), false, `lado ${i + 1} com rua`);
+    const dentro = res.lotes.filter((l) => Math.abs(l.area_m2 - 300) / 300 <= 0.25).length;
+    assert.ok(dentro / res.lotes.length >= 0.9, `só ${dentro}/${res.lotes.length} lotes perto de 12×25`);
+  });
+
+  it("cria rua só no lado indicado e mantém quadras separadas", () => {
+    const res = generateLoteamento(g, { ...base, ladosRuaContorno: [[g[0], g[1]]] });
+    assert.equal(edgeHasStreet(res.vias, 0), true, "lado 1 sem rua");
+    for (const i of [1, 2, 3]) assert.equal(edgeHasStreet(res.vias, i), false, `lado ${i + 1} com rua`);
+    assert.ok(res.quadraPolys.length >= 3, `quadras unidas: ${res.quadraPolys.length}`);
+    const maior = Math.max(...res.lotes.map((l) => l.area_m2));
+    assert.ok(maior <= 300 * 1.6, `lote de ${maior.toFixed(0)} m²`);
+  });
+});

@@ -48,6 +48,8 @@ const commandShape = z
     raio_esquina_m: optionalNumber,
     vias_existentes_extremidades: z.boolean().optional(),
     lados_aresta: optionalNumberArray,
+    lados_rua_contorno: optionalNumberArray,
+    ruas_contorno: z.enum(["todas", "indicadas"]).optional(),
     ferramenta: optionalString,
     camada: optionalString,
     visivel: z.boolean().optional(),

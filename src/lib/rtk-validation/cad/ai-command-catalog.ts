@@ -585,6 +585,18 @@ const SCHEMA_PROPS = {
     description:
       "Índices das arestas da gleba voltadas à rodovia. A faixa de domínio entra para DENTRO da gleba (não é rua). Lotes e vias não ocupam essa faixa.",
   },
+  lados_rua_contorno: {
+    type: "array",
+    items: { type: "number" },
+    description:
+      "Índices das arestas da gleba (0 = primeiro lado) que recebem rua de contorno NOVA, por dentro da divisa. Só criar quando o usuário pedir rua naquele lado; sem índices não há rua na divisa e a fileira de lotes fica de costas para ela.",
+  },
+  ruas_contorno: {
+    type: "string",
+    enum: ["indicadas", "todas"],
+    description:
+      "\"indicadas\" (padrão): rua de contorno só nos lados_rua_contorno. \"todas\": rua em todas as divisas — só se o usuário pedir explicitamente rua em volta da gleba inteira.",
+  },
   largura_faixa_dominio_m: {
     type: "number",
     description:
@@ -940,6 +952,8 @@ export const cadAiTools: CadAiTool[] = [
       "largura_via_existente_m",
       "lados_aresta",
       "lados_faixa_dominio",
+      "lados_rua_contorno",
+      "ruas_contorno",
       "largura_faixa_dominio_m",
       "entidade_ids",
       "orientacao",

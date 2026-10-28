@@ -88,6 +88,18 @@ export type LoteamentoParams = {
    * o miolo sem testada vira remanescente, nunca lote inválido.
    */
   allowInternalRoads?: boolean;
+  /**
+   * Ruas de contorno (coladas por dentro da divisa da gleba).
+   * - "todas" (padrão legado): contorno em todas as arestas, exceto vias existentes/faixa.
+   * - "indicadas": só nas arestas de `ladosRuaContorno`. Nas demais divisas a fileira de
+   *   lotes fica de costas para a divisa e de frente para a primeira rua interna, e as ruas
+   *   internas são espaçadas por 2 × profundidade do lote (lotes próximos ao tamanho pedido).
+   */
+  ruasContorno?: "todas" | "indicadas";
+  /** Arestas da gleba ([A, B]) que recebem rua de contorno quando `ruasContorno = "indicadas"`. */
+  ladosRuaContorno?: Position[][];
+  /** Comprimento máximo da quadra (m) no modo "indicadas" sem medidas de quadra. Padrão 250. */
+  comprimentoMaximoQuadraM?: number;
 };
 
 export type LoteResult = {
@@ -978,6 +990,142 @@ export function generateStreetGrid(
   }
 
   return { vias, eixos };
+}
+
+export type LotSizedGridOpts = {
+  /** Lados com rua de contorno nova (por dentro da gleba). */
+  streetSides?: PerimeterSkip;
+  /** Lados com via existente fora da gleba: dão frente, sem ocupar área. */
+  frontageSides?: PerimeterSkip;
+  /** Comprimento alvo da quadra ao longo da rua (m). 0 = sem ruas transversais internas. */
+  blockLengthM?: number;
+  /** Profundidade mínima aceita = fator × profundidade do lote. */
+  minDepthFactor?: number;
+};
+
+export type LotSizedGridResult = {
+  vias: Position[][][];
+  /**
+   * Corredores das ruas sem recorte (ultrapassam a divisa). Use-os para cortar as quadras:
+   * o recorte justo na divisa às vezes deixa uma ponte de largura zero que une duas quadras.
+   */
+  cortes: Position[][][];
+  eixos: Position[][];
+  /** Profundidade de lote efetivamente usada (após distribuir a sobra). */
+  profundidadeLoteM: number;
+  ruasInternas: number;
+};
+
+/**
+ * Malha dimensionada pelo lote: ruas paralelas a cada 2 × profundidade (duas fileiras costas
+ * com costas) e, nas divisas sem rua, uma fileira só, de costas para a divisa. Ruas de contorno
+ * apenas nos lados indicados. A sobra da gleba é repartida entre as fileiras, escolhendo o
+ * número de ruas que deixa o fundo real mais próximo do informado.
+ */
+export function generateLotSizedStreetGrid(
+  polygonCoords: PolygonCoords,
+  azimuthDeg: number,
+  larguraViaM: number,
+  profundidadeLoteM: number,
+  opts: LotSizedGridOpts = {},
+): LotSizedGridResult {
+  const ring = dropClosing(polygonCoords);
+  const empty: LotSizedGridResult = { vias: [], cortes: [], eixos: [], profundidadeLoteM, ruasInternas: 0 };
+  if (ring.length < 3 || !(larguraViaM > 0) || !(profundidadeLoteM > 0)) return empty;
+
+  const origin = originOf(ring);
+  const gleba = asTurfPolygon(ring, origin);
+  const { dirS, dirD } = streetDir(azimuthDeg);
+  const { sMin, sMax, dMin, dMax } = projectRingBounds(ring, origin, dirS, dirD);
+  const W = larguraViaM;
+  const halfW = W / 2;
+  const street = opts.streetSides ?? {};
+  const front = opts.frontageSides ?? {};
+  const pads = Math.max(sMax - sMin, dMax - dMin, 1) * 0.05 + W;
+
+  const vias: Position[][][] = [];
+  const cortes: Position[][][] = [];
+  const eixos: Position[][] = [];
+  const addStreet = (a: Position, b: Position) => {
+    const viaPolys = clipCorridorToGleba(a, b, halfW, gleba, origin);
+    if (viaPolys.length === 0) return;
+    vias.push(...viaPolys);
+    const corridor = corridorPolygon(a, b, halfW);
+    if (corridor.length >= 4) cortes.push([closeRing(dropClosing(corridor))]);
+    eixos.push(...clipStraightAxisToPolygon(a, b, gleba, origin));
+  };
+  const at = (s: number, d: number): Position => [
+    origin[0] + s * dirS[0] + d * dirD[0],
+    origin[1] + s * dirS[1] + d * dirD[1],
+  ];
+  const streetAtD = (d: number) => addStreet(at(sMin - pads, d), at(sMax + pads, d));
+  const streetAtS = (s: number) => addStreet(at(s, dMin - pads), at(s, dMax + pads));
+
+  // ---- direção D (ruas paralelas à testada)
+  const D = dMax - dMin;
+  const edgeW = (street.dMin ? W : 0) + (street.dMax ? W : 0);
+  /** Fileiras na quadra encostada em cada divisa: 2 se há frente (rua/via existente), senão 1. */
+  const kStart = street.dMin || front.dMin ? 2 : 1;
+  const kEnd = street.dMax || front.dMax ? 2 : 1;
+  const minFactor = opts.minDepthFactor ?? 0.8;
+  let best: { n: number; p: number; err: number } | null = null;
+  const nMax = Math.max(0, Math.ceil(D / Math.max(W + profundidadeLoteM, 1)) + 1);
+  for (let n = 0; n <= nMax; n++) {
+    let rows: number;
+    if (n === 0) {
+      const frontCount = (kStart === 2 ? 1 : 0) + (kEnd === 2 ? 1 : 0);
+      if (frontCount === 0) continue; // sem rua nenhuma não há acesso
+      rows = frontCount;
+    } else {
+      rows = kStart + kEnd + 2 * (n - 1);
+    }
+    const p = (D - edgeW - n * W) / rows;
+    if (!(p >= profundidadeLoteM * minFactor)) continue;
+    const err = Math.abs(p - profundidadeLoteM) / profundidadeLoteM;
+    if (!best || err < best.err - 1e-9) best = { n, p, err };
+  }
+  if (!best) {
+    // Gleba rasa: uma rua (na divisa indicada, ou no meio) e lotes atravessando.
+    if (street.dMin) streetAtD(dMin + halfW);
+    else if (street.dMax) streetAtD(dMax - halfW);
+    else if (!front.dMin && !front.dMax) streetAtD(dMin + D / 2);
+    return { vias, cortes, eixos, profundidadeLoteM: Math.max(0, (D - edgeW) / 2), ruasInternas: 0 };
+  }
+  const { n, p } = best;
+  let cursor = dMin;
+  if (street.dMin) {
+    streetAtD(cursor + halfW);
+    cursor += W;
+  }
+  if (n > 0) {
+    cursor += kStart * p;
+    for (let i = 0; i < n; i++) {
+      streetAtD(cursor + halfW);
+      cursor += W;
+      if (i < n - 1) cursor += 2 * p;
+    }
+  }
+  if (street.dMax) streetAtD(dMax - halfW);
+
+  // ---- direção S (ruas transversais)
+  const sStreetW = (street.sMin ? W : 0) + (street.sMax ? W : 0);
+  if (street.sMin) streetAtS(sMin + halfW);
+  if (street.sMax) streetAtS(sMax - halfW);
+  const blockLen = opts.blockLengthM ?? 0;
+  const S = sMax - sMin - sStreetW;
+  if (blockLen > 0 && S > blockLen * 1.25) {
+    const blocks = Math.max(1, Math.round((S + W) / (blockLen + W)));
+    if (blocks > 1) {
+      const len = (S - (blocks - 1) * W) / blocks;
+      let sc = sMin + (street.sMin ? W : 0);
+      for (let i = 0; i < blocks - 1; i++) {
+        sc += len;
+        streetAtS(sc + halfW);
+        sc += W;
+      }
+    }
+  }
+  return { vias, cortes, eixos, profundidadeLoteM: p, ruasInternas: n };
 }
 
 const TARGET_KEEP_RATIO = 1.52;
@@ -5802,6 +5950,10 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
   let areaUtilAlvoM2 = areaUtilOrcamentoM2;
   let areaViasM2 = 0;
   const axisNetwork = Boolean(usarEixosComoRede) && (eixosExistentes?.length ?? 0) > 0;
+  /** Contorno só nos lados indicados + malha dimensionada pela profundidade do lote. */
+  const lotSized = !(Boolean(usarEixosComoRede) && (eixosExistentes?.length ?? 0) > 0) && params.ruasContorno === "indicadas";
+  let lotSizedDepthM = profundidadeQuadraM;
+  let lotSizedCortes: Position[][][] = [];
   const existing = bufferExistingStreetAxes(ring, eixosExistentes ?? [], larguraViaM);
   const existingEdges =
     markedSides.length > 0 ? markedSides : viasExistentesExtremidades ? ringEdges(ring) : [];
@@ -5815,6 +5967,25 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
       throw new LoteamentoError(
         "Não foi possível gerar vias a partir dos eixos editados. Verifique se o eixo cruza a gleba.",
       );
+    }
+  } else if (lotSized) {
+    const ruaEdges = (params.ladosRuaContorno ?? []).filter((edge) => edge.length >= 2);
+    const grid = generateLotSizedStreetGrid(ring, azimuthDeg, larguraViaM, profundidadeQuadraM, {
+      streetSides: ruaEdges.length > 0 ? perimeterSkipFromExistingSides(ring, azimuthDeg, ruaEdges) : {},
+      frontageSides: resolvePerimeterSkip(skipVia),
+      blockLengthM: splitByMedidas
+        ? profundidadeBlocoM
+        : params.comprimentoMaximoQuadraM != null && params.comprimentoMaximoQuadraM > 0
+          ? params.comprimentoMaximoQuadraM
+          : 250,
+    });
+    lotSizedDepthM = grid.profundidadeLoteM;
+    lotSizedCortes = grid.cortes;
+    vias = grid.vias;
+    if (eixoRua) eixos.push(...grid.eixos);
+    if (existing.vias.length > 0) {
+      vias = [...vias, ...existing.vias];
+      if (eixoRua) eixos.push(...existing.eixos);
     }
   } else {
     const grid =
@@ -5844,7 +6015,7 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
     }
   }
   let quadrasRings: Position[][][] = [];
-  if (!axisNetwork && (splitByArea || splitByMedidas)) {
+  if (!axisNetwork && !lotSized && (splitByArea || splitByMedidas)) {
     const leftover = subtractStreets(ring, [...vias, ...obstaclePolys]);
     const blocks: Position[][][] = [];
     const minBlock = splitByArea ? areaQuadraM2 * TARGET_MIN_CHILD_RATIO : SLIVER_M2;
@@ -5877,7 +6048,7 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
     }
     quadrasRings = blocks.length > 0 ? blocks : leftover;
   } else {
-    quadrasRings = subtractStreets(ring, [...vias, ...obstaclePolys]);
+    quadrasRings = subtractStreets(ring, [...vias, ...lotSizedCortes, ...obstaclePolys]);
   }
   const knownStreetRings = [
     ...streetOuterRings(vias),
@@ -5889,7 +6060,7 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
    * Com rede de eixos, as ruas são as que o usuário manteve: nenhuma rua nova é criada.
    */
   const twoRowBlocks = splitByMedidas && larguraQuadraM <= profundidadeQuadraM * 2 + 2;
-  const refined = allowInternalRoads && !twoRowBlocks && !axisNetwork
+  const refined = allowInternalRoads && !twoRowBlocks && !axisNetwork && !lotSized
     ? seedInternalStreetsInBlocks(
         quadrasRings,
         azimuthDeg,
@@ -5912,7 +6083,7 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
       quadrasRings = subtractObstaclesFromPolys(quadrasRings, obstaclePolys, origin);
     }
   }
-  if (!axisNetwork && rlRings.length > 0 && !(splitByArea || splitByMedidas)) {
+  if (!axisNetwork && rlRings.length > 0 && (lotSized || !(splitByArea || splitByMedidas))) {
     const anel = greenAreaRingRoads(ring, rlRings, vias, larguraViaM, origin);
     const anelVias = subtractObstaclesFromPolys(anel.vias, obstaclePolys, origin);
     if (anelVias.length > 0) {
@@ -5945,6 +6116,11 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
   const lotes: LoteResult[] = [];
   const sharpRings: Position[][][] = [];
   let quadraIndex = 0;
+  /** Fundo redistribuído abaixo do pedido: a área mínima acompanha, senão a fusão junta lotes. */
+  const areaMinLoteEfetivaM2 =
+    lotSized && lotSizedDepthM < profundidadeQuadraM
+      ? (areaMinimaLoteM2 * lotSizedDepthM) / profundidadeQuadraM
+      : areaMinimaLoteM2;
   for (const quadra of quadrasRings) {
     const outer = quadra[0];
     if (!outer || planarAreaM2(outer) < SLIVER_M2) continue;
@@ -5954,11 +6130,11 @@ export function generateLoteamento(glebaCoords: PolygonCoords, params: Loteament
       quadra,
       qName,
       testadaMinimaM,
-      areaMinimaLoteM2,
+      areaMinLoteEfetivaM2,
       percentualEsquina,
       streetRings,
       azimuthDeg,
-      profundidadeQuadraM,
+      lotSized ? lotSizedDepthM : profundidadeQuadraM,
     );
     for (const lote of lotesQuadra) {
       sharpRings.push(lote.coordinates);

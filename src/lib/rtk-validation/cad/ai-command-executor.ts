@@ -1366,6 +1366,18 @@ export function executeCadAiCommand(
             [b.x, b.y],
           ] as [number, number][];
         });
+      const ladosRuaContorno = (command.lados_rua_contorno ?? [])
+        .map((i) => Math.trunc(i))
+        .filter((i) => i >= 0 && i < nVerts)
+        .map((i) => {
+          const a = gleba.vertices[i];
+          const b = gleba.vertices[(i + 1) % nVerts];
+          return [
+            [a.x, a.y],
+            [b.x, b.y],
+          ] as [number, number][];
+        });
+      const ruasContorno = command.ruas_contorno === "todas" ? "todas" : "indicadas";
       const larguraFaixaDominioM =
         command.largura_faixa_dominio_m != null && Number.isFinite(command.largura_faixa_dominio_m)
           ? Math.max(0, command.largura_faixa_dominio_m)
@@ -1418,6 +1430,8 @@ export function executeCadAiCommand(
           ladosViaExistente: ladosViaExistente.length > 0 ? ladosViaExistente : undefined,
           ladosFaixaDominio: ladosFaixaDominio.length > 0 ? ladosFaixaDominio : undefined,
           larguraFaixaDominioM: larguraFaixaDominioM > 0 ? larguraFaixaDominioM : undefined,
+          ruasContorno,
+          ladosRuaContorno: ladosRuaContorno.length > 0 ? ladosRuaContorno : undefined,
           eixosExistentes: eixosExistentes.length > 0 ? eixosExistentes : undefined,
           reservas: reservas.length > 0 ? reservas : undefined,
           reservaLegal: reservaLegal.length > 0 ? reservaLegal : undefined,

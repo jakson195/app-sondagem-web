@@ -193,6 +193,13 @@ export interface CadAiCommand {
   lados_aresta?: number[];
   /** Índices das arestas voltadas à rodovia (faixa de domínio para dentro da gleba). */
   lados_faixa_dominio?: number[];
+  /**
+   * Índices das arestas da gleba que recebem rua de contorno nova (por dentro da divisa).
+   * Sem índices, nenhuma rua é criada na divisa: a fileira de lotes fica de costas para ela.
+   */
+  lados_rua_contorno?: number[];
+  /** "indicadas" (padrão): contorno só em `lados_rua_contorno`. "todas": contorno em todas as arestas (legado). */
+  ruas_contorno?: "todas" | "indicadas";
   /** Largura (m) da faixa de domínio recuada para dentro da gleba. */
   largura_faixa_dominio_m?: number;
   /** Ferramenta do canvas — ativar_ferramenta. */
