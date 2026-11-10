@@ -74,11 +74,11 @@ export function calcularEstudo(input: {
   const terra = resolverTerraplenagem(input.projeto, input.premissas);
   if (terra.aviso) avisos.push(terra.aviso);
 
-  const pav = itensPavimentacao(extraido);
+  const pav = itensPavimentacao(extraido, input.premissas);
   const dre = itensDrenagem(extraido, input.projeto);
   const cal = itensCalcadas(extraido, input.premissas);
   const agua = itensAgua(extraido, input.premissas);
-  const esgoto = itensEsgoto(extraido, input.premissas);
+  const esgoto = itensEsgoto(extraido, input.premissas, input.projeto);
   avisos.push(...esgoto.avisos);
   const energia = itensEnergia(extraido, input.premissas);
   const ilum = itensIluminacao(extraido);
@@ -129,7 +129,15 @@ export function calcularEstudo(input: {
       custoUnitario: hit.custoUnitario,
       custoTotal: calcularItem(item.quantidade, hit.custoUnitario),
       origemValor,
-      observacao: item.observacao ?? null,
+      observacao:
+        [
+          hit.vinculoAutomatico && hit.descricao
+            ? `Composição SINAPI ${hit.codigo} escolhida pela descrição: ${hit.descricao}`
+            : null,
+          item.observacao,
+        ]
+          .filter(Boolean)
+          .join(" — ") || null,
     };
   });
 

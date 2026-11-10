@@ -4100,6 +4100,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
       uf: prefs?.uf,
       tipoSinapi: prefs?.tipo,
       precoVendaM2: prefs?.precoVendaM2,
+      tipoPavimento: prefs?.tipoPavimento,
     });
   }
 

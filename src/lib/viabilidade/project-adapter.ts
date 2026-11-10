@@ -10,6 +10,7 @@ import {
   listDrainageInlets,
   listDrainagePipes,
   listDrainagePvs,
+  generateLoteamentoDrainage,
 } from "@/lib/rtk-validation/cad/loteamento-drainage";
 import { computeLoteamentoCutFill } from "@/lib/rtk-validation/cad/loteamento-earthwork";
 import { measureLotFrontAndDepth, type PolygonCoords } from "@/lib/rtk-validation/cad/lot-subdivision";
@@ -381,7 +382,25 @@ export function adaptCadProjectToLoteamentoInput(
     gleba > 0 ? gleba : areaLotes + areaVias + areaCalcadas + areaVerde + areaInstitucional;
 
   const terraplenagem = extractTerraplenagem(project, options, avisos);
-  const drenagemProjeto = extractDrenagem(project);
+  let drenagemProjeto = extractDrenagem(project);
+  if (!drenagemProjeto) {
+    /**
+     * Sem rede desenhada: roda o mesmo gerador do CAD (PVs, bocas de lobo, diâmetros pela
+     * hidráulica) sobre os eixos, só em memória. Se não houver eixos, fica a estimativa.
+     */
+    try {
+      const auto = generateLoteamentoDrainage(project);
+      const fromAuto = extractDrenagem(auto.project);
+      if (fromAuto) {
+        drenagemProjeto = fromAuto;
+        avisos.push(
+          `Drenagem pré-dimensionada automaticamente pelos eixos (${auto.pvCount} PVs, ${auto.inletCount} bocas de lobo). Gere/ajuste a rede no CAD para refinar.`,
+        );
+      }
+    } catch {
+      /* sem eixos/vias: itensDrenagem usa a estimativa pelo comprimento das vias */
+    }
+  }
 
   return {
     projetoId: options.projetoId,

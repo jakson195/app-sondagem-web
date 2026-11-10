@@ -52,7 +52,24 @@ export function parsePremissas(raw: unknown): ViabilidadePremissas {
     volumeCorteManualM3: rec.volumeCorteManualM3 != null ? String(rec.volumeCorteManualM3) : undefined,
     volumeAterroManualM3: rec.volumeAterroManualM3 != null ? String(rec.volumeAterroManualM3) : undefined,
     municipio: rec.municipio != null ? String(rec.municipio) : undefined,
+    tipoPavimento:
+      rec.tipoPavimento === "LAJOTA" || rec.tipoPavimento === "BLOCO" || rec.tipoPavimento === "PARALELEPIPEDO"
+        ? rec.tipoPavimento
+        : "CBUQ",
+    materialSubBase: rec.materialSubBase === "SOLO_BRITA" ? "SOLO_BRITA" : "BGS",
+    espessuraSubBaseCm: textoOpcional(rec.espessuraSubBaseCm),
+    espessuraBaseCm: textoOpcional(rec.espessuraBaseCm),
+    espessuraRevestimentoCm: textoOpcional(rec.espessuraRevestimentoCm),
+    profundidadeValaEsgotoM: textoOpcional(rec.profundidadeValaEsgotoM),
+    larguraValaEsgotoM: textoOpcional(rec.larguraValaEsgotoM),
+    espacamentoPvEsgotoM: textoOpcional(rec.espacamentoPvEsgotoM),
   });
+}
+
+function textoOpcional(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const t = String(value).trim();
+  return t ? t : undefined;
 }
 
 export function parseIndiretos(raw: unknown): CustosIndiretosInput {

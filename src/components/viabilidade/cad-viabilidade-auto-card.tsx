@@ -33,6 +33,7 @@ const CATEGORIA_LABEL: Record<string, string> = {
   SINALIZACAO: "Sinalização",
 };
 
+
 function semaforoDot(status?: string) {
   if (status === "OK") return "bg-emerald-500";
   if (status === "ALERTA") return "bg-amber-400";
@@ -107,7 +108,7 @@ export function CadViabilidadeAutoCard({ signature, ready, buildPayload, onOpenE
       controller.abort();
     };
     // prefs.precoVendaM2 é digitado: o debounce acima evita chamadas a cada tecla.
-  }, [signature, ready, prefsLoaded, prefs.enabled, prefs.uf, prefs.tipo, prefs.precoVendaM2, forceTick]);
+  }, [signature, ready, prefsLoaded, prefs.enabled, prefs.uf, prefs.tipo, prefs.precoVendaM2, prefs.tipoPavimento, forceTick]);
 
   const categorias = Object.entries(resumo?.custosPorCategoria ?? {})
     .map(([k, v]) => [k, Number(v)] as const)
@@ -160,6 +161,19 @@ export function CadViabilidadeAutoCard({ signature, ready, buildPayload, onOpenE
           </select>
         </label>
       </div>
+      <label className="block text-[10px] text-[#6b7280]">
+        Pavimento das vias
+        <select
+          value={prefs.tipoPavimento}
+          onChange={(e) => updatePrefs({ tipoPavimento: e.target.value as ViabilidadeAutoPrefs["tipoPavimento"] })}
+          className="mt-1 w-full rounded-lg border border-[#d1d5db] bg-white px-2 py-1.5 text-xs"
+        >
+          <option value="CBUQ">Asfalto (CBUQ)</option>
+          <option value="LAJOTA">Lajota sextavada / bloco 16 faces</option>
+          <option value="BLOCO">Bloco intertravado retangular</option>
+          <option value="PARALELEPIPEDO">Paralelepípedo</option>
+        </select>
+      </label>
       <label className="block text-[10px] text-[#6b7280]">
         Preço de venda (R$/m² de lote)
         <input

@@ -10,13 +10,14 @@
  * o estudo volta com `precosAusentes > 0` e a UI avisa.
  */
 import type { ViabilidadeSessionPayload } from "./cad-session";
-import { VIABILIDADE_LOCAL_ID } from "./types";
+import { VIABILIDADE_LOCAL_ID, type TipoPavimento } from "./types";
 
 export type ViabilidadeAutoPrefs = {
   enabled: boolean;
   uf: string;
   tipo: "DESONERADO" | "NAO_DESONERADO";
   precoVendaM2: string;
+  tipoPavimento: TipoPavimento;
 };
 
 const PREFS_KEY = "datageo.viabilidade.auto";
@@ -26,6 +27,7 @@ export const DEFAULT_AUTO_PREFS: ViabilidadeAutoPrefs = {
   uf: "SC",
   tipo: "DESONERADO",
   precoVendaM2: "",
+  tipoPavimento: "CBUQ",
 };
 
 export function readAutoPrefs(): ViabilidadeAutoPrefs {
@@ -38,6 +40,10 @@ export function readAutoPrefs(): ViabilidadeAutoPrefs {
       uf: typeof parsed.uf === "string" && parsed.uf ? parsed.uf.toUpperCase() : DEFAULT_AUTO_PREFS.uf,
       tipo: parsed.tipo === "NAO_DESONERADO" ? "NAO_DESONERADO" : "DESONERADO",
       precoVendaM2: typeof parsed.precoVendaM2 === "string" ? parsed.precoVendaM2 : "",
+      tipoPavimento:
+        parsed.tipoPavimento === "LAJOTA" || parsed.tipoPavimento === "BLOCO" || parsed.tipoPavimento === "PARALELEPIPEDO"
+          ? parsed.tipoPavimento
+          : "CBUQ",
     };
   } catch {
     return DEFAULT_AUTO_PREFS;
@@ -192,6 +198,7 @@ export async function calcularViabilidadeAutomatica(input: {
         modalidadeReceita: "M2",
         precoVendaM2: prefs.precoVendaM2.trim().replace(",", ".") || undefined,
         tipoCustoSinapi: prefs.tipo,
+        tipoPavimento: prefs.tipoPavimento,
         larguraCalcadaM: payload.larguraCalcadaM != null ? String(payload.larguraCalcadaM) : undefined,
       },
     }),

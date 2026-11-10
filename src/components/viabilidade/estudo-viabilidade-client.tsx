@@ -5,7 +5,8 @@ import Link from "next/link";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { AVISOS_ESTUDO, TITULO_ESTUDO, VIABILIDADE_LOCAL_ID } from "@/lib/viabilidade/types";
 import { formatArea, formatBRL, formatNum, formatPct } from "@/lib/viabilidade/format";
-import { defaultPremissas } from "@/lib/viabilidade/premissas-default";
+import { defaultPremissas, ESPESSURAS_PADRAO } from "@/lib/viabilidade/premissas-default";
+import type { TipoPavimento } from "@/lib/viabilidade/types";
 import type { ViabilidadePremissas } from "@/lib/viabilidade/types";
 import { adaptCadProjectToLoteamentoInput } from "@/lib/viabilidade/project-adapter";
 import { extrairQuantitativosProjeto } from "@/lib/viabilidade/extrator";
@@ -176,6 +177,11 @@ export function EstudoViabilidadeClient({ projetoId }: { projetoId: string }) {
   const [administrativo, setAdministrativo] = useState("");
   const [comercial, setComercial] = useState("");
   const [sistemaEsgoto, setSistemaEsgoto] = useState<"na" | "sim" | "nao">("na");
+  const [tipoPavimento, setTipoPavimento] = useState<TipoPavimento>("CBUQ");
+  const [materialSubBase, setMaterialSubBase] = useState<"BGS" | "SOLO_BRITA">("BGS");
+  const [espSubBase, setEspSubBase] = useState("");
+  const [espBase, setEspBase] = useState("");
+  const [espRevestimento, setEspRevestimento] = useState("");
   const [corteManual, setCorteManual] = useState("");
   const [aterroManual, setAterroManual] = useState("");
   const [printOpen, setPrintOpen] = useState(false);
@@ -287,6 +293,7 @@ export function EstudoViabilidadeClient({ projetoId }: { projetoId: string }) {
         ? {
             ...premissasAtuais(),
             ...(payload.tipoSinapi ? { tipoCustoSinapi: payload.tipoSinapi } : {}),
+            ...(payload.tipoPavimento ? { tipoPavimento: payload.tipoPavimento } : {}),
             ...(!precoM2.trim() && payload.precoVendaM2 ? { precoVendaM2: payload.precoVendaM2 } : {}),
           }
         : premissasAtuais(),
@@ -312,8 +319,27 @@ export function EstudoViabilidadeClient({ projetoId }: { projetoId: string }) {
       volumeCorteManualM3: corteManual || undefined,
       volumeAterroManualM3: aterroManual || undefined,
       municipio: municipio || undefined,
+      tipoPavimento,
+      materialSubBase,
+      espessuraSubBaseCm: espSubBase.trim() || undefined,
+      espessuraBaseCm: espBase.trim() || undefined,
+      espessuraRevestimentoCm: espRevestimento.trim() || undefined,
     });
-  }, [modalidade, precoM2, tipo, contingencia, sistemaEsgoto, corteManual, aterroManual, municipio]);
+  }, [
+    modalidade,
+    precoM2,
+    tipo,
+    contingencia,
+    sistemaEsgoto,
+    corteManual,
+    aterroManual,
+    municipio,
+    tipoPavimento,
+    materialSubBase,
+    espSubBase,
+    espBase,
+    espRevestimento,
+  ]);
 
   const indiretosBody = useCallback(
     () => ({
@@ -344,6 +370,11 @@ export function EstudoViabilidadeClient({ projetoId }: { projetoId: string }) {
       if (data.premissas.volumeAterroManualM3) setAterroManual(data.premissas.volumeAterroManualM3);
       if (data.premissas.sistemaPublicoEsgoto === true) setSistemaEsgoto("sim");
       if (data.premissas.sistemaPublicoEsgoto === false) setSistemaEsgoto("nao");
+      if (data.premissas.tipoPavimento) setTipoPavimento(data.premissas.tipoPavimento);
+      if (data.premissas.materialSubBase) setMaterialSubBase(data.premissas.materialSubBase);
+      if (data.premissas.espessuraSubBaseCm) setEspSubBase(data.premissas.espessuraSubBaseCm);
+      if (data.premissas.espessuraBaseCm) setEspBase(data.premissas.espessuraBaseCm);
+      if (data.premissas.espessuraRevestimentoCm) setEspRevestimento(data.premissas.espessuraRevestimentoCm);
     }
     if (data.valorTerreno) setValorTerreno(data.valorTerreno);
     if (data.custoProjetos) setProjetos(data.custoProjetos);
@@ -1019,6 +1050,59 @@ export function EstudoViabilidadeClient({ projetoId }: { projetoId: string }) {
           Comercial (R$)
           <input value={comercial} onChange={(e) => setComercial(e.target.value)} className="mt-1 w-full rounded-lg border px-2 py-1.5 font-mono text-sm" />
         </label>
+        <label className="text-xs text-[var(--muted)]">
+          Pavimento das vias
+          <select
+            value={tipoPavimento}
+            onChange={(e) => setTipoPavimento(e.target.value as TipoPavimento)}
+            className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm"
+          >
+            <option value="CBUQ">Asfalto (CBUQ)</option>
+            <option value="LAJOTA">Lajota sextavada / bloco 16 faces</option>
+            <option value="BLOCO">Bloco intertravado retangular</option>
+            <option value="PARALELEPIPEDO">Paralelepípedo</option>
+          </select>
+        </label>
+        <label className="text-xs text-[var(--muted)]">
+          Sub-base
+          <select
+            value={materialSubBase}
+            onChange={(e) => setMaterialSubBase(e.target.value === "SOLO_BRITA" ? "SOLO_BRITA" : "BGS")}
+            className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm"
+          >
+            <option value="BGS">Brita graduada simples</option>
+            <option value="SOLO_BRITA">Solo-brita</option>
+          </select>
+        </label>
+        <label className="text-xs text-[var(--muted)]">
+          Espessura sub-base (cm)
+          <input
+            value={espSubBase}
+            onChange={(e) => setEspSubBase(e.target.value)}
+            placeholder={String(ESPESSURAS_PADRAO[tipoPavimento].subBase)}
+            className="mt-1 w-full rounded-lg border px-2 py-1.5 font-mono text-sm"
+          />
+        </label>
+        <label className="text-xs text-[var(--muted)]">
+          Espessura base (cm)
+          <input
+            value={espBase}
+            onChange={(e) => setEspBase(e.target.value)}
+            placeholder={String(ESPESSURAS_PADRAO[tipoPavimento].base)}
+            className="mt-1 w-full rounded-lg border px-2 py-1.5 font-mono text-sm"
+          />
+        </label>
+        {tipoPavimento === "CBUQ" ? (
+          <label className="text-xs text-[var(--muted)]">
+            Espessura do CBUQ (cm)
+            <input
+              value={espRevestimento}
+              onChange={(e) => setEspRevestimento(e.target.value)}
+              placeholder={String(ESPESSURAS_PADRAO.CBUQ.revestimento)}
+              className="mt-1 w-full rounded-lg border px-2 py-1.5 font-mono text-sm"
+            />
+          </label>
+        ) : null}
         <label className="text-xs text-[var(--muted)]">
           Esgoto — sistema público?
           <select value={sistemaEsgoto} onChange={(e) => setSistemaEsgoto(e.target.value as "na" | "sim" | "nao")} className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm">

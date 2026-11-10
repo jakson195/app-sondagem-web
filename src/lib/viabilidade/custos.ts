@@ -1,5 +1,6 @@
 import { D, type Decimal } from "./money";
 import { mesmaCompetencia } from "./sinapi-caixa";
+import { vincularSinapiPorDescricao } from "./sinapi-match";
 import type {
   FontePreco,
   ParametroCatalogo,
@@ -167,6 +168,27 @@ export function buscarPreco(catalog: PriceCatalog, query: PriceQuery): PriceHit 
     for (const codigo of uniqueCodigos) {
       const hit = fromSinapi(catalog, codigo, uf, competencia);
       if (hit) return hit;
+    }
+    /** Sem código SINAPI cadastrado: vincula pela descrição da composição (mesma UF/competência). */
+    if (query.codigo) {
+      const candidatas = filtrarSinapi(catalog.sinapi, { uf, competencia: competencia ?? undefined });
+      const vinculo = vincularSinapiPorDescricao(candidatas, query.codigo);
+      if (vinculo) {
+        const custo = sinapiCusto(vinculo.row, catalog.tipoSinapi);
+        if (custo != null) {
+          return {
+            encontrado: true as const,
+            custoUnitario: custo,
+            fonte: "SINAPI" as const,
+            codigo: vinculo.row.codigo,
+            competencia: vinculo.row.competencia,
+            uf: vinculo.row.uf,
+            descricao: vinculo.row.descricao,
+            unidade: vinculo.row.unidade,
+            vinculoAutomatico: true,
+          };
+        }
+      }
     }
     return null;
   };

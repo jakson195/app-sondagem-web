@@ -120,7 +120,21 @@ export type ViabilidadePremissas = {
   volumeCorteManualM3?: string;
   volumeAterroManualM3?: string;
   municipio?: string;
+  /** Revestimento das vias. Padrão CBUQ (asfalto). */
+  tipoPavimento?: TipoPavimento;
+  /** Material da sub-base: brita graduada simples (padrão) ou solo-brita. */
+  materialSubBase?: "BGS" | "SOLO_BRITA";
+  /** Espessuras (cm). Vazio = padrão do tipo de pavimento. "0" = sem a camada. */
+  espessuraSubBaseCm?: string;
+  espessuraBaseCm?: string;
+  espessuraRevestimentoCm?: string;
+  /** Esgoto: profundidade média e largura da vala (m), espaçamento máximo entre PVs (m). */
+  profundidadeValaEsgotoM?: string;
+  larguraValaEsgotoM?: string;
+  espacamentoPvEsgotoM?: string;
 };
+
+export type TipoPavimento = "CBUQ" | "LAJOTA" | "BLOCO" | "PARALELEPIPEDO";
 
 export type PriceQuery = {
   categoria: string;
@@ -142,6 +156,8 @@ export type PriceHit =
       uf?: string;
       descricao?: string;
       unidade?: string;
+      /** Composição escolhida pela descrição (sem código cadastrado). */
+      vinculoAutomatico?: boolean;
     }
   | {
       encontrado: false;

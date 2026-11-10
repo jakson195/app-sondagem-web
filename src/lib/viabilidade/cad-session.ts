@@ -1,3 +1,4 @@
+import type { TipoPavimento } from "./types";
 import type { CadProject } from "@/lib/rtk-validation/cad/types";
 import type { StreetProfileDraft } from "@/lib/rtk-validation/cad/street-profile";
 import { adaptCadProjectToLoteamentoInput } from "./project-adapter";
@@ -32,6 +33,7 @@ export type ViabilidadeSessionPayload = {
   uf?: string;
   tipoSinapi?: "DESONERADO" | "NAO_DESONERADO";
   precoVendaM2?: string;
+  tipoPavimento?: TipoPavimento;
   areaTotal: number;
   quantidadeLotes: number;
   areaLotes: number;
@@ -63,6 +65,7 @@ export function buildViabilidadeSessionPayload(input: {
   uf?: string;
   tipoSinapi?: "DESONERADO" | "NAO_DESONERADO";
   precoVendaM2?: string;
+  tipoPavimento?: TipoPavimento;
 }): ViabilidadeSessionPayload {
   const adapter = adaptCadProjectToLoteamentoInput(input.project, {
     projetoId: input.savedProjectId ?? "local",
@@ -83,6 +86,7 @@ export function buildViabilidadeSessionPayload(input: {
     ...(input.uf ? { uf: input.uf } : {}),
     ...(input.tipoSinapi ? { tipoSinapi: input.tipoSinapi } : {}),
     ...(input.precoVendaM2?.trim() ? { precoVendaM2: input.precoVendaM2.trim() } : {}),
+    ...(input.tipoPavimento ? { tipoPavimento: input.tipoPavimento } : {}),
     areaTotal: extraido.areaTotal,
     quantidadeLotes: extraido.quantidadeLotes,
     areaLotes: extraido.areaLotes,
@@ -104,6 +108,7 @@ export function writeViabilidadeSession(payload: ViabilidadeSessionPayload): { o
       uf: payload.uf,
       tipoSinapi: payload.tipoSinapi,
       precoVendaM2: payload.precoVendaM2,
+      tipoPavimento: payload.tipoPavimento,
       areaTotal: payload.areaTotal,
       quantidadeLotes: payload.quantidadeLotes,
       areaLotes: payload.areaLotes,

@@ -1,10 +1,12 @@
 import { D } from "./money";
+import { ESPESSURAS_PADRAO } from "./premissas-default";
 import type {
   DrenagemProjetoQuantidades,
   ItemCalculo,
   ProjetoLoteamentoInput,
   QuantitativoExtraido,
   QuantitativoResultado,
+  TipoPavimento,
   ViabilidadePremissas,
 } from "./types";
 
@@ -18,22 +20,86 @@ function roundInt(value: number): number {
   return Math.max(0, Math.round(value));
 }
 
-export function itensPavimentacao(extraido: QuantitativoExtraido): {
+export { ESPESSURAS_PADRAO } from "./premissas-default";
+
+const NOME_PAVIMENTO: Record<TipoPavimento, string> = {
+  CBUQ: "asfalto (CBUQ)",
+  LAJOTA: "lajota sextavada / bloco 16 faces",
+  BLOCO: "bloco intertravado retangular",
+  PARALELEPIPEDO: "paralelepípedo",
+};
+
+function espessuraM(raw: string | undefined, padraoCm: number): number {
+  const cm = parseNum(raw, padraoCm);
+  return cm != null && cm > 0 ? cm / 100 : 0;
+}
+
+function fmtCm(m: number): string {
+  return `${(m * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} cm`;
+}
+
+/**
+ * Pavimentação por camadas, nas unidades das composições SINAPI:
+ * regularização (m²), sub-base e base (m³ = área × espessura), imprimação e pintura de ligação (m²),
+ * CBUQ (m³) ou blocos/lajota/paralelepípedo (m²), meio-fio e sarjeta (m).
+ */
+export function itensPavimentacao(
+  extraido: QuantitativoExtraido,
+  premissas?: ViabilidadePremissas,
+): {
   itens: ItemCalculo[];
   quantitativos: QuantitativoResultado[];
 } {
+  const tipo: TipoPavimento = premissas?.tipoPavimento ?? "CBUQ";
+  const padrao = ESPESSURAS_PADRAO[tipo] ?? ESPESSURAS_PADRAO.CBUQ;
+  const eSub = espessuraM(premissas?.espessuraSubBaseCm, padrao.subBase);
+  const eBase = espessuraM(premissas?.espessuraBaseCm, padrao.base);
+  const eRev = espessuraM(premissas?.espessuraRevestimentoCm, padrao.revestimento);
   const area = extraido.areaVias;
   const comprimento = extraido.comprimentoTotalVias;
   const meioFio = comprimento * 2;
+  const soloBrita = premissas?.materialSubBase === "SOLO_BRITA";
+
   const stages: Array<{ codigo: string; descricao: string; qty: number; unidade: string }> = [
-    { codigo: "PAV_REGULARIZACAO", descricao: "Regularização do subleito", qty: area, unidade: "m²" },
-    { codigo: "PAV_SUBBASE", descricao: "Sub-base", qty: area, unidade: "m²" },
-    { codigo: "PAV_BASE", descricao: "Base", qty: area, unidade: "m²" },
-    { codigo: "PAV_IMPRIMACAO", descricao: "Imprimação", qty: area, unidade: "m²" },
-    { codigo: "PAV_REVESTIMENTO", descricao: "Revestimento asfáltico", qty: area, unidade: "m²" },
-    { codigo: "PAV_MEIO_FIO", descricao: "Meio-fio", qty: meioFio, unidade: "m" },
-    { codigo: "PAV_SARJETA", descricao: "Sarjeta", qty: meioFio, unidade: "m" },
+    { codigo: "PAV_REGULARIZACAO", descricao: "Regularização e compactação do subleito", qty: area, unidade: "m²" },
   ];
+  if (eSub > 0) {
+    stages.push({
+      codigo: soloBrita ? "PAV_SUBBASE_SOLO_BRITA" : "PAV_SUBBASE",
+      descricao: `Sub-base de ${soloBrita ? "solo-brita" : "brita graduada simples"} — ${fmtCm(eSub)}`,
+      qty: area * eSub,
+      unidade: "m³",
+    });
+  }
+  if (eBase > 0) {
+    stages.push({ codigo: "PAV_BASE", descricao: `Base de brita graduada simples — ${fmtCm(eBase)}`, qty: area * eBase, unidade: "m³" });
+  }
+  if (tipo === "CBUQ") {
+    stages.push(
+      { codigo: "PAV_IMPRIMACAO", descricao: "Imprimação da base", qty: area, unidade: "m²" },
+      { codigo: "PAV_PINTURA_LIGACAO", descricao: "Pintura de ligação", qty: area, unidade: "m²" },
+      {
+        codigo: "PAV_REVESTIMENTO",
+        descricao: `Revestimento em concreto asfáltico (CBUQ) — ${fmtCm(eRev)}`,
+        qty: area * eRev,
+        unidade: "m³",
+      },
+    );
+  } else {
+    const codigo = tipo === "LAJOTA" ? "PAV_LAJOTA" : tipo === "BLOCO" ? "PAV_BLOCO" : "PAV_PARALELEPIPEDO";
+    stages.push({
+      codigo,
+      descricao: `Pavimento em ${NOME_PAVIMENTO[tipo]}${eRev > 0 ? ` — ${fmtCm(eRev)}` : ""} (com colchão de areia)`,
+      qty: area,
+      unidade: "m²",
+    });
+  }
+  stages.push({ codigo: "PAV_MEIO_FIO", descricao: "Meio-fio (guia) de concreto", qty: meioFio, unidade: "m" });
+  if (tipo === "CBUQ") {
+    stages.push({ codigo: "PAV_SARJETA", descricao: "Sarjeta de concreto", qty: meioFio, unidade: "m" });
+  }
+
+  const nota = `Vias em ${NOME_PAVIMENTO[tipo]}: área ${area.toFixed(0)} m², ${comprimento.toFixed(0)} m de eixo (meio-fio dos dois lados).`;
   const itens: ItemCalculo[] = [];
   const quantitativos: QuantitativoResultado[] = [];
   for (const stage of stages) {
@@ -44,7 +110,7 @@ export function itensPavimentacao(extraido: QuantitativoExtraido): {
       unidade: stage.unidade,
       origem: "PROJETO",
       confianca: "MEDIA",
-      observacao: "Quantitativo a partir da área/comprimento das vias do projeto urbanístico.",
+      observacao: nota,
     });
     if (stage.qty > 0) {
       itens.push({
@@ -118,6 +184,26 @@ export function itensDrenagem(
     { codigo: "DRE_DISSIPADOR", descricao: "Dissipador", qty: drenagem.dissipadores, unidade: "un" },
     { codigo: "DRE_TRAVESSIA", descricao: "Travessia", qty: drenagem.travessias, unidade: "un" },
   ];
+  /**
+   * Vala por diâmetro: largura = D + 0,60 m; profundidade média = recobrimento 1,20 m + D + 0,10 m de berço.
+   * Reaterro = escavação − volume ocupado pelo tubo.
+   */
+  let escavacao = 0;
+  let ocupado = 0;
+  for (const [mm, comp] of [
+    [400, tubos.m400],
+    [600, tubos.m600],
+    [800, tubos.m800],
+  ] as const) {
+    if (!(comp > 0)) continue;
+    const d = mm / 1000;
+    escavacao += comp * (d + 0.6) * (1.2 + d + 0.1);
+    ocupado += comp * Math.PI * (d / 2 + 0.05) ** 2;
+  }
+  rows.push(
+    { codigo: "DRE_ESCAVACAO", descricao: "Escavação mecanizada de vala (drenagem)", qty: escavacao, unidade: "m³" },
+    { codigo: "DRE_REATERRO", descricao: "Reaterro compactado de vala (drenagem)", qty: Math.max(0, escavacao - ocupado), unidade: "m³" },
+  );
 
   const itens: ItemCalculo[] = [];
   const quantitativos: QuantitativoResultado[] = [];
@@ -225,9 +311,15 @@ export function itensAgua(
   return packInfra("AGUA", rows, "ESTIMATIVA", "MEDIA", "Estimativa pelo comprimento das vias e número de lotes.");
 }
 
+/**
+ * Rede coletora de esgoto em PVC DN150 ao longo de cada rua (um coletor por eixo).
+ * PVs: nas pontas e a cada `espacamentoPvEsgotoM` (padrão 80 m); cruzamentos compartilham PV.
+ * Vala: largura × profundidade média; reaterro = escavação − tubo. Uma ligação por lote.
+ */
 export function itensEsgoto(
   extraido: QuantitativoExtraido,
   premissas: ViabilidadePremissas,
+  projeto?: ProjetoLoteamentoInput,
 ): { itens: ItemCalculo[]; quantitativos: QuantitativoResultado[]; avisos: string[] } {
   const avisos: string[] = [];
   if (premissas.sistemaPublicoEsgoto === false) {
@@ -237,13 +329,36 @@ export function itensEsgoto(
   } else if (premissas.sistemaPublicoEsgoto == null) {
     avisos.push("Informe se há sistema público de esgoto disponível. ETE/elevatória não são assumidas automaticamente.");
   }
-  const comprimento = extraido.comprimentoTotalVias;
+  const espacamento = Math.max(20, parseNum(premissas.espacamentoPvEsgotoM, 80) ?? 80);
+  const profundidade = Math.max(0.8, parseNum(premissas.profundidadeValaEsgotoM, 1.5) ?? 1.5);
+  const largura = Math.max(0.4, parseNum(premissas.larguraValaEsgotoM, 0.65) ?? 0.65);
+
+  const trechos = (projeto?.eixos ?? []).map((e) => e.comprimento).filter((c) => c > 1);
+  const comprimento = trechos.length > 0 ? trechos.reduce((a, b) => a + b, 0) : extraido.comprimentoTotalVias;
+  const pvs =
+    trechos.length > 0
+      ? Math.max(2, trechos.reduce((acc, c) => acc + Math.ceil(c / espacamento) + 1, 0) - (trechos.length - 1))
+      : Math.max(2, Math.ceil(comprimento / espacamento) + 1);
+  const escavacao = comprimento * largura * profundidade;
+  const tubo = comprimento * Math.PI * 0.08 ** 2;
+
   const rows: Array<{ codigo: string; descricao: string; qty: number; unidade: string }> = [
-    { codigo: "ESG_REDE", descricao: "Rede coletora de esgoto", qty: comprimento, unidade: "m" },
-    { codigo: "ESG_PV", descricao: "Poço de visita de esgoto", qty: Math.max(2, roundInt(comprimento / 50)), unidade: "un" },
+    { codigo: "ESG_REDE", descricao: "Rede coletora de esgoto PVC DN 150", qty: comprimento, unidade: "m" },
+    { codigo: "ESG_PV", descricao: `Poço de visita de esgoto (≤ ${espacamento.toFixed(0)} m)`, qty: pvs, unidade: "un" },
     { codigo: "ESG_LIGACAO", descricao: "Ligação predial de esgoto", qty: extraido.quantidadeLotes, unidade: "un" },
+    {
+      codigo: "ESG_ESCAVACAO",
+      descricao: `Escavação mecanizada de vala (esgoto) — ${largura.toFixed(2)} × ${profundidade.toFixed(2)} m`,
+      qty: escavacao,
+      unidade: "m³",
+    },
+    { codigo: "ESG_REATERRO", descricao: "Reaterro compactado de vala (esgoto)", qty: Math.max(0, escavacao - tubo), unidade: "m³" },
   ];
-  const packed = packInfra("ESGOTO", rows, "ESTIMATIVA", "MEDIA", "Estimativa preliminar — não é projeto da concessionária.");
+  const nota =
+    trechos.length > 0
+      ? `Traçado automático pelos ${trechos.length} eixo(s) de rua — não é projeto da concessionária.`
+      : "Estimativa pelo comprimento das vias — não é projeto da concessionária.";
+  const packed = packInfra("ESGOTO", rows, trechos.length > 0 ? "PROJETO" : "ESTIMATIVA", "MEDIA", nota);
   return { ...packed, avisos };
 }
 
