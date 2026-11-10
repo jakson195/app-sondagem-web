@@ -74,6 +74,7 @@ import {
   reservarFaixaDeArea,
   reservarRetanguloNoCanto,
   subdivideQuadraEmLotes,
+  subtractStreets,
   type ReservaAreaLado,
 } from "./lot-subdivision";
 import { formatLoteamentoAccessSummary } from "./lot-access";
@@ -92,13 +93,13 @@ import {
   AREA_REMANESCENTE_LAYER_ID,
   appendAreaUtilToProject,
   collectAppRings,
+  collectAreaUtilRings,
   collectFaixaDominioRings,
   collectLoteamentoExclusionRings,
   collectReservaLegalRings,
   EIXO_NEED_LOTEAMENTO,
   isLoteamentoEixoPolyline,
   isLoteamentoLotEntity,
-  stripPreviousAreaUtil,
   stripPreviousFaixaDominio,
   stripPreviousRemanescente,
   appendFaixaDominioToProject,
@@ -1389,7 +1390,14 @@ export function executeCadAiCommand(
           return pickedEixoIds.has(entity.id) || entity.layerId === VIA_EXISTENTE_LAYER.id;
         })
         .map((entity) => entity.vertices.map((v) => [v.x, v.y] as [number, number]));
-      nextProject = stripPreviousAreaUtil(nextProject);
+      /**
+       * Área útil definida pelo usuário: o loteamento (ruas e lotes) fica só dentro dela e o
+       * resto da gleba vira remanescente. Sem área útil, loteia a gleba inteira.
+       */
+      const utilRing =
+        collectAreaUtilRings(nextProject)
+          .filter((ring) => ring.length >= 3)
+          .sort((a, b) => polygonAreaPlanarM2(b) - polygonAreaPlanarM2(a))[0] ?? null;
       if (ladosFaixaDominio.length > 0 && larguraFaixaDominioM > 0) {
         nextProject = stripPreviousFaixaDominio(nextProject);
       }
@@ -1408,7 +1416,8 @@ export function executeCadAiCommand(
       }
 
       const z0 = gleba.vertices[0]?.z ?? 0;
-      const coords = gleba.vertices.map((v) => [v.x, v.y] as [number, number]);
+      const glebaCoords = gleba.vertices.map((v) => [v.x, v.y] as [number, number]);
+      const coords = utilRing ?? glebaCoords;
       try {
         const result = generateLoteamento(coords, {
           larguraViaM,
@@ -1504,7 +1513,7 @@ export function executeCadAiCommand(
 
         const kept = nextProject.entities.filter((e) => {
           if (LOTEAMENTO_LAYER_IDS.has(e.layerId)) return false;
-          if (e.layerId === AREA_UTIL_LAYER.id) return false;
+          if (e.layerId === AREA_UTIL_LAYER.id) return Boolean(utilRing);
           if (e.layerId === AREA_REMANESCENTE_LAYER_ID) return false;
           return true;
         });
@@ -1533,10 +1542,18 @@ export function executeCadAiCommand(
           );
         }
         nextProject = stripPreviousRemanescente(nextProject);
-        if (result.remanescente.length > 0) {
+        /** Fora da área útil: gleba − área útil − área verde − APP − faixa de domínio. */
+        const foraDaAreaUtil = utilRing
+          ? subtractStreets(
+              glebaCoords,
+              [utilRing, ...reservaLegal, ...apps].map((ring) => [ring]),
+            ).filter((poly) => polygonAreaPlanarM2(poly[0] ?? []) >= 4)
+          : [];
+        const remanescentes = [...result.remanescente, ...foraDaAreaUtil];
+        if (remanescentes.length > 0) {
           nextProject = appendRemanescenteToProject(
             nextProject,
-            result.remanescente.map((poly) => poly[0] ?? []),
+            remanescentes.map((poly) => poly[0] ?? []),
             z0,
           );
         }

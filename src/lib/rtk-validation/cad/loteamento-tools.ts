@@ -1613,6 +1613,86 @@ export function applyAreaUtilToProject(
   };
 }
 
+export type DefinirAreaUtilInput = {
+  glebaId?: string | null;
+  /** Percentual da gleba total que será loteado. */
+  percent: number;
+  canto: ReservaCanto | string;
+};
+
+export type DefinirAreaUtilResult = {
+  project: CadProject;
+  utilRings: CadPolylineEntity[];
+  areaM2: number;
+  alvoM2: number;
+  percent: number;
+  canto: ReservaCanto;
+};
+
+/**
+ * Define a ÁREA ÚTIL — a parte da gleba que será loteada (ruas e lotes só ali dentro).
+ * Fica no canto escolhido; se houver área verde, encosta nela. Não ocupa APP, área verde
+ * nem faixa de domínio. Um loteamento já gerado é apagado, pois precisa ser refeito dentro dela.
+ */
+export function definirAreaUtilParaLotear(project: CadProject, input: DefinirAreaUtilInput): DefinirAreaUtilResult {
+  const gleba = resolveUsableGleba(project, input.glebaId);
+  if (!gleba) throw new LoteamentoError(AREA_UTIL_NEED_POLYGON);
+  if (!(input.percent > 0) || input.percent >= 100) {
+    throw new LoteamentoError("Informe um percentual de área útil entre 0 e 100.");
+  }
+  const canto = parseReservaCanto(String(input.canto)) ?? (input.canto as ReservaCanto);
+  if (
+    canto !== "superior_direita" &&
+    canto !== "superior_esquerda" &&
+    canto !== "inferior_direita" &&
+    canto !== "inferior_esquerda"
+  ) {
+    throw new LoteamentoError("Informe o canto da área útil (superior/inferior × esquerda/direita).");
+  }
+  const glebaCoords = gleba.vertices.map((v) => [v.x, v.y] as [number, number]);
+  const totalM2 = computePolygonMetrics(gleba.vertices, true).areaM2;
+  const alvoM2 = totalM2 * (input.percent / 100);
+  const reservaLegal = collectReservaLegalRings(project);
+  const obstaculos = [...collectAppRings(project), ...collectFaixaDominioRings(project)];
+
+  let placed: [number, number][][] = [];
+  if (reservaLegal.length > 0) {
+    placed = placeAreaUtilBesideReserva(glebaCoords, reservaLegal, alvoM2, canto, obstaculos).map(
+      (poly) => (poly[0] ?? []).map((p) => [p[0], p[1]] as [number, number]),
+    );
+  } else {
+    const { reserved } = reservarRetanguloNoCanto(glebaCoords, canto, alvoM2);
+    const livre =
+      obstaculos.length > 0
+        ? subtractObstaclesFromPolys([[reserved]], obstaculos.map((r) => [r]), reserved[0] ?? [0, 0])
+        : [[reserved]];
+    placed = livre.map((poly) => (poly[0] ?? []).map((p) => [p[0], p[1]] as [number, number]));
+  }
+  placed = placed.filter((ring) => ring.length >= 3 && computePolygonMetrics(ring.map(([x, y]) => ({ x, y, z: 0 })), true).areaM2 > 4);
+  if (placed.length === 0) throw new LoteamentoError(AREA_UTIL_NEED_AREA);
+
+  const z0 = gleba.vertices[0]?.z ?? 0;
+  const limpo = resetLoteamento(stripPreviousAreaUtil(project)).project;
+  const next = appendAreaUtilToProject(limpo, placed, input.percent, z0);
+  const utilRings = next.entities.filter(
+    (entity): entity is CadPolylineEntity =>
+      entity.type === "polyline" && Boolean(entity.closed) && entity.layerId === AREA_UTIL_LAYER_ID,
+  );
+  const areaM2 = utilRings.reduce((sum, e) => sum + computePolygonMetrics(e.vertices, true).areaM2, 0);
+  return { project: next, utilRings, areaM2, alvoM2, percent: input.percent, canto };
+}
+
+/** Remove a área útil (o próximo loteamento volta a ocupar a gleba inteira). */
+export function removerAreaUtil(project: CadProject): { project: CadProject; removed: boolean } {
+  const next = stripPreviousAreaUtil(project);
+  return { project: next, removed: next.entities.length !== project.entities.length };
+}
+
+/** Anéis da área útil definida pelo usuário (onde o loteamento deve ficar). */
+export function collectAreaUtilRings(project: CadProject): [number, number][][] {
+  return collectClosedRingsOnLayer(project, AREA_UTIL_LAYER_ID);
+}
+
 export type ApplyAppBufferInput = {
   sourceId?: string | null;
   widthM: number;
@@ -2326,6 +2406,33 @@ export function clearLoteamentoAnnotations(project: CadProject): {
   const kept = project.entities.filter((e) => !LOTEAMENTO_ANNOTATION_LAYER_IDS.has(e.layerId));
   return {
     project: { ...project, entities: kept },
+    removed: project.entities.length - kept.length,
+  };
+}
+
+/** Camadas que o loteamento gera (e o reset apaga). Gleba, APP, área verde e vias existentes ficam. */
+const LOTEAMENTO_GERADO_LAYER_IDS = new Set<string>([
+  AREA_REMANESCENTE_LAYER_ID,
+  AREA_FAIXA_DOMINIO_LAYER_ID,
+  ...LOTEAMENTO_ANNOTATION_LAYER_IDS,
+]);
+
+export function isLoteamentoGeradoLayer(layerId: string): boolean {
+  return /^(loteamento|drenagem)_/i.test(layerId) || LOTEAMENTO_GERADO_LAYER_IDS.has(layerId);
+}
+
+/**
+ * Volta a gleba ao estado antes do loteamento: remove lotes, quadras, vias, calçadas, eixos,
+ * drenagem, anotações, remanescente e faixa de domínio gerada.
+ * Mantém a gleba, APP, área verde, área útil e vias existentes definidas pelo usuário.
+ */
+export function resetLoteamento(project: CadProject): { project: CadProject; removed: number } {
+  const semRotulos = stripPreviousFaixaDominio(stripPreviousRemanescente(project));
+  const kept = semRotulos.entities.filter((e) => !isLoteamentoGeradoLayer(e.layerId));
+  const usedLayers = new Set(kept.map((e) => e.layerId));
+  const layers = project.layers.filter((layer) => !isLoteamentoGeradoLayer(layer.id) || usedLayers.has(layer.id));
+  return {
+    project: { ...project, entities: kept, layers },
     removed: project.entities.length - kept.length,
   };
 }

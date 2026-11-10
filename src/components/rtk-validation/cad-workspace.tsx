@@ -182,6 +182,10 @@ import {
   buildReurbTabularMemorialBlob,
   buildStreetProfiles,
   clearLoteamentoAnnotations,
+  resetLoteamento,
+  isLoteamentoGeradoLayer,
+  definirAreaUtilParaLotear,
+  removerAreaUtil,
   cloneProjectForLot,
   defaultSecaoTipo,
   secaoTipoFromInputs,
@@ -725,10 +729,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
   } | null>(null);
   const [maqueteOpen, setMaqueteOpen] = useState(false);
   const [drenagem3dOpen, setDrenagem3dOpen] = useState(false);
-  const [loteamentoAreaUtil] = useState("15");
+  const [loteamentoAreaUtil, setLoteamentoAreaUtil] = useState("60");
   const [reservaPercent, setReservaPercent] = useState("20");
   const [reservaCanto, setReservaCanto] = useState<ReservaCanto>("superior_direita");
-  const [areaUtilCanto] = useState<ReservaCanto>("superior_direita");
+  const [areaUtilCanto, setAreaUtilCanto] = useState<ReservaCanto>("superior_direita");
   const [appWidth, setAppWidth] = useState("30");
   const [appSide, setAppSide] = useState<AppBufferSide>("both");
   const [appPickMode, setAppPickMode] = useState(false);
@@ -904,6 +908,21 @@ export function CadWorkspace({ userId }: { userId: string }) {
   );
 
   const viabilidadeReady = useMemo(() => hasLotes(project.entities), [project.entities]);
+  const areaUtilAtivaM2 = useMemo(
+    () =>
+      project.entities.reduce(
+        (sum, e) =>
+          e.type === "polyline" && e.closed && e.layerId === AREA_UTIL_LAYER_ID
+            ? sum + computePolygonMetrics(e.vertices, true).areaM2
+            : sum,
+        0,
+      ),
+    [project.entities],
+  );
+  const temLoteamentoGerado = useMemo(
+    () => project.entities.some((e) => isLoteamentoGeradoLayer(e.layerId)),
+    [project.entities],
+  );
   const viabilidadeSignature = useMemo(
     () =>
       `${loteamentoSignature(project.entities)}|${volPlateauZ.trim()}|${loteamentoLarguraCalcada.trim()}|${streetProfiles.length}`,
@@ -4418,6 +4437,63 @@ export function CadWorkspace({ userId }: { userId: string }) {
     }
     setProject(result.project);
     setLoteamentoNotice(t("loteamento.urbano.cotarDone", { count: result.lotCount }));
+  }
+
+  function criarAreaUtil() {
+    setLoteamentoNotice(null);
+    setLoteamentoError(null);
+    const pct = parseDrawNumber(loteamentoAreaUtil);
+    if (pct === null || pct <= 0 || pct >= 100) {
+      setLoteamentoError(t("loteamento.areaUtilNeedPercent"));
+      return;
+    }
+    if (temLoteamentoGerado && typeof window !== "undefined" && !window.confirm(t("loteamento.resetConfirm"))) return;
+    try {
+      const result = definirAreaUtilParaLotear(project, {
+        glebaId: loteamentoGlebaId.trim() || selectedId,
+        percent: pct,
+        canto: areaUtilCanto,
+      });
+      pushUndo(modifyUndoRef.current, { project, selectedId });
+      modifyRedoRef.current.length = 0;
+      setProject(result.project);
+      const utilId = result.utilRings[0]?.id ?? null;
+      setSelectedId(utilId);
+      setSelectedIds(utilId ? [utilId] : []);
+      setLoteamentoNotice(t("loteamento.areaUtilDone", { area: formatAreaBr(result.areaM2), pct: String(pct) }));
+    } catch (err) {
+      setLoteamentoError(err instanceof Error ? err.message : t("commands.error"));
+    }
+  }
+
+  function apagarAreaUtil() {
+    setLoteamentoNotice(null);
+    setLoteamentoError(null);
+    const result = removerAreaUtil(project);
+    if (!result.removed) return;
+    pushUndo(modifyUndoRef.current, { project, selectedId });
+    modifyRedoRef.current.length = 0;
+    setProject(result.project);
+    setLoteamentoNotice(t("loteamento.areaUtilRemoved"));
+  }
+
+  function resetarLoteamento() {
+    setLoteamentoNotice(null);
+    setLoteamentoError(null);
+    const result = resetLoteamento(project);
+    if (result.removed === 0) {
+      setLoteamentoNotice(t("loteamento.resetEmpty"));
+      return;
+    }
+    if (typeof window !== "undefined" && !window.confirm(t("loteamento.resetConfirm"))) return;
+    pushUndo(modifyUndoRef.current, { project, selectedId });
+    modifyRedoRef.current.length = 0;
+    const glebaId = loteamentoGlebaId.trim() || null;
+    setProject(result.project);
+    const keepSel = glebaId && result.project.entities.some((e) => e.id === glebaId) ? glebaId : null;
+    setSelectedId(keepSel);
+    setSelectedIds(keepSel ? [keepSel] : []);
+    setLoteamentoNotice(t("loteamento.resetDone", { n: result.removed }));
   }
 
   function limparLoteamentoAnotacoes() {
@@ -8888,6 +8964,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     >
                       {loteamentoBusy ? t("loteamento.working") : t("loteamento.generate")}
                     </button>
+                    <button
+                      type="button"
+                      disabled={loteamentoBusy || !temLoteamentoGerado}
+                      onClick={resetarLoteamento}
+                      className="mt-2 w-full rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-40"
+                    >
+                      {t("loteamento.reset")}
+                    </button>
                     {orangeQuadraCoverage.quadras > 0 ? (
                       <div className="mt-3 space-y-0.5 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-[11px] text-[#7c2d12]">
                         <p className="font-semibold uppercase tracking-wide">{t("loteamento.coverageTitle")}</p>
@@ -9026,6 +9110,57 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     ) : null}
                     {loteamentoNotice ? (
                       <p className="text-xs text-emerald-700">{loteamentoNotice}</p>
+                    ) : null}
+                  </div>
+                  <div className="rounded-lg border border-orange-200 bg-orange-50/60 px-3 py-2 space-y-2">
+                    <h4 className="text-xs font-semibold text-[#9a3412]">{t("loteamento.areaUtilTitle")}</h4>
+                    <p className="text-[10px] text-[#6b7280]">{t("loteamento.areaUtilHint")}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block text-[10px] text-[#6b7280]">
+                        {t("loteamento.areaUtilPercent")}
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={loteamentoAreaUtil}
+                          onChange={(e) => setLoteamentoAreaUtil(e.target.value)}
+                          className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
+                        />
+                      </label>
+                      <label className="block text-[10px] text-[#6b7280]">
+                        {t("loteamento.areaUtilCanto")}
+                        <select
+                          className="mt-1 w-full rounded-lg border border-[#d1d5db] px-2 py-1.5 text-xs"
+                          value={areaUtilCanto}
+                          onChange={(e) => setAreaUtilCanto(e.target.value as ReservaCanto)}
+                        >
+                          <option value="superior_direita">{t("loteamento.cantoSuperiorDireita")}</option>
+                          <option value="superior_esquerda">{t("loteamento.cantoSuperiorEsquerda")}</option>
+                          <option value="inferior_direita">{t("loteamento.cantoInferiorDireita")}</option>
+                          <option value="inferior_esquerda">{t("loteamento.cantoInferiorEsquerda")}</option>
+                        </select>
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={loteamentoBusy}
+                      onClick={criarAreaUtil}
+                      className="w-full rounded-lg bg-orange-600 px-3 py-2 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+                    >
+                      {t("loteamento.areaUtilApply")}
+                    </button>
+                    {areaUtilAtivaM2 > 0 ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[10px] text-[#9a3412]">
+                          {t("loteamento.areaUtilAtiva", { area: formatAreaBr(areaUtilAtivaM2) })}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={apagarAreaUtil}
+                          className="shrink-0 text-[10px] font-medium text-orange-800 hover:text-red-700"
+                        >
+                          {t("loteamento.areaUtilRemove")}
+                        </button>
+                      </div>
                     ) : null}
                   </div>
                   <div className="rounded-lg border border-teal-200 bg-teal-50/70 px-3 py-2 space-y-2">
