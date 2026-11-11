@@ -6397,6 +6397,148 @@ function pickObbCorner(
  * Quadrado de área alvo no canto da gleba (superior/inferior × esquerda/direita).
  * Prefere um quadrado verdadeiro inteiramente interno; recorta só se inevitável.
  */
+export type RetanguloNoCanto = {
+  /** 4 vértices (sem repetir o primeiro), cantos a 90°, alinhado ao eixo principal da gleba. */
+  ring: Position[];
+  areaM2: number;
+  /** true quando não coube a área pedida e o retângulo foi reduzido. */
+  reduzido: boolean;
+};
+
+/**
+ * Retângulo de área alvo no canto escolhido, inteiro dentro da gleba e fora dos obstáculos.
+ * Testa proporções do quadrado até faixas finas (inclusive ocupando toda a largura ou a
+ * profundidade) e, se o canto da caixa envolvente cair fora da gleba, desliza o retângulo
+ * para dentro. Sem nenhum encaixe com a área cheia, reduz a área até caber (`reduzido`).
+ */
+export function retanguloNoCanto(
+  glebaCoords: PolygonCoords,
+  canto: ReservaCanto,
+  alvoM2: number,
+  obstaculos: Position[][] = [],
+): RetanguloNoCanto {
+  const ring = dropClosing(glebaCoords);
+  if (ring.length < 3 || !(alvoM2 > 0)) {
+    throw new LoteamentoError("Informe um polígono e uma área alvo válidos.");
+  }
+  const total = planarAreaM2(ring);
+  if (alvoM2 >= total * 0.995) {
+    throw new LoteamentoError("A área pedida é maior ou igual à gleba.");
+  }
+  const origin = originOf(ring);
+  const gleba = asTurfPolygon(ring, origin);
+  const { dirS, dirD } = streetDir(getMainAxisAzimuth(ring));
+  const b = projectRingBounds(ring, origin, dirS, dirD);
+  const spanS = b.sMax - b.sMin;
+  const spanD = b.dMax - b.dMin;
+  const corner = pickObbCorner(canto, b, origin, dirS, dirD);
+  const obst = obstaculos
+    .map((r) => dropClosing(r))
+    .filter((r) => r.length >= 3)
+    .map((r) => asTurfPolygon(r, origin));
+
+  const rectAt = (w: number, h: number, offS: number, offD: number): Position[] => {
+    const s0 = corner.s + corner.inwardS * offS;
+    const d0 = corner.d + corner.inwardD * offD;
+    const s1 = s0 + corner.inwardS * w;
+    const d1 = d0 + corner.inwardD * h;
+    return dropClosing(
+      stripRing(origin, dirS, dirD, Math.min(s0, s1), Math.max(s0, s1), Math.min(d0, d1), Math.max(d0, d1)),
+    );
+  };
+  const dentroDoAnel = (p: Position, anel: Position[]): boolean => {
+    let ok = false;
+    for (let i = 0, j = anel.length - 1; i < anel.length; j = i++) {
+      const [xi, yi] = anel[i]!;
+      const [xj, yj] = anel[j]!;
+      if (yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) ok = !ok;
+    }
+    return ok;
+  };
+  const obstRings = obstaculos.map((r) => dropClosing(r)).filter((r) => r.length >= 3);
+  /** Cantos recuados 1 cm para o centro: canto em cima da divisa conta como dentro. */
+  const recuado = (pts: Position[]): Position[] => {
+    const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+    const cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+    return pts.map((p) => {
+      const dx = cx - p[0];
+      const dy = cy - p[1];
+      const len = Math.hypot(dx, dy) || 1;
+      return [p[0] + (dx / len) * 0.01, p[1] + (dy / len) * 0.01] as Position;
+    });
+  };
+  const cabe = (pts: Position[]): boolean => {
+    /** Filtro barato antes do recorte exato: cantos dentro da gleba e fora dos obstáculos. */
+    const testes = recuado(pts);
+    if (!testes.every((p) => dentroDoAnel(p, ring))) return false;
+    if (obstRings.some((o) => testes.some((p) => dentroDoAnel(p, o)) || o.some((q) => dentroDoAnel(q, testes)))) return false;
+    const area = planarAreaM2(pts);
+    try {
+      const feat = asTurfPolygon(pts, origin);
+      const dentro = flattenPoly(turf.intersect(turf.featureCollection([gleba, feat])), origin).reduce(
+        (sum, poly) => sum + planarAreaM2(poly[0] ?? []),
+        0,
+      );
+      if (dentro < area * 0.999) return false;
+      for (const o of obst) {
+        const sobre = flattenPoly(turf.intersect(turf.featureCollection([o, feat])), origin).reduce(
+          (sum, poly) => sum + planarAreaM2(poly[0] ?? []),
+          0,
+        );
+        if (sobre > area * 0.002) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  /** Proporções em ordem de preferência: quadrado → retângulos → faixas inteiras. */
+  const proporcoes = [1, 1.25, 0.8, 1.5, 0.67, 2, 0.5, 3, 0.33, 4, 0.25, 6, 0.17];
+  const tentar = (area: number): Position[] | null => {
+    const lados: Array<[number, number]> = proporcoes.map((r) => {
+      const w = Math.sqrt(area * r);
+      return [w, area / w];
+    });
+    lados.push([spanS, area / spanS], [area / spanD, spanD]);
+    for (const [w, h] of lados) {
+      if (!(w > 0.5 && h > 0.5) || w > spanS + 1e-6 || h > spanD + 1e-6) continue;
+      const passos = 8;
+      const folgaS = spanS - w;
+      const folgaD = spanD - h;
+      /** Deslocamentos crescentes para dentro: o mais perto do canto vence. */
+      const offsets: Array<[number, number]> = [];
+      for (let i = 0; i <= passos; i++) {
+        for (let j = 0; j <= passos; j++) offsets.push([(folgaS * i) / passos, (folgaD * j) / passos]);
+      }
+      offsets.sort((a, c) => a[0] + a[1] - (c[0] + c[1]));
+      for (const [os, od] of offsets) {
+        const pts = rectAt(w, h, os, od);
+        if (cabe(pts)) return pts;
+      }
+    }
+    return null;
+  };
+
+  const cheio = tentar(alvoM2);
+  if (cheio) return { ring: cheio, areaM2: planarAreaM2(cheio), reduzido: false };
+  let lo = 0;
+  let hi = alvoM2;
+  let melhor: Position[] | null = null;
+  for (let i = 0; i < 18; i++) {
+    const mid = (lo + hi) / 2;
+    const hit = tentar(mid);
+    if (hit) {
+      melhor = hit;
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  if (melhor && planarAreaM2(melhor) > 4) return { ring: melhor, areaM2: planarAreaM2(melhor), reduzido: true };
+  throw new LoteamentoError("Não coube um retângulo nesse canto da gleba. Tente outro canto ou um percentual menor.");
+}
+
 export function reservarRetanguloNoCanto(
   quadraCoords: PolygonCoords,
   canto: ReservaCanto,

@@ -186,6 +186,7 @@ import {
   isLoteamentoGeradoLayer,
   definirAreaUtilParaLotear,
   removerAreaUtil,
+  removerAreaVerde,
   cloneProjectForLot,
   defaultSecaoTipo,
   secaoTipoFromInputs,
@@ -917,6 +918,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
             : sum,
         0,
       ),
+    [project.entities],
+  );
+  const temAreaVerde = useMemo(
+    () => project.entities.some((e) => e.type === "polyline" && e.closed && e.layerId === AREA_RESERVA_LEGAL_LAYER_ID),
     [project.entities],
   );
   const temLoteamentoGerado = useMemo(
@@ -4343,6 +4348,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
         percent: pct,
         canto,
       });
+      pushUndo(modifyUndoRef.current, { project, selectedId });
+      modifyRedoRef.current.length = 0;
       setProject(result.project);
       setSelectedId(result.reserved.id);
       setTool("select");
@@ -4360,7 +4367,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
         area: formatAreaBr(result.reservedM2),
         pct: String(pct.toFixed(0)),
       });
-      setLoteamentoNotice(`${done} ${t("loteamento.reservaDragHint")}`);
+      const totalGleba = gleba?.type === "polyline" ? computePolygonMetrics(gleba.vertices, true).areaM2 : 0;
+      const reduzido = result.reduzido
+        ? ` ${t("loteamento.retanguloReduzido", {
+            pedido: formatAreaBr((pct / 100) * totalGleba),
+            area: formatAreaBr(result.reservedM2),
+          })}`
+        : "";
+      setLoteamentoNotice(`${done}${reduzido} ${t("loteamento.reservaDragHint")}`);
       setPointActionNotice(
         `Reservados ${formatAreaBr(result.reservedM2)} (${pct}%) — arraste o polígono verde para mover.`,
       );
@@ -4461,10 +4475,28 @@ export function CadWorkspace({ userId }: { userId: string }) {
       const utilId = result.utilRings[0]?.id ?? null;
       setSelectedId(utilId);
       setSelectedIds(utilId ? [utilId] : []);
-      setLoteamentoNotice(t("loteamento.areaUtilDone", { area: formatAreaBr(result.areaM2), pct: String(pct) }));
+      const reduzido = result.reduzido
+        ? ` ${t("loteamento.retanguloReduzido", { pedido: formatAreaBr(result.alvoM2), area: formatAreaBr(result.areaM2) })}`
+        : "";
+      setLoteamentoNotice(
+        `${t("loteamento.areaUtilDone", { area: formatAreaBr(result.areaM2), pct: String(pct) })}${reduzido}`,
+      );
     } catch (err) {
       setLoteamentoError(err instanceof Error ? err.message : t("commands.error"));
     }
+  }
+
+  function apagarAreaVerde() {
+    setLoteamentoNotice(null);
+    setLoteamentoError(null);
+    const result = removerAreaVerde(project);
+    if (!result.removed) return;
+    pushUndo(modifyUndoRef.current, { project, selectedId });
+    modifyRedoRef.current.length = 0;
+    setProject(result.project);
+    setSelectedId(null);
+    setSelectedIds([]);
+    setLoteamentoNotice(t("loteamento.reservaRemoved"));
   }
 
   function apagarAreaUtil() {
@@ -4475,6 +4507,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
     pushUndo(modifyUndoRef.current, { project, selectedId });
     modifyRedoRef.current.length = 0;
     setProject(result.project);
+    setSelectedId(null);
+    setSelectedIds([]);
     setLoteamentoNotice(t("loteamento.areaUtilRemoved"));
   }
 
@@ -9106,6 +9140,15 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     >
                       {t("loteamento.reservaApply")}
                     </button>
+                    {temAreaVerde ? (
+                      <button
+                        type="button"
+                        onClick={apagarAreaVerde}
+                        className="w-full rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+                      >
+                        {t("loteamento.reservaRemove")}
+                      </button>
+                    ) : null}
                     {loteamentoError ? (
                       <p className="text-xs text-red-600">{loteamentoError}</p>
                     ) : null}
@@ -9150,18 +9193,18 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       {t("loteamento.areaUtilApply")}
                     </button>
                     {areaUtilAtivaM2 > 0 ? (
-                      <div className="flex items-center justify-between gap-2">
+                      <>
                         <p className="text-[10px] text-[#9a3412]">
                           {t("loteamento.areaUtilAtiva", { area: formatAreaBr(areaUtilAtivaM2) })}
                         </p>
                         <button
                           type="button"
                           onClick={apagarAreaUtil}
-                          className="shrink-0 text-[10px] font-medium text-orange-800 hover:text-red-700"
+                          className="w-full rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
                         >
                           {t("loteamento.areaUtilRemove")}
                         </button>
-                      </div>
+                      </>
                     ) : null}
                   </div>
                   <div className="rounded-lg border border-teal-200 bg-teal-50/70 px-3 py-2 space-y-2">

@@ -21,6 +21,7 @@ import {
   rebuildQuadraLotesWithAccess,
   resolveLotSizeSpec,
   reservarRetanguloNoCanto,
+  retanguloNoCanto,
   ringsShareBoundary,
   subtractObstaclesFromPolys,
   unionClosedRings,
@@ -1433,6 +1434,8 @@ export type ApplyReservaLegalResult = {
   reservedM2: number;
   percent: number;
   canto: ReservaCanto;
+  /** true quando a área pedida não coube como retângulo e foi reduzida. */
+  reduzido: boolean;
 };
 
 /** Cria/atualiza o polígono de reserva legal no canto da gleba (mesmo caminho da UI). */
@@ -1462,11 +1465,14 @@ export function applyReservaLegalToProject(
     throw new LoteamentoError("Informe o canto da área verde (superior/inferior × esquerda/direita).");
   }
   const areaTotal = computePolygonMetrics(gleba.vertices, true).areaM2;
-  const placed = reservarRetanguloNoCanto(
+  /** Sempre retângulo: fora da APP, da faixa de domínio e da área útil já definida. */
+  const rect = retanguloNoCanto(
     gleba.vertices.map((v) => [v.x, v.y] as [number, number]),
     canto,
     (input.percent / 100) * areaTotal,
+    [...collectAppRings(project), ...collectFaixaDominioRings(project), ...collectAreaUtilRings(project)],
   );
+  const placed = { reserved: rect.ring, reservedM2: rect.areaM2, reduzido: rect.reduzido };
   const z0 = gleba.vertices[0]?.z ?? 0;
   const reserved: CadPolylineEntity = {
     id: newId("rl"),
@@ -1488,7 +1494,18 @@ export function applyReservaLegalToProject(
     reservedM2: placed.reservedM2,
     percent: input.percent,
     canto,
+    reduzido: placed.reduzido,
   };
+}
+
+/** Exclui a área verde (reserva legal) e o rótulo dela. */
+export function removerAreaVerde(project: CadProject): { project: CadProject; removed: boolean } {
+  const kept = project.entities.filter((entity) => {
+    if (isReservaLegalEntity(entity)) return false;
+    if (entity.type === "point" && entity.layerId === CAD_TEXT_LAYER.id && isAreaVerdeLabel(entity.label)) return false;
+    return true;
+  });
+  return { project: { ...project, entities: kept }, removed: kept.length !== project.entities.length };
 }
 
 export function syncAreaUtilLabel(project: CadProject, utilId: string): CadProject {
@@ -1627,6 +1644,8 @@ export type DefinirAreaUtilResult = {
   alvoM2: number;
   percent: number;
   canto: ReservaCanto;
+  /** true quando a área pedida não coube como retângulo e foi reduzida. */
+  reduzido: boolean;
 };
 
 /**
@@ -1655,20 +1674,9 @@ export function definirAreaUtilParaLotear(project: CadProject, input: DefinirAre
   const reservaLegal = collectReservaLegalRings(project);
   const obstaculos = [...collectAppRings(project), ...collectFaixaDominioRings(project)];
 
-  let placed: [number, number][][] = [];
-  if (reservaLegal.length > 0) {
-    placed = placeAreaUtilBesideReserva(glebaCoords, reservaLegal, alvoM2, canto, obstaculos).map(
-      (poly) => (poly[0] ?? []).map((p) => [p[0], p[1]] as [number, number]),
-    );
-  } else {
-    const { reserved } = reservarRetanguloNoCanto(glebaCoords, canto, alvoM2);
-    const livre =
-      obstaculos.length > 0
-        ? subtractObstaclesFromPolys([[reserved]], obstaculos.map((r) => [r]), reserved[0] ?? [0, 0])
-        : [[reserved]];
-    placed = livre.map((poly) => (poly[0] ?? []).map((p) => [p[0], p[1]] as [number, number]));
-  }
-  placed = placed.filter((ring) => ring.length >= 3 && computePolygonMetrics(ring.map(([x, y]) => ({ x, y, z: 0 })), true).areaM2 > 4);
+  /** Sempre retângulo, fora da área verde, APP e faixa de domínio. */
+  const rect = retanguloNoCanto(glebaCoords, canto, alvoM2, [...reservaLegal, ...obstaculos]);
+  const placed: [number, number][][] = [rect.ring.map((p) => [p[0], p[1]] as [number, number])];
   if (placed.length === 0) throw new LoteamentoError(AREA_UTIL_NEED_AREA);
 
   const z0 = gleba.vertices[0]?.z ?? 0;
@@ -1679,7 +1687,7 @@ export function definirAreaUtilParaLotear(project: CadProject, input: DefinirAre
       entity.type === "polyline" && Boolean(entity.closed) && entity.layerId === AREA_UTIL_LAYER_ID,
   );
   const areaM2 = utilRings.reduce((sum, e) => sum + computePolygonMetrics(e.vertices, true).areaM2, 0);
-  return { project: next, utilRings, areaM2, alvoM2, percent: input.percent, canto };
+  return { project: next, utilRings, areaM2, alvoM2, percent: input.percent, canto, reduzido: rect.reduzido };
 }
 
 /** Remove a área útil (o próximo loteamento volta a ocupar a gleba inteira). */
