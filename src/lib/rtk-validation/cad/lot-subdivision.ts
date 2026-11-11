@@ -6427,25 +6427,29 @@ export function retanguloNoCanto(
   }
   const origin = originOf(ring);
   const gleba = asTurfPolygon(ring, origin);
-  const { dirS, dirD } = streetDir(getMainAxisAzimuth(ring));
-  const b = projectRingBounds(ring, origin, dirS, dirD);
-  const spanS = b.sMax - b.sMin;
-  const spanD = b.dMax - b.dMin;
-  const corner = pickObbCorner(canto, b, origin, dirS, dirD);
-  const obst = obstaculos
-    .map((r) => dropClosing(r))
-    .filter((r) => r.length >= 3)
-    .map((r) => asTurfPolygon(r, origin));
+  const obstRings = obstaculos.map((r) => dropClosing(r)).filter((r) => r.length >= 3);
+  const obst = obstRings.map((r) => asTurfPolygon(r, origin));
 
-  const rectAt = (w: number, h: number, offS: number, offD: number): Position[] => {
-    const s0 = corner.s + corner.inwardS * offS;
-    const d0 = corner.d + corner.inwardD * offD;
-    const s1 = s0 + corner.inwardS * w;
-    const d1 = d0 + corner.inwardD * h;
-    return dropClosing(
-      stripRing(origin, dirS, dirD, Math.min(s0, s1), Math.max(s0, s1), Math.min(d0, d1), Math.max(d0, d1)),
-    );
-  };
+  /** Canto no mundo: superior = norte (+Y), direita = leste (+X). */
+  const sx = canto === "superior_direita" || canto === "inferior_direita" ? 1 : -1;
+  const sy = canto === "superior_direita" || canto === "superior_esquerda" ? 1 : -1;
+  const cdir: Position = [sx / Math.SQRT2, sy / Math.SQRT2];
+
+  /** Orientações candidatas: direções das arestas mais longas (módulo 90°), sem repetir. */
+  const arestas = ring
+    .map((a, i) => {
+      const b = ring[(i + 1) % ring.length]!;
+      return { len: planarLength(a, b), ang: Math.atan2(b[1] - a[1], b[0] - a[0]) };
+    })
+    .sort((x, y) => y.len - x.len);
+  const angulos: number[] = [];
+  for (const e of arestas) {
+    const a = ((e.ang % (Math.PI / 2)) + Math.PI / 2) % (Math.PI / 2);
+    if (angulos.some((b) => Math.min(Math.abs(a - b), Math.PI / 2 - Math.abs(a - b)) < 0.02)) continue;
+    angulos.push(a);
+    if (angulos.length >= 4) break;
+  }
+
   const dentroDoAnel = (p: Position, anel: Position[]): boolean => {
     let ok = false;
     for (let i = 0, j = anel.length - 1; i < anel.length; j = i++) {
@@ -6455,23 +6459,21 @@ export function retanguloNoCanto(
     }
     return ok;
   };
-  const obstRings = obstaculos.map((r) => dropClosing(r)).filter((r) => r.length >= 3);
-  /** Cantos recuados 1 cm para o centro: canto em cima da divisa conta como dentro. */
-  const recuado = (pts: Position[]): Position[] => {
-    const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length;
-    const cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
-    return pts.map((p) => {
+  /** Teste barato: cantos (recuados 1 cm) dentro da gleba e fora dos obstáculos. */
+  const cabeRapido = (pts: Position[]): boolean => {
+    const cx = (pts[0]![0] + pts[2]![0]) / 2;
+    const cy = (pts[0]![1] + pts[2]![1]) / 2;
+    const testes = pts.map((p) => {
       const dx = cx - p[0];
       const dy = cy - p[1];
       const len = Math.hypot(dx, dy) || 1;
       return [p[0] + (dx / len) * 0.01, p[1] + (dy / len) * 0.01] as Position;
     });
-  };
-  const cabe = (pts: Position[]): boolean => {
-    /** Filtro barato antes do recorte exato: cantos dentro da gleba e fora dos obstáculos. */
-    const testes = recuado(pts);
     if (!testes.every((p) => dentroDoAnel(p, ring))) return false;
-    if (obstRings.some((o) => testes.some((p) => dentroDoAnel(p, o)) || o.some((q) => dentroDoAnel(q, testes)))) return false;
+    if (ring.some((q) => dentroDoAnel(q, testes))) return false;
+    return !obstRings.some((o) => testes.some((p) => dentroDoAnel(p, o)) || o.some((q) => dentroDoAnel(q, testes)));
+  };
+  const cabeExato = (pts: Position[]): boolean => {
     const area = planarAreaM2(pts);
     try {
       const feat = asTurfPolygon(pts, origin);
@@ -6493,43 +6495,98 @@ export function retanguloNoCanto(
     }
   };
 
-  /** Proporções em ordem de preferência: quadrado → retângulos → faixas inteiras. */
-  const proporcoes = [1, 1.25, 0.8, 1.5, 0.67, 2, 0.5, 3, 0.33, 4, 0.25, 6, 0.17];
-  const tentar = (area: number): Position[] | null => {
-    const lados: Array<[number, number]> = proporcoes.map((r) => {
-      const w = Math.sqrt(area * r);
-      return [w, area / w];
-    });
-    lados.push([spanS, area / spanS], [area / spanD, spanD]);
-    for (const [w, h] of lados) {
-      if (!(w > 0.5 && h > 0.5) || w > spanS + 1e-6 || h > spanD + 1e-6) continue;
-      const passos = 8;
-      const folgaS = spanS - w;
-      const folgaD = spanD - h;
-      /** Deslocamentos crescentes para dentro: o mais perto do canto vence. */
-      const offsets: Array<[number, number]> = [];
-      for (let i = 0; i <= passos; i++) {
-        for (let j = 0; j <= passos; j++) offsets.push([(folgaS * i) / passos, (folgaD * j) / passos]);
+  type Cand = { pts: Position[]; score: number };
+  const proporcoes = [1, 1.3, 0.77, 1.7, 0.6, 2.2, 0.45, 3, 0.33, 4, 0.25];
+
+  const buscar = (area: number, grade: number): Cand | null => {
+    let melhor: Cand | null = null;
+    const lado = Math.sqrt(area);
+    for (const ang of angulos) {
+      const u: Position = [Math.cos(ang), Math.sin(ang)];
+      const v: Position = [-Math.sin(ang), Math.cos(ang)];
+      let uMin = Infinity;
+      let uMax = -Infinity;
+      let vMin = Infinity;
+      let vMax = -Infinity;
+      for (const p of ring) {
+        const pu = (p[0] - origin[0]) * u[0] + (p[1] - origin[1]) * u[1];
+        const pv = (p[0] - origin[0]) * v[0] + (p[1] - origin[1]) * v[1];
+        uMin = Math.min(uMin, pu);
+        uMax = Math.max(uMax, pu);
+        vMin = Math.min(vMin, pv);
+        vMax = Math.max(vMax, pv);
       }
-      offsets.sort((a, c) => a[0] + a[1] - (c[0] + c[1]));
-      for (const [os, od] of offsets) {
-        const pts = rectAt(w, h, os, od);
-        if (cabe(pts)) return pts;
+      const mundo = (a: number, b: number): Position => [
+        origin[0] + a * u[0] + b * v[0],
+        origin[1] + a * u[1] + b * v[1],
+      ];
+      const rect = (a: number, b: number, w: number, h: number): Position[] => [
+        mundo(a, b),
+        mundo(a + w, b),
+        mundo(a + w, b + h),
+        mundo(a, b + h),
+      ];
+      /** Nota: centróide empurrado para o canto; proporção perto do quadrado desempata. */
+      const nota = (pts: Position[], w: number, h: number) =>
+        ((pts[0]![0] + pts[2]![0]) / 2 - origin[0]) * cdir[0] +
+        ((pts[0]![1] + pts[2]![1]) / 2 - origin[1]) * cdir[1] -
+        0.08 * lado * Math.abs(Math.log(w / h));
+      for (const r of proporcoes) {
+        const w = lado * Math.sqrt(r);
+        const h = area / w;
+        if (w > uMax - uMin + 1e-6 || h > vMax - vMin + 1e-6) continue;
+        const passoA = (uMax - uMin - w) / grade;
+        const passoB = (vMax - vMin - h) / grade;
+        let local: { a: number; b: number; score: number } | null = null;
+        for (let i = 0; i <= grade; i++) {
+          for (let j = 0; j <= grade; j++) {
+            const a = uMin + passoA * i;
+            const b = vMin + passoB * j;
+            const pts = rect(a, b, w, h);
+            const sc = nota(pts, w, h);
+            if (local && sc <= local.score) continue;
+            if (cabeRapido(pts)) local = { a, b, score: sc };
+          }
+        }
+        if (!local) continue;
+        /** Refino: desliza em direção ao canto enquanto couber (passos cada vez menores). */
+        let { a, b } = local;
+        let passo = Math.max(passoA, passoB, 0.5);
+        for (let k = 0; k < 14 && passo > 0.01; k++) {
+          let moveu = false;
+          for (const [da, db] of [
+            [passo, 0],
+            [-passo, 0],
+            [0, passo],
+            [0, -passo],
+          ] as const) {
+            const pts = rect(a + da, b + db, w, h);
+            if (nota(pts, w, h) > nota(rect(a, b, w, h), w, h) + 1e-9 && cabeRapido(pts)) {
+              a += da;
+              b += db;
+              moveu = true;
+            }
+          }
+          if (!moveu) passo /= 2;
+        }
+        const pts = rect(a, b, w, h);
+        const sc = nota(pts, w, h);
+        if ((!melhor || sc > melhor.score) && cabeExato(pts)) melhor = { pts, score: sc };
       }
     }
-    return null;
+    return melhor;
   };
 
-  const cheio = tentar(alvoM2);
-  if (cheio) return { ring: cheio, areaM2: planarAreaM2(cheio), reduzido: false };
+  const cheio = buscar(alvoM2, 24);
+  if (cheio) return { ring: cheio.pts, areaM2: planarAreaM2(cheio.pts), reduzido: false };
   let lo = 0;
   let hi = alvoM2;
   let melhor: Position[] | null = null;
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < 10; i++) {
     const mid = (lo + hi) / 2;
-    const hit = tentar(mid);
+    const hit = buscar(mid, 10);
     if (hit) {
-      melhor = hit;
+      melhor = hit.pts;
       lo = mid;
     } else {
       hi = mid;

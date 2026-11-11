@@ -50,6 +50,7 @@ const commandShape = z
     lados_aresta: optionalNumberArray,
     lados_rua_contorno: optionalNumberArray,
     ruas_contorno: z.enum(["todas", "indicadas"]).optional(),
+    area_util_automatica: z.boolean().optional(),
     ferramenta: optionalString,
     camada: optionalString,
     visivel: z.boolean().optional(),

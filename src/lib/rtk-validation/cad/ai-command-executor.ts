@@ -74,7 +74,7 @@ import {
   reservarFaixaDeArea,
   reservarRetanguloNoCanto,
   subdivideQuadraEmLotes,
-  subtractStreets,
+  retanguloNoCanto,
   type ReservaAreaLado,
 } from "./lot-subdivision";
 import { formatLoteamentoAccessSummary } from "./lot-access";
@@ -97,6 +97,7 @@ import {
   collectFaixaDominioRings,
   collectLoteamentoExclusionRings,
   collectReservaLegalRings,
+  stripPreviousAreaUtil,
   EIXO_NEED_LOTEAMENTO,
   isLoteamentoEixoPolyline,
   isLoteamentoLotEntity,
@@ -1391,13 +1392,16 @@ export function executeCadAiCommand(
         })
         .map((entity) => entity.vertices.map((v) => [v.x, v.y] as [number, number]));
       /**
-       * Área útil definida pelo usuário: o loteamento (ruas e lotes) fica só dentro dela e o
-       * resto da gleba vira remanescente. Sem área útil, loteia a gleba inteira.
+       * Área útil = área de UTILIDADE PÚBLICA. O % é da gleba e as ruas contam nele:
+       * reserva = % × gleba − área de ruas, num retângulo no canto escolhido. Lotes e ruas
+       * ocupam todo o resto da gleba. Sem cálculo automático, uma área útil já desenhada é
+       * respeitada como área reservada (sem lotes).
        */
-      const utilRing =
-        collectAreaUtilRings(nextProject)
-          .filter((ring) => ring.length >= 3)
-          .sort((a, b) => polygonAreaPlanarM2(b) - polygonAreaPlanarM2(a))[0] ?? null;
+      const areaUtilAutomatica = command.area_util_automatica === true;
+      if (areaUtilAutomatica) nextProject = stripPreviousAreaUtil(nextProject);
+      const utilExistentes = areaUtilAutomatica
+        ? []
+        : collectAreaUtilRings(nextProject).filter((ring) => ring.length >= 3);
       if (ladosFaixaDominio.length > 0 && larguraFaixaDominioM > 0) {
         nextProject = stripPreviousFaixaDominio(nextProject);
       }
@@ -1417,9 +1421,9 @@ export function executeCadAiCommand(
 
       const z0 = gleba.vertices[0]?.z ?? 0;
       const glebaCoords = gleba.vertices.map((v) => [v.x, v.y] as [number, number]);
-      const coords = utilRing ?? glebaCoords;
+      const coords = glebaCoords;
       try {
-        const result = generateLoteamento(coords, {
+        const loteParams: Parameters<typeof generateLoteamento>[1] = {
           larguraViaM,
           profundidadeQuadraM,
           testadaMinimaM,
@@ -1447,7 +1451,32 @@ export function executeCadAiCommand(
           apps: apps.length > 0 ? apps : undefined,
           percentAreaUtil,
           cantoAreaUtil: command.canto_area_util,
-        });
+        };
+        const comReservas = (extra: [number, number][][]) => {
+          const todas = [...reservas, ...utilExistentes, ...extra];
+          return generateLoteamento(coords, { ...loteParams, reservas: todas.length > 0 ? todas : undefined });
+        };
+        let result = comReservas([]);
+        let utilRect: [number, number][] | null = null;
+        let utilAvisoReduzido = false;
+        let utilSemNecessidade = false;
+        const totalGlebaM2 = polygonAreaPlanarM2(glebaCoords);
+        if (areaUtilAutomatica && percentAreaUtil > 0) {
+          const cantoUtil = parseReservaCanto(String(command.canto_area_util ?? "")) ?? "superior_direita";
+          /** Reserva depende das ruas, que mudam ao desviar da reserva: até 3 ajustes. */
+          for (let iter = 0; iter < 3; iter++) {
+            const falta = (percentAreaUtil / 100) * totalGlebaM2 - result.areaViasM2;
+            if (falta <= 4) {
+              if (iter === 0) utilSemNecessidade = true;
+              break;
+            }
+            if (utilRect && Math.abs(polygonAreaPlanarM2(utilRect) - falta) <= falta * 0.03) break;
+            const rect = retanguloNoCanto(glebaCoords, cantoUtil, falta, [...reservaLegal, ...apps]);
+            utilRect = rect.ring.map((p) => [p[0], p[1]] as [number, number]);
+            utilAvisoReduzido = rect.reduzido;
+            result = comReservas([utilRect]);
+          }
+        }
 
         const stamp = new Date().toISOString().slice(0, 10);
         const viasLayer = {
@@ -1513,7 +1542,7 @@ export function executeCadAiCommand(
 
         const kept = nextProject.entities.filter((e) => {
           if (LOTEAMENTO_LAYER_IDS.has(e.layerId)) return false;
-          if (e.layerId === AREA_UTIL_LAYER.id) return Boolean(utilRing);
+          if (e.layerId === AREA_UTIL_LAYER.id) return !areaUtilAutomatica;
           if (e.layerId === AREA_REMANESCENTE_LAYER_ID) return false;
           return true;
         });
@@ -1533,27 +1562,14 @@ export function executeCadAiCommand(
           layers,
           entities: [...kept, ...viaEntities, ...calcadaEntities, ...eixoEntities, ...quadraEntities, ...loteEntities],
         };
-        if (result.areaUtil.length > 0) {
-          nextProject = appendAreaUtilToProject(
-            nextProject,
-            result.areaUtil.map((poly) => poly[0] ?? []),
-            percentAreaUtil,
-            z0,
-          );
+        if (utilRect) {
+          nextProject = appendAreaUtilToProject(nextProject, [utilRect], percentAreaUtil, z0);
         }
         nextProject = stripPreviousRemanescente(nextProject);
-        /** Fora da área útil: gleba − área útil − área verde − APP − faixa de domínio. */
-        const foraDaAreaUtil = utilRing
-          ? subtractStreets(
-              glebaCoords,
-              [utilRing, ...reservaLegal, ...apps].map((ring) => [ring]),
-            ).filter((poly) => polygonAreaPlanarM2(poly[0] ?? []) >= 4)
-          : [];
-        const remanescentes = [...result.remanescente, ...foraDaAreaUtil];
-        if (remanescentes.length > 0) {
+        if (result.remanescente.length > 0) {
           nextProject = appendRemanescenteToProject(
             nextProject,
-            remanescentes.map((poly) => poly[0] ?? []),
+            result.remanescente.map((poly) => poly[0] ?? []),
             z0,
           );
         }
@@ -1597,9 +1613,15 @@ export function executeCadAiCommand(
           ? `\n${result.report.accessWarning}\nAlternativas: criar ruas internas; reduzir a quantidade de lotes; alterar área alvo, testada ou largura das ruas; permitir cul-de-sac.`
           : "";
         const coverageNotice = result.coverage ? `\n${formatLoteamentoCoverageNotice(result.coverage)}` : "";
-        const avisoAreaUtil = utilRing
-          ? `Loteado SÓ dentro da área útil (${formatAreaBr(polygonAreaPlanarM2(utilRing))} de ${formatAreaBr(polygonAreaPlanarM2(glebaCoords))} da gleba); o resto ficou como remanescente. Para lotear a gleba inteira: "Remover área útil" e gerar de novo.\n`
-          : "";
+        const utilM2 = utilRect ? polygonAreaPlanarM2(utilRect) : 0;
+        const pctPublico = totalGlebaM2 > 0 ? ((result.areaViasM2 + utilM2) / totalGlebaM2) * 100 : 0;
+        const avisoAreaUtil = !areaUtilAutomatica
+          ? ""
+          : utilSemNecessidade
+            ? `Utilidade pública: as ruas já ocupam ${((result.areaViasM2 / totalGlebaM2) * 100).toFixed(1)}% da gleba (≥ ${percentAreaUtil}%), sem área extra.\n`
+            : utilRect
+              ? `Utilidade pública ${pctPublico.toFixed(1)}% da gleba (meta ${percentAreaUtil}%): ruas ${formatAreaBr(result.areaViasM2)} + área útil ${formatAreaBr(utilM2)}.${utilAvisoReduzido ? " A área útil não coube inteira como retângulo nesse canto." : ""}\n`
+              : "";
         message =
           message ||
           `${avisoAreaUtil}${accessSummary}\nLotes ${formatAreaBr(areaLotes)}. Total ${formatAreaBr(result.areaGlebaM2)}. Área útil ${formatAreaBr(result.areaUtilAlvoM2)}. RL 20% ${formatAreaBr(rlShow)}. Ruas ${formatAreaBr(result.areaViasM2)}.${accessWarn}${coverageNotice}`;

@@ -37,7 +37,7 @@ function glebaProject(): CadProject {
     entities: [gleba],
   } as CadProject;
 }
-const gerar = (project: CadProject) =>
+const gerar = (project: CadProject, extra: Record<string, unknown> = {}) =>
   executeCadAiCommand(
     project,
     {
@@ -49,57 +49,68 @@ const gerar = (project: CadProject) =>
       area_minima_quadra_m2: 2000,
       largura_calcada_m: 2,
       ruas_contorno: "indicadas",
-    },
+      ...extra,
+    } as never,
     { selectedId: "gleba" },
   );
+const utilidade = { area_util_automatica: true, percentual_area_util: 35, canto_area_util: "superior_direita" };
+const area = (vs: { x: number; y: number }[]) =>
+  Math.abs(vs.reduce((acc, v, i) => {
+    const w = vs[(i + 1) % vs.length];
+    return acc + v.x * w.y - w.x * v.y;
+  }, 0)) / 2;
 
-describe("área útil e reset do loteamento", () => {
-  it("cria área útil com % e canto, sem precisar de área verde", () => {
-    const r = definirAreaUtilParaLotear(glebaProject(), { glebaId: "gleba", percent: 50, canto: "superior_direita" });
-    assert.ok(Math.abs(r.areaM2 - 30000) < 300, `área útil ${r.areaM2.toFixed(0)} m²`);
-    const c = r.utilRings[0].vertices;
-    const cx = c.reduce((s, v) => s + v.x, 0) / c.length - ox;
-    const cy = c.reduce((s, v) => s + v.y, 0) / c.length - oy;
-    assert.ok(cx > 150 || cy > 100, "área útil fora do canto superior direito");
-  });
-
-  it("gera ruas e lotes só dentro da área útil; o resto vira remanescente", () => {
-    const util = definirAreaUtilParaLotear(glebaProject(), { glebaId: "gleba", percent: 50, canto: "superior_direita" });
-    const res = gerar(util.project);
+describe("área útil (utilidade pública) e reset do loteamento", () => {
+  it("reserva = % da gleba − ruas, num retângulo no canto; lotes ocupam todo o resto", () => {
+    const res = gerar(glebaProject(), utilidade);
     assert.equal(res.ok, true, res.ok ? "" : res.message);
     const p = res.project;
-    const utilPoly = p.entities.find((e) => e.layerId === AREA_UTIL_LAYER_ID) as CadPolylineEntity;
-    assert.ok(utilPoly, "área útil sumiu depois de gerar");
+    const util = p.entities.find((e) => e.layerId === AREA_UTIL_LAYER_ID) as CadPolylineEntity;
+    assert.ok(util, "sem área útil");
+    assert.equal(util.vertices.length, 4);
+    const cx = util.vertices.reduce((s, v) => s + v.x, 0) / 4 - ox;
+    const cy = util.vertices.reduce((s, v) => s + v.y, 0) / 4 - oy;
+    assert.ok(cx > 150 && cy > 100, `área útil fora do canto superior direito (${cx.toFixed(0)}, ${cy.toFixed(0)})`);
+    const vias = p.entities
+      .filter((e) => e.layerId === "loteamento_vias" && e.type === "polyline")
+      .reduce((s, e) => s + area((e as CadPolylineEntity).vertices), 0);
+    const publico = (vias + area(util.vertices)) / 60000;
+    assert.ok(Math.abs(publico - 0.35) < 0.03, `utilidade pública ${(publico * 100).toFixed(1)}%`);
+    assert.equal(p.entities.some((e) => e.layerId === AREA_REMANESCENTE_LAYER_ID), false, "sobrou remanescente");
     const lotes = p.entities.filter((e) => e.layerId === "loteamento_lotes" && e.type === "polyline") as CadPolylineEntity[];
-    assert.ok(lotes.length > 10, `poucos lotes: ${lotes.length}`);
+    assert.ok(lotes.length > 30, `poucos lotes: ${lotes.length}`);
     for (const lote of lotes) {
-      const cx = lote.vertices.reduce((s, v) => s + v.x, 0) / lote.vertices.length;
-      const cy = lote.vertices.reduce((s, v) => s + v.y, 0) / lote.vertices.length;
-      assert.ok(pointInPolygon(cx, cy, utilPoly.vertices), `lote ${lote.name} fora da área útil`);
+      const lx = lote.vertices.reduce((s, v) => s + v.x, 0) / lote.vertices.length;
+      const ly = lote.vertices.reduce((s, v) => s + v.y, 0) / lote.vertices.length;
+      assert.equal(pointInPolygon(lx, ly, util.vertices), false, `lote ${lote.name} dentro da área útil`);
     }
-    assert.ok(p.entities.some((e) => e.layerId === AREA_REMANESCENTE_LAYER_ID), "sem remanescente fora da área útil");
+    assert.match(res.message ?? "", /Utilidade pública/);
   });
 
-  it("reset apaga o loteamento e mantém gleba e área útil; dá para gerar de novo", () => {
-    const util = definirAreaUtilParaLotear(glebaProject(), { glebaId: "gleba", percent: 50, canto: "inferior_esquerda" });
-    const gerado = gerar(util.project);
+  it("reset apaga o loteamento; gerar de novo recalcula a área útil", () => {
+    const gerado = gerar(glebaProject(), utilidade);
     assert.equal(gerado.ok, true);
     const reset = resetLoteamento(gerado.project);
     assert.ok(reset.removed > 0);
     assert.equal(reset.project.entities.some((e) => isLoteamentoGeradoLayer(e.layerId)), false, "sobrou loteamento");
     assert.ok(reset.project.entities.some((e) => e.id === "gleba"), "gleba apagada");
-    assert.ok(reset.project.entities.some((e) => e.layerId === AREA_UTIL_LAYER_ID), "área útil apagada no reset");
-    const de_novo = gerar(reset.project);
+    const de_novo = gerar(reset.project, utilidade);
     assert.equal(de_novo.ok, true);
+    assert.equal(de_novo.project.entities.filter((e) => e.layerId === AREA_UTIL_LAYER_ID && e.type === "polyline").length, 1);
   });
 
-  it("sem área útil volta a lotear a gleba inteira", () => {
-    const util = definirAreaUtilParaLotear(glebaProject(), { glebaId: "gleba", percent: 40, canto: "superior_esquerda" });
-    const sem = removerAreaUtil(util.project);
-    assert.equal(sem.removed, true);
-    const res = gerar(sem.project);
+  it("sem utilidade pública loteia a gleba inteira, sem remanescente", () => {
+    const res = gerar(glebaProject());
     assert.equal(res.ok, true);
+    assert.equal(res.project.entities.some((e) => e.layerId === AREA_UTIL_LAYER_ID), false);
     assert.equal(res.project.entities.some((e) => e.layerId === AREA_REMANESCENTE_LAYER_ID), false);
+  });
+
+  it("remover área útil apaga o polígono", () => {
+    const res = gerar(glebaProject(), utilidade);
+    const sem = removerAreaUtil(res.project);
+    assert.equal(sem.removed, true);
+    assert.equal(sem.project.entities.some((e) => e.layerId === AREA_UTIL_LAYER_ID), false);
   });
 });
 

@@ -220,6 +220,11 @@ export interface CadAiCommand {
   percentual_esquina?: number;
   /** Canto da área útil na reserva legal — gerar_loteamento. */
   canto_area_util?: string;
+  /**
+   * true: calcula a área de utilidade pública ao gerar (% da gleba − ruas) e reserva um
+   * retângulo no canto `canto_area_util`. Lotes ocupam todo o resto.
+   */
+  area_util_automatica?: boolean;
   /** Tipo de reserva: institucional | reserva_legal. */
   tipo?: string;
   /** Nome da via — criar_rua_existente. */
