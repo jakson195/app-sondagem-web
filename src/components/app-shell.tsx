@@ -40,6 +40,7 @@ const coreNav = [
   { href: "/gestao-empresa", label: "🏢 Gestão · empresas" },
   { href: "/assinatura", label: "💳 Assinatura" },
   { href: "/admin/companies", label: "🏛️ Empresas · admin" },
+  { href: "/adm/agentes", label: "🤝 Agentes comerciais" },
 ] as const;
 
 function hrefWithObra(base: string, obraId: number | null) {
@@ -285,7 +286,8 @@ export function AppShell({
     ].filter((item) => {
       if (
         isHiddenNavHref(item.href) ||
-        !isProductVisibleHref(item.href) ||
+        // painel do ADM mestre (/adm/...) aparece para o administrador em qualquer modo de produto
+        (!isProductVisibleHref(item.href) && !(isPlatformAdmin && item.href.startsWith("/adm/"))) ||
         (!isPlatformAdmin && isPlatformAdminNavHref(item.href))
       ) {
         return false;
