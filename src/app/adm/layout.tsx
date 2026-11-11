@@ -41,6 +41,12 @@ export default async function AdmLayout({
             >
               Resumo
             </Link>
+            <Link
+              href="/adm/agentes"
+              className="font-medium text-teal-700 hover:underline dark:text-teal-400"
+            >
+              Agentes
+            </Link>
             <Link href="/dashboard" className="text-slate-600 hover:underline dark:text-slate-400">
               App
             </Link>
