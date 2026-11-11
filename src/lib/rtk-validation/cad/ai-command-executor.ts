@@ -1597,9 +1597,12 @@ export function executeCadAiCommand(
           ? `\n${result.report.accessWarning}\nAlternativas: criar ruas internas; reduzir a quantidade de lotes; alterar área alvo, testada ou largura das ruas; permitir cul-de-sac.`
           : "";
         const coverageNotice = result.coverage ? `\n${formatLoteamentoCoverageNotice(result.coverage)}` : "";
+        const avisoAreaUtil = utilRing
+          ? `Loteado SÓ dentro da área útil (${formatAreaBr(polygonAreaPlanarM2(utilRing))} de ${formatAreaBr(polygonAreaPlanarM2(glebaCoords))} da gleba); o resto ficou como remanescente. Para lotear a gleba inteira: "Remover área útil" e gerar de novo.\n`
+          : "";
         message =
           message ||
-          `${accessSummary}\nLotes ${formatAreaBr(areaLotes)}. Total ${formatAreaBr(result.areaGlebaM2)}. Área útil ${formatAreaBr(result.areaUtilAlvoM2)}. RL 20% ${formatAreaBr(rlShow)}. Ruas ${formatAreaBr(result.areaViasM2)}.${accessWarn}${coverageNotice}`;
+          `${avisoAreaUtil}${accessSummary}\nLotes ${formatAreaBr(areaLotes)}. Total ${formatAreaBr(result.areaGlebaM2)}. Área útil ${formatAreaBr(result.areaUtilAlvoM2)}. RL 20% ${formatAreaBr(rlShow)}. Ruas ${formatAreaBr(result.areaViasM2)}.${accessWarn}${coverageNotice}`;
       } catch (err) {
         const text = err instanceof LoteamentoError || err instanceof Error ? err.message : "Falha ao gerar loteamento.";
         return fail(project, text);
