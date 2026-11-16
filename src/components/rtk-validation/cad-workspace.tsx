@@ -314,6 +314,13 @@ import {
   moduloAtivo,
   type CadModuleId,
 } from "@/components/rtk-validation/cad-module-bar";
+import {
+  DrenagemNoSimbolo,
+  DrenagemTuboSimbolo,
+  angulosDasBocas,
+  isRamalDrenagem,
+  pixelsPorMetro,
+} from "@/components/rtk-validation/cad-drainage-symbols";
 import { CadChromeHeader } from "@/components/rtk-validation/cad-chrome-header";
 import { CadChromeToolbar } from "@/components/rtk-validation/cad-chrome-toolbar";
 import { CadModifyPanel } from "@/components/rtk-validation/cad-modify-panel";
@@ -5825,6 +5832,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
       entity.type === "polyline" && Boolean(entity.closed) && entity.layerId === LOTEAMENTO_VIAS_LAYER_ID,
   );
   const viaIndexById = new Map(streetPolys.map((via, i) => [via.id, i]));
+  const drenagemPxPorM = pixelsPorMetro(viewport);
+  const drenagemBocas = angulosDasBocas(project);
 
   function renderPlanTexts(
     texts: { x: number; y: number; label: string; rotationDeg: number; role: string }[],
@@ -6005,7 +6014,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
       const showMarker = !isCoordLabelEntity(entity) && !isPlanTextOnlyPoint(entity);
       const isStructure = isDrainageStructureLayer(entity.layerId);
       const planRole = inferPlanTextRole(entity);
-      const structureR = selected ? 8 : 6;
+      const structureR = Math.min(13, Math.max(7, drenagemPxPorM * 0.7)) + (selected ? 2 : 0);
       const planFill =
         isPlanTextOnlyPoint(entity) || isStructure
           ? planTextFillColor(planRole, entity.textColor ?? CAD_PLAN_BLUE)
@@ -6035,14 +6044,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
           ) : null}
           {showMarker ? (
             isStructure ? (
-              <rect
-                x={sx - structureR}
-                y={sy - structureR}
-                width={structureR * 2}
-                height={structureR * 2}
-                fill={lineColor}
-                stroke={selected || isHovered ? "#fff" : "#0f172a"}
-                strokeWidth={selected || isHovered ? 2 : 1}
+              <DrenagemNoSimbolo
+                entity={entity}
+                sx={sx}
+                sy={sy}
+                pxPorM={drenagemPxPorM}
+                anguloMundo={drenagemBocas.angulos.get(entity.id)}
+                destaque={selected || isHovered}
+                corDestaque={selectStroke}
               />
             ) : (
               <circle
@@ -6138,6 +6147,16 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 })()
               : null}
           </polygon>
+        ) : isDrainagePipeEntity(entity) ? (
+          <DrenagemTuboSimbolo
+            pontos={entity.vertices.map((v) => worldToScreen(v.x, v.y, viewport))}
+            pxPorM={drenagemPxPorM}
+            diametroMm={entity.drainage?.diameterMm}
+            ramal={isRamalDrenagem(entity, drenagemBocas.inletIds)}
+            falha={pipeFail}
+            destaque={selected}
+            corDestaque={selectStroke}
+          />
         ) : (
           <polyline
             points={pts}
