@@ -786,6 +786,10 @@ export function CadAiChat({
     { label: t("quick.pointId"), run: () => runDirect({ acao: "renumerar_pontos", resposta: "" }, t("quick.pointId")) },
     { label: t("quick.exportKml"), run: () => runDirect({ acao: "exportar", formato: "kml", resposta: "" }, t("quick.exportKml")) },
     { label: t("quick.exportKmz"), run: () => runDirect({ acao: "exportar", formato: "kmz", resposta: "" }, t("quick.exportKmz")) },
+    {
+      label: t("quick.exportKmzHumanizado"),
+      run: () => runDirect({ acao: "exportar", formato: "kmz_humanizado", resposta: "" }, t("quick.exportKmzHumanizado")),
+    },
     { label: t("quick.tin"), run: () => runDirect({ acao: "triangulacao", resposta: "" }, t("quick.tin")) },
     { label: t("quick.removeTin"), run: () => runDirect({ acao: "remover_tin", resposta: "" }, t("quick.removeTin")) },
     { label: t("quick.contourLabel"), run: () => runDirect({ acao: "cota_curva", resposta: "" }, t("quick.contourLabel")) },

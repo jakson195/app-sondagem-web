@@ -56,6 +56,7 @@ export const APP_ROUTE_PREFIXES = [
   "/gestao-empresa",
   "/assinatura",
   "/empresa",
+  "/empresas-regiao",
   "/mapa",
   "/mapa-osm",
   "/perfil-estratigrafico",

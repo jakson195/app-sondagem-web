@@ -34,6 +34,78 @@ const PERSON_CLOTH = ["#3d4a5c", "#5c5346", "#6b4a3a", "#4a5560", "#3f4f3a", "#5
 const PERSON_HEAD = ["#3b2a22", "#2c241c", "#4a3728", "#1f1a16"];
 const CAR_BODY = ["#d8d4cf", "#8a8f94", "#2c3036", "#3d4a62", "#6b3a38", "#c4b8a8"];
 
+export type MaqueteVisual = "humanizado" | "realista";
+
+/**
+ * Cores por estilo. "humanizado" = maquete clara de vendas (mesma paleta da imagem e do KMZ
+ * do Google Earth): tons suaves, fundo claro, lotes creme, árvores oliva, telhados terracota.
+ */
+const VISUAL = {
+  realista: {
+    fundo: "#000000",
+    chao: "#000000",
+    base: null as string | null,
+    asfalto: "#61656a",
+    calcada: "#e8e6e1",
+    meioFio: "#f2f0eb",
+    lote: null as string | null,
+    loteLinha: "#f4f6f3",
+    reserva: "#1d5a28",
+    util: "#1d5a28",
+    eixo: "#f0d056",
+    canteiro: "#2f8c34",
+    copaLarga: "#143f1c",
+    copaConifera: "#0f3316",
+    copaPalmeira: "#1f7a32",
+    copaCalcada: "#2f6e3a",
+    tronco: "#5c4033",
+    paredes: HOUSE_WALL_PITCHED,
+    telhados: HOUSE_ROOF_PITCHED,
+    paredesModernas: HOUSE_WALL_MODERN,
+    telhadosModernos: HOUSE_ROOF_MODERN,
+    rotulo: "#f4efd8",
+    rotuloContorno: "#1f2937",
+    ceu: "#d5e4c8",
+    luzChao: "#1a1a1a",
+    hemisferio: 0.62,
+    ambiente: 0.52,
+    sol: 1.12,
+    exposicao: 1.18,
+  },
+  humanizado: {
+    fundo: "#eef0ee",
+    chao: "#eef0ee",
+    base: "#e4e2bf",
+    asfalto: "#7d8085",
+    calcada: "#d6d4c2",
+    meioFio: "#ecebe3",
+    lote: "#ecebc4",
+    loteLinha: "#fbfaee",
+    reserva: "#cdd99c",
+    util: "#e6e0c4",
+    eixo: "#f2f2ee",
+    canteiro: "#cdd99c",
+    copaLarga: "#8a9a4a",
+    copaConifera: "#76863f",
+    copaPalmeira: "#93a04f",
+    copaCalcada: "#93a04f",
+    tronco: "#7a5f46",
+    paredes: ["#f4efe2", "#efe8d6", "#ece7df", "#f6f2ea", "#f1ebdd"],
+    telhados: ["#c27450", "#b3633f", "#8d6a55", "#a8826a"],
+    paredesModernas: ["#f1ede4", "#e9e4da", "#ece8df", "#f4f1ea"],
+    telhadosModernos: ["#5f6368", "#6c7075", "#8d6a55", "#7b7f84"],
+    rotulo: "#5f6368",
+    rotuloContorno: "#f4f3e8",
+    ceu: "#ffffff",
+    luzChao: "#d9d6c0",
+    hemisferio: 0.85,
+    ambiente: 0.45,
+    sol: 0.95,
+    exposicao: 1.02,
+  },
+} as const;
+type Paleta = (typeof VISUAL)[MaqueteVisual];
+
 type Props = {
   project: CadProject;
   secaoTipo: SecaoTipoParams;
@@ -284,16 +356,23 @@ function InstancedBoxes({
 function InstancedHouses({
   houses,
   origin,
+  paleta,
 }: {
   houses: MaqueteHouse[];
   origin: { x: number; y: number };
+  paleta: Paleta;
 }) {
   const pitched = useMemo(() => houses.filter((h) => h.style === "pitched"), [houses]);
   const modern = useMemo(() => houses.filter((h) => h.style === "modern"), [houses]);
   return (
     <>
-      <InstancedPitchedHouses houses={pitched} origin={origin} />
-      <InstancedModernHouses houses={modern} origin={origin} />
+      <InstancedPitchedHouses houses={pitched} origin={origin} wallColors={paleta.paredes} roofColors={paleta.telhados} />
+      <InstancedModernHouses
+        houses={modern}
+        origin={origin}
+        wallColors={paleta.paredesModernas}
+        roofColors={paleta.telhadosModernos}
+      />
     </>
   );
 }
@@ -301,9 +380,13 @@ function InstancedHouses({
 function InstancedPitchedHouses({
   houses,
   origin,
+  wallColors = HOUSE_WALL_PITCHED,
+  roofColors = HOUSE_ROOF_PITCHED,
 }: {
   houses: MaqueteHouse[];
   origin: { x: number; y: number };
+  wallColors?: readonly string[];
+  roofColors?: readonly string[];
 }) {
   const wallRef = useRef<THREE.InstancedMesh>(null);
   const roofRef = useRef<THREE.InstancedMesh>(null);
@@ -325,14 +408,14 @@ function InstancedPitchedHouses({
       dummy.scale.set(h.width, h.height, h.depth);
       dummy.updateMatrix();
       walls.setMatrixAt(i, dummy.matrix);
-      color.set(HOUSE_WALL_PITCHED[h.wallHue % HOUSE_WALL_PITCHED.length]!);
+      color.set(wallColors[h.wallHue % wallColors.length]!);
       walls.setColorAt(i, color);
 
       dummy.position.set(h.x - origin.x, h.height + roofH * 0.48, -(h.y - origin.y));
       dummy.scale.set(h.width * 0.74, roofH, h.depth * 0.74);
       dummy.updateMatrix();
       roofs.setMatrixAt(i, dummy.matrix);
-      color.set(HOUSE_ROOF_PITCHED[h.roofHue % HOUSE_ROOF_PITCHED.length]!);
+      color.set(roofColors[h.roofHue % roofColors.length]!);
       roofs.setColorAt(i, color);
 
       const px = h.x + Math.cos(h.rotation + Math.PI / 2) * (h.depth * 0.36);
@@ -351,7 +434,7 @@ function InstancedPitchedHouses({
     walls.count = count;
     roofs.count = count;
     porches.count = count;
-  }, [houses, origin.x, origin.y, count]);
+  }, [houses, origin.x, origin.y, count, wallColors, roofColors]);
 
   if (count === 0) return null;
   return (
@@ -375,9 +458,13 @@ function InstancedPitchedHouses({
 function InstancedModernHouses({
   houses,
   origin,
+  wallColors = HOUSE_WALL_MODERN,
+  roofColors = HOUSE_ROOF_MODERN,
 }: {
   houses: MaqueteHouse[];
   origin: { x: number; y: number };
+  wallColors?: readonly string[];
+  roofColors?: readonly string[];
 }) {
   const wallRef = useRef<THREE.InstancedMesh>(null);
   const roofRef = useRef<THREE.InstancedMesh>(null);
@@ -398,14 +485,14 @@ function InstancedModernHouses({
       dummy.scale.set(h.width, h.height, h.depth);
       dummy.updateMatrix();
       walls.setMatrixAt(i, dummy.matrix);
-      color.set(HOUSE_WALL_MODERN[h.wallHue % HOUSE_WALL_MODERN.length]!);
+      color.set(wallColors[h.wallHue % wallColors.length]!);
       walls.setColorAt(i, color);
 
       dummy.position.set(h.x - origin.x, h.height + 0.1, -(h.y - origin.y));
       dummy.scale.set(h.width * 1.04, 0.2, h.depth * 1.04);
       dummy.updateMatrix();
       roofs.setMatrixAt(i, dummy.matrix);
-      color.set(HOUSE_ROOF_MODERN[h.roofHue % HOUSE_ROOF_MODERN.length]!);
+      color.set(roofColors[h.roofHue % roofColors.length]!);
       roofs.setColorAt(i, color);
 
       const ax = h.x + Math.cos(h.rotation) * (h.width * 0.28);
@@ -424,7 +511,7 @@ function InstancedModernHouses({
     walls.count = count;
     roofs.count = count;
     annexes.count = count;
-  }, [houses, origin.x, origin.y, count]);
+  }, [houses, origin.x, origin.y, count, wallColors, roofColors]);
 
   if (count === 0) return null;
   return (
@@ -451,21 +538,23 @@ function InstancedTrees({
   crownBroad = "#143f1c",
   crownConifer = "#0f3316",
   crownPalm = "#1f7a32",
+  trunk = "#5c4033",
 }: {
   trees: MaqueteTree[];
   origin: { x: number; y: number };
   crownBroad?: string;
   crownConifer?: string;
   crownPalm?: string;
+  trunk?: string;
 }) {
   const broad = useMemo(() => trees.filter((t) => t.kind === "broad"), [trees]);
   const conifer = useMemo(() => trees.filter((t) => t.kind === "conifer"), [trees]);
   const palm = useMemo(() => trees.filter((t) => t.kind === "palm"), [trees]);
   return (
     <>
-      <TreeKind trees={broad} origin={origin} kind="broad" crown={crownBroad} />
-      <TreeKind trees={conifer} origin={origin} kind="conifer" crown={crownConifer} />
-      <TreeKind trees={palm} origin={origin} kind="palm" crown={crownPalm} />
+      <TreeKind trees={broad} origin={origin} kind="broad" crown={crownBroad} trunk={trunk} />
+      <TreeKind trees={conifer} origin={origin} kind="conifer" crown={crownConifer} trunk={trunk} />
+      <TreeKind trees={palm} origin={origin} kind="palm" crown={crownPalm} trunk={trunk} />
     </>
   );
 }
@@ -475,11 +564,13 @@ function TreeKind({
   origin,
   kind,
   crown,
+  trunk,
 }: {
   trees: MaqueteTree[];
   origin: { x: number; y: number };
   kind: MaqueteTree["kind"];
   crown: string;
+  trunk: string;
 }) {
   const trunkRef = useRef<THREE.InstancedMesh>(null);
   const crownRef = useRef<THREE.InstancedMesh>(null);
@@ -528,7 +619,7 @@ function TreeKind({
     <>
       <instancedMesh ref={trunkRef} args={[undefined, undefined, count]} castShadow>
         <cylinderGeometry args={[1, 1, 1, 6]} />
-        <meshStandardMaterial color="#5c4033" roughness={0.92} />
+        <meshStandardMaterial color={trunk} roughness={0.92} />
       </instancedMesh>
       <instancedMesh ref={crownRef} args={[undefined, undefined, count]} castShadow receiveShadow>
         {kind === "conifer" ? <coneGeometry args={[1, 1, 7]} /> : <sphereGeometry args={[1, 8, 6]} />}
@@ -708,8 +799,12 @@ function DashedEixos({ eixos, origin }: { eixos: MaqueteRing[]; origin: { x: num
 
 function StreetLabels({
   scene,
+  color = "#f4efd8",
+  outline = "#1f2937",
 }: {
   scene: LoteamentoMaqueteScene;
+  color?: string;
+  outline?: string;
 }) {
   const { origin } = scene;
   return (
@@ -720,11 +815,11 @@ function StreetLabels({
           position={[label.x - origin.x, 0.28, -(label.y - origin.y)]}
           rotation={[-Math.PI / 2, 0, -label.rotation]}
           fontSize={2.4}
-          color="#f4efd8"
+          color={color}
           anchorX="center"
           anchorY="middle"
           outlineWidth={0.08}
-          outlineColor="#1f2937"
+          outlineColor={outline}
         >
           {label.text}
         </Text>
@@ -733,23 +828,55 @@ function StreetLabels({
   );
 }
 
-function BlackVoidGround({ scene }: { scene: LoteamentoMaqueteScene }) {
+function BlackVoidGround({ scene, color = "#000000" }: { scene: LoteamentoMaqueteScene; color?: string }) {
   if (!MAQUETE_GLEBA_CLIP || scene.gleba.length === 0) return null;
   const size = Math.max(scene.extentM * 28, 480);
   return (
-    <mesh position={[0, -0.18, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+    <mesh position={[0, -0.18, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
       <planeGeometry args={[size, size]} />
-      <meshBasicMaterial color="#000000" />
+      {color === "#000000" ? <meshBasicMaterial color={color} /> : <meshStandardMaterial color={color} roughness={1} />}
     </mesh>
+  );
+}
+
+/** Espelho d'água no centro de cada praça (utilidade pública) — estilo humanizado. */
+function PlazaPools({ polys, origin }: { polys: MaquetePoly[]; origin: { x: number; y: number } }) {
+  const pools = useMemo(
+    () =>
+      polys.map((p) => {
+        const xs = p.outer.map((q) => q[0]!);
+        const ys = p.outer.map((q) => q[1]!);
+        const r = Math.max(2, Math.min(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 0.09);
+        return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2, r };
+      }),
+    [polys],
+  );
+  return (
+    <>
+      {pools.map((p, i) => (
+        <group key={i} position={[p.x - origin.x, 0, -(p.y - origin.y)]}>
+          <mesh position={[0, 0.09, 0]} receiveShadow>
+            <cylinderGeometry args={[p.r * 1.6, p.r * 1.6, 0.04, 40]} />
+            <meshStandardMaterial color="#d8cfae" roughness={0.95} />
+          </mesh>
+          <mesh position={[0, 0.115, 0]}>
+            <cylinderGeometry args={[p.r, p.r, 0.02, 40]} />
+            <meshStandardMaterial color="#bcd3d6" roughness={0.25} metalness={0.1} />
+          </mesh>
+        </group>
+      ))}
+    </>
   );
 }
 
 function LotBoundaryGrid({
   lots,
   origin,
+  color = "#f4f6f3",
 }: {
   lots: LoteamentoMaqueteScene["lots"];
   origin: { x: number; y: number };
+  color?: string;
 }) {
   const geom = useMemo(() => {
     const positions: number[] = [];
@@ -774,7 +901,7 @@ function LotBoundaryGrid({
   if (lots.length === 0) return null;
   return (
     <lineSegments geometry={geom}>
-      <lineBasicMaterial color="#f4f6f3" />
+      <lineBasicMaterial color={color} />
     </lineSegments>
   );
 }
@@ -816,6 +943,7 @@ function MaqueteScene({
   showCars,
   showSidewalkTrees,
   showEixo,
+  visual,
 }: {
   scene: LoteamentoMaqueteScene;
   resetNonce: number;
@@ -823,7 +951,9 @@ function MaqueteScene({
   showCars: boolean;
   showSidewalkTrees: boolean;
   showEixo: boolean;
+  visual: MaqueteVisual;
 }) {
+  const P = VISUAL[visual];
   const origin = scene.origin;
   const extent = scene.extentM;
   const houses = useMemo(
@@ -839,13 +969,13 @@ function MaqueteScene({
 
   return (
     <>
-      <color attach="background" args={["#000000"]} />
-      <fog attach="fog" args={["#000000", extent * 3.8, extent * 9]} />
-      <hemisphereLight args={["#d5e4c8", "#1a1a1a", 0.62]} />
-      <ambientLight intensity={0.52} />
+      <color attach="background" args={[P.fundo]} />
+      <fog attach="fog" args={[P.fundo, extent * 3.8, extent * 9]} />
+      <hemisphereLight args={[P.ceu, P.luzChao, P.hemisferio]} />
+      <ambientLight intensity={P.ambiente} />
       <directionalLight
         position={[sun * 0.22, sun * 1.55, sun * 0.18]}
-        intensity={1.12}
+        intensity={P.sol}
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
@@ -856,40 +986,64 @@ function MaqueteScene({
         shadow-camera-top={extent}
         shadow-camera-bottom={-extent}
         shadow-bias={-0.0002}
+        shadow-radius={visual === "humanizado" ? 6 : 1}
       />
       <CameraRig extent={extent} resetNonce={resetNonce} />
-      <BlackVoidGround scene={scene} />
-      <ExtrudedAreas polys={scene.asphalt} origin={origin} y0={0} height={0.06} color="#61656a" roughness={0.94} />
-      <ExtrudedAreas polys={scene.sidewalks} origin={origin} y0={0.04} height={0.08} color="#e8e6e1" roughness={0.88} />
-      <InstancedBoxes items={curbs} origin={origin} color="#f2f0eb" roughness={0.7} />
-      <GrassLots polys={lotPolys} origin={origin} />
-      <LotBoundaryGrid lots={scene.lots} origin={origin} />
-      <InstancedHouses houses={houses} origin={origin} />
-      <ExtrudedAreas polys={scene.reserva} origin={origin} y0={0.01} height={0.07} color="#1d5a28" roughness={0.92} />
-      <InstancedTrees trees={scene.trees} origin={origin} />
+      <BlackVoidGround scene={scene} color={P.chao} />
+      {P.base ? (
+        <ExtrudedAreas polys={scene.gleba} origin={origin} y0={-0.16} height={0.15} color={P.base} roughness={1} />
+      ) : null}
+      <ExtrudedAreas polys={scene.asphalt} origin={origin} y0={0} height={0.06} color={P.asfalto} roughness={0.94} />
+      <ExtrudedAreas polys={scene.sidewalks} origin={origin} y0={0.04} height={0.08} color={P.calcada} roughness={0.88} />
+      <InstancedBoxes items={curbs} origin={origin} color={P.meioFio} roughness={0.7} />
+      {P.lote ? (
+        <ExtrudedAreas polys={lotPolys} origin={origin} y0={0.012} height={0.07} color={P.lote} roughness={0.95} />
+      ) : (
+        <GrassLots polys={lotPolys} origin={origin} />
+      )}
+      <LotBoundaryGrid lots={scene.lots} origin={origin} color={P.loteLinha} />
+      <InstancedHouses houses={houses} origin={origin} paleta={P} />
+      <ExtrudedAreas polys={scene.reserva} origin={origin} y0={0.01} height={0.07} color={P.reserva} roughness={0.92} />
+      <ExtrudedAreas polys={scene.util} origin={origin} y0={0.01} height={0.07} color={P.util} roughness={0.95} />
+      {visual === "humanizado" ? <PlazaPools polys={scene.util} origin={origin} /> : null}
+      <InstancedTrees
+        trees={scene.trees}
+        origin={origin}
+        crownBroad={P.copaLarga}
+        crownConifer={P.copaConifera}
+        trunk={P.tronco}
+      />
+      <InstancedTrees
+        trees={scene.utilTrees}
+        origin={origin}
+        crownBroad={P.copaCalcada}
+        crownConifer={P.copaConifera}
+        trunk={P.tronco}
+      />
       {scene.medianPalms.length > 0 || scene.medians.length > 0 ? (
         <>
-          <InstancedBoxes items={scene.medians} origin={origin} color="#2f8c34" roughness={0.92} yOffset={0.04} />
-          <InstancedTrees trees={scene.medianPalms} origin={origin} crownPalm="#1f7a32" />
+          <InstancedBoxes items={scene.medians} origin={origin} color={P.canteiro} roughness={0.92} yOffset={0.04} />
+          <InstancedTrees trees={scene.medianPalms} origin={origin} crownPalm={P.copaPalmeira} trunk={P.tronco} />
         </>
       ) : null}
       {showSidewalkTrees ? (
         <InstancedTrees
           trees={scene.sidewalkTrees}
           origin={origin}
-          crownBroad="#2f6e3a"
-          crownConifer="#245a30"
+          crownBroad={P.copaCalcada}
+          crownConifer={P.copaConifera}
+          trunk={P.tronco}
         />
       ) : null}
       {showPeople ? <InstancedPeople people={scene.people} origin={origin} /> : null}
       {showCars ? <InstancedCars cars={scene.cars} origin={origin} /> : null}
       {showEixo ? (
         <>
-          <InstancedBoxes items={scene.eixoDashes} origin={origin} color="#f0d056" roughness={0.42} yOffset={0.068} />
-          <DashedEixos eixos={scene.eixos} origin={origin} />
+          <InstancedBoxes items={scene.eixoDashes} origin={origin} color={P.eixo} roughness={0.42} yOffset={0.068} />
+          {visual === "realista" ? <DashedEixos eixos={scene.eixos} origin={origin} /> : null}
         </>
       ) : null}
-      <StreetLabels scene={scene} />
+      <StreetLabels scene={scene} color={P.rotulo} outline={P.rotuloContorno} />
     </>
   );
 }
@@ -907,6 +1061,23 @@ export function CadLoteamentoMaquete({
   const [showCars, setShowCars] = useState(true);
   const [showSidewalkTrees, setShowSidewalkTrees] = useState(true);
   const [showEixo, setShowEixo] = useState(true);
+  const [visual, setVisual] = useState<MaqueteVisual>("humanizado");
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("datageo.maquete.visual") === "realista") setVisual("realista");
+    } catch {
+      /* sem armazenamento: fica no humanizado */
+    }
+  }, []);
+  const P = VISUAL[visual];
+  const trocarVisual = (v: MaqueteVisual) => {
+    setVisual(v);
+    try {
+      window.localStorage.setItem("datageo.maquete.visual", v);
+    } catch {
+      /* armazenamento indisponível: vale só nesta sessão */
+    }
+  };
   const scene = useMemo(
     () =>
       buildLoteamentoMaquete(project, {
@@ -935,29 +1106,44 @@ export function CadLoteamentoMaquete({
           <h2 className="truncate text-sm font-semibold text-[#e2e8f0]">{t("title")}</h2>
           <p className="truncate text-[10px] text-[#94a3b8]">{t("orbitHint")}</p>
         </div>
+        <div className="inline-flex rounded-md border border-[#475569] p-0.5 text-[11px]" role="group" aria-label={t("visual")}>
+          {(["humanizado", "realista"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={visual === v}
+              onClick={() => trocarVisual(v)}
+              className={`rounded px-2.5 py-1 font-medium ${
+                visual === v ? "bg-[#00c8f0] text-[#0f2848]" : "text-[#cbd5e1] hover:bg-[#1e293b]"
+              }`}
+            >
+              {v === "humanizado" ? t("visualHumanizado") : t("visualRealista")}
+            </button>
+          ))}
+        </div>
         <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#cbd5e1]">
           <span className="inline-flex items-center gap-1">
-            <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#61656a]" />
+            <i className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: P.asfalto }} />
             {t("legendAsfalto")}
           </span>
           <span className="inline-flex items-center gap-1">
-            <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#f2f0eb]" />
+            <i className="inline-block h-2.5 w-2.5 rounded-sm " style={{ background: P.meioFio }} />
             {t("legendMeioFio")}
           </span>
           <span className="inline-flex items-center gap-1">
-            <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#e8e6e1]" />
+            <i className="inline-block h-2.5 w-2.5 rounded-sm " style={{ background: P.calcada }} />
             {t("legendCalcada")}
           </span>
           <span className="inline-flex items-center gap-1">
-            <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#2f6b32]" />
+            <i className="inline-block h-2.5 w-2.5 rounded-sm " style={{ background: P.lote ?? "#2f6b32" }} />
             {t("legendLotes")}
           </span>
           <span className="inline-flex items-center gap-1">
-            <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#1d5a28]" />
+            <i className="inline-block h-2.5 w-2.5 rounded-sm " style={{ background: P.reserva }} />
             {t("legendReserva")}
           </span>
           <span className="inline-flex items-center gap-1">
-            <i className="inline-block h-2.5 w-2.5 rounded-sm bg-[#f0d056]" />
+            <i className="inline-block h-2.5 w-2.5 rounded-sm " style={{ background: P.eixo }} />
             {t("legendEixo")}
           </span>
         </div>
@@ -1033,8 +1219,9 @@ export function CadLoteamentoMaquete({
               far: 40000,
               position: [80, 60, 80],
             }}
+            key={visual}
             onCreated={({ gl }) => {
-              gl.toneMappingExposure = 1.18;
+              gl.toneMappingExposure = P.exposicao;
               gl.shadowMap.enabled = true;
               gl.shadowMap.type = THREE.PCFSoftShadowMap;
             }}
@@ -1046,6 +1233,7 @@ export function CadLoteamentoMaquete({
               showCars={showCars}
               showSidewalkTrees={showSidewalkTrees}
               showEixo={showEixo}
+              visual={visual}
             />
           </Canvas>
         </div>

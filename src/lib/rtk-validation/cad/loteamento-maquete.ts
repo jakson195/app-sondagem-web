@@ -1,7 +1,7 @@
 import * as turf from "@turf/turf";
 import type { Feature, MultiPolygon, Polygon, Position } from "geojson";
 import { polygonCentroid } from "./ai-geometry-utils";
-import { AREA_RESERVA_LEGAL_LAYER_ID } from "./loteamento-tools";
+import { AREA_RESERVA_LEGAL_LAYER_ID, AREA_UTIL_LAYER_ID } from "./loteamento-tools";
 import { polygonAreaM2 } from "./polygon-utils";
 import {
   LOTEAMENTO_CALCADAS_LAYER_ID,
@@ -129,6 +129,9 @@ export type LoteamentoMaqueteScene = {
   /** Union of vias + lots + reserva — interior of the loteamento. */
   gleba: MaquetePoly[];
   reserva: MaquetePoly[];
+  /** Área de utilidade pública (praça) e suas árvores esparsas. */
+  util: MaquetePoly[];
+  utilTrees: MaqueteTree[];
   eixos: MaqueteRing[];
   eixoDashes: MaqueteCurb[];
   medians: MaqueteCurb[];
@@ -1089,13 +1092,14 @@ export function buildLoteamentoMaquete(
   const lotRings = lotEntities.map(polyToRing);
   const calcadas = closedOnLayer(project, LOTEAMENTO_CALCADAS_LAYER_ID).map(polyToRing);
   const reserva = closedOnLayer(project, AREA_RESERVA_LEGAL_LAYER_ID).map(polyToRing);
+  const util = closedOnLayer(project, AREA_UTIL_LAYER_ID).map(polyToRing);
   const eixoEntities = project.entities.filter(
     (e): e is CadPolylineEntity =>
       e.type === "polyline" && !e.closed && e.vertices.length >= 2 && e.layerId === LOTEAMENTO_EIXOS_LAYER_ID,
   );
   const eixos = eixoEntities.map((e) => e.vertices.map((v) => [v.x, v.y] as Position));
 
-  if (vias.length === 0 && lotRings.length === 0 && reserva.length === 0) return null;
+  if (vias.length === 0 && lotRings.length === 0 && reserva.length === 0 && util.length === 0) return null;
 
   const calcadaM = Math.max(0, options.calcadaM ?? DEFAULT_CALCADA_M);
   const meioFioM = Math.max(0.08, options.meioFioM ?? DEFAULT_MEIO_FIO_M);
@@ -1156,11 +1160,19 @@ export function buildLoteamentoMaquete(
     if (house) house.style = i % 2 === 0 ? "pitched" : "modern";
   }
 
-  const gleba = unionMaqueteRings([...vias, ...lotRings, ...reserva, ...calcadas]);
+  const gleba = unionMaqueteRings([...vias, ...lotRings, ...reserva, ...util, ...calcadas]);
   const trees = plantTrees(reserva, maxTrees);
+  /** Praça: poucas árvores, espaçadas (o centro fica livre para o espelho d'água). */
+  const utilTrees = plantTrees(util, Math.min(60, Math.max(8, Math.round(maxTrees / 6)))).filter((t) =>
+    util.every((ring) => {
+      const b = boundsOfRings([ring]);
+      const r = Math.min(b.maxX - b.minX, b.maxY - b.minY) * 0.16;
+      return Math.hypot(t.x - (b.minX + b.maxX) / 2, t.y - (b.minY + b.maxY) / 2) > r;
+    }),
+  );
   const streetAxes = eixos.length > 0 ? eixos : vias.map((ring) => centerlineFromRing(ring)).filter((p) => p.length >= 2);
   const { medians, medianPalms } = buildMainAvenueDressing(vias, streetAxes, asphalt);
-  const blockedRings = [...lotRings, ...reserva];
+  const blockedRings = [...lotRings, ...reserva, ...util];
   const sidewalkTrees = plantSidewalkTrees(sidewalks, blockedRings, maxSidewalkTrees);
   const people = placePeopleOnSidewalks(sidewalks, blockedRings, maxPeople);
   const cars = placeCarsOnVias(streetAxes, asphalt, blockedRings, maxCars);
@@ -1170,6 +1182,7 @@ export function buildLoteamentoMaquete(
     ...sidewalks.map((p) => p.outer),
     ...lotRings,
     ...reserva,
+    ...util,
     ...eixos,
   ];
   const bounds = boundsOfRings(allRings);
@@ -1189,6 +1202,8 @@ export function buildLoteamentoMaquete(
     lots,
     gleba,
     reserva: asPolys(reserva),
+    util: asPolys(util),
+    utilTrees,
     eixos: streetAxes,
     eixoDashes,
     medians,

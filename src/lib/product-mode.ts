@@ -15,6 +15,7 @@ const LOTEAMENTO_VISIBLE_PATH_PREFIXES = [
   "/cad",
   "/geo",
   "/viabilidade",
+  "/empresas-regiao",
 ] as const;
 
 const SONDAGEM_VISIBLE_PATH_PREFIXES = [
@@ -50,6 +51,11 @@ export const LOTEAMENTO_MODULE_CARDS = [
     href: "/viabilidade",
     label: "📊 Estudo de viabilidade",
     description: "Custos, quantitativos e análise financeira do loteamento.",
+  },
+  {
+    href: "/empresas-regiao",
+    label: "🤝 Empresas por região",
+    description: "Encontre empresas que usam o DataGeo perto do seu loteamento.",
   },
 ] as const;
 

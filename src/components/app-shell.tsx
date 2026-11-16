@@ -32,6 +32,7 @@ const coreNav = [
   { href: "/cad", label: "📐 Ambiente CAD" },
   { href: "/geo", label: "🧭 GEO" },
   { href: "/viabilidade", label: "📊 Estudo de viabilidade" },
+  { href: "/empresas-regiao", label: "🤝 Empresas por região" },
   { href: "/taludes", label: "⛰ Estabilidade de Taludes" },
   { href: "/hidrologia/hidrogeo-brasil", label: "🗺️ HidroGeo Brasil (CPRM + ANM)" },
   { href: "/mineracao/leilao-anm", label: "⛏️ ANM · Leilão SOPLE" },

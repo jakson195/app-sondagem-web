@@ -356,6 +356,8 @@ import {
 import { CadHatchDefs } from "@/components/rtk-validation/cad-hatch-defs";
 import { CadSvgMultilineText } from "@/components/rtk-validation/cad-svg-multiline-text";
 import { buildViabilidadeSessionPayload, writeViabilidadeSession } from "@/lib/viabilidade/cad-session";
+import { exportCadProjectKmzHumanizado } from "@/lib/rtk-validation/cad/kml-humanizado";
+import { renderHumanizadoOverlay } from "@/lib/rtk-validation/cad/humanizado-render";
 import { hasLotes, loteamentoSignature, type ViabilidadeAutoPrefs } from "@/lib/viabilidade/auto-cad";
 import { CadViabilidadeAutoCard } from "@/components/viabilidade/cad-viabilidade-auto-card";
 import { CadProfileView } from "@/components/rtk-validation/cad-profile-view";
@@ -853,7 +855,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   );
 
   const handleExportCad = useCallback(
-    async (format: "dxf" | "dwg" | "shp" | "kmz", projectOverride?: CadProject) => {
+    async (format: "dxf" | "dwg" | "shp" | "kmz" | "kmz_humanizado", projectOverride?: CadProject) => {
       const src = projectOverride ?? project;
       const baseName = src.name.replace(/[^\w\-]+/g, "_").slice(0, 80) || "projeto_cad";
       if (src.entities.length === 0) {
@@ -866,6 +868,16 @@ export function CadWorkspace({ userId }: { userId: string }) {
         if (format === "shp") {
           const zip = await exportCadProjectShapefileZip(src);
           downloadBlob(new Blob([zip], { type: "application/zip" }), `${baseName}_cad.zip`);
+          return;
+        }
+        if (format === "kmz_humanizado") {
+          /** Planta colorida + casas/árvores 3D + imagem humanizada colada no terreno. */
+          const overlay = await renderHumanizadoOverlay(src).catch(() => null);
+          const { kmz } = exportCadProjectKmzHumanizado(src, { overlay });
+          downloadBlob(
+            new Blob([new Uint8Array(kmz)], { type: "application/vnd.google-earth.kmz" }),
+            `${baseName}_humanizado.kmz`,
+          );
           return;
         }
         if (format === "kmz") {

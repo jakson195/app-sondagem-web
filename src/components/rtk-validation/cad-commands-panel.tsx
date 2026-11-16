@@ -109,6 +109,7 @@ const COMMAND_BUTTONS: CommandBtn[] = [
   { id: "importDxf", labelKey: "importDxf", command: { acao: "importar", arquivo: "dxf" }, accept: ".dxf" },
   { id: "exportKml", labelKey: "exportKml", command: { acao: "exportar", formato: "kml" } },
   { id: "exportKmz", labelKey: "exportKmz", command: { acao: "exportar", formato: "kmz" } },
+  { id: "exportKmzHumanizado", labelKey: "exportKmzHumanizado", command: { acao: "exportar", formato: "kmz_humanizado" } },
   { id: "contourLabel", labelKey: "contourLabel", command: { acao: "cota_curva" } },
 ];
 

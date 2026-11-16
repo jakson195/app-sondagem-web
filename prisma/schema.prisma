@@ -98,8 +98,66 @@ model Company {
   geoPhotos    GeoPhoto[]
   streetFrames StreetFrame[]
   subscription Subscription?
+  diretorio    EmpresaDiretorio?
+  leads        DiretorioLead[]
 
   @@map("Empresa")
+}
+
+/**
+ * Perfil da empresa no diretório "Empresas por região". Só empresas que usam o app:
+ * aparece na busca quando `visivel` e a assinatura está ativa (ou em teste válido).
+ */
+model EmpresaDiretorio {
+  id        Int     @id @default(autoincrement())
+  empresaId Int     @unique @map("empresa_id")
+  company   Company @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  visivel    Boolean @default(false)
+  /** Município sede (código IBGE de 7 dígitos) — nome, UF e coordenadas vêm da tabela do IBGE. */
+  codigoIbge Int     @map("codigo_ibge")
+  cidade     String
+  uf         String
+  latitude   Float
+  longitude  Float
+  /** Raio de atuação a partir da sede (km). */
+  raioKm     Int     @default(80) @map("raio_km")
+  /** Chaves de `SERVICOS_DIRETORIO`. */
+  servicos   String[] @default([])
+  descricao  String?
+  /** Registro profissional (CREA/CAU) — conferido manualmente para o selo. */
+  registroProfissional String? @map("registro_profissional")
+  registroVerificado   Boolean @default(false) @map("registro_verificado")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([uf])
+  @@map("EmpresaDiretorio")
+}
+
+/** Pedido de contato feito pelo diretório (o cliente não vê telefone/e-mail da empresa). */
+model DiretorioLead {
+  id        Int     @id @default(autoincrement())
+  empresaId Int     @map("empresa_id")
+  company   Company @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+
+  /** Quem pediu (usuário logado). */
+  userId    Int?    @map("user_id")
+  nome      String
+  email     String
+  telefone  String?
+  /** Cidade do empreendimento. */
+  codigoIbge Int?   @map("codigo_ibge")
+  cidade    String?
+  servico   String?
+  mensagem  String
+  lido      Boolean @default(false)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([empresaId, createdAt])
+  @@map("DiretorioLead")
 }
 
 /** Assinatura SaaS por empresa (billing Stripe / Mercado Pago). */

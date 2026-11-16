@@ -43,6 +43,7 @@ describe("product-mode", () => {
     assert.equal(isProductVisibleHref("/geo?tab=midia"), true);
     assert.equal(isProductVisibleHref("/geo/temporal"), true);
     assert.equal(isProductVisibleHref("/viabilidade"), true);
+    assert.equal(isProductVisibleHref("/empresas-regiao"), true);
     assert.equal(isProductVisibleHref("/dashboard"), true);
     assert.equal(isProductVisibleHref("/spt"), false);
     assert.equal(isProductVisibleHref("/ntrip"), false);

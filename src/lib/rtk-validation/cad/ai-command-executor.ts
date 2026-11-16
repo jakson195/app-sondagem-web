@@ -1259,6 +1259,12 @@ export function executeCadAiCommand(
         message = message || "Exportação CSV iniciada.";
         break;
       }
+      if (fmt === "kmz_humanizado" || fmt === "earth_humanizado") {
+        /** A imagem humanizada é renderizada no navegador: o workspace monta o KMZ. */
+        sideEffects.push({ type: "export_cad", format: "kmz_humanizado", project: nextProject });
+        message = message || "Exportação humanizada para o Google Earth iniciada (planta, casas e árvores 3D, imagem).";
+        break;
+      }
       if (["dxf", "dwg", "shp", "ods"].includes(fmt)) {
         sideEffects.push({ type: "export_cad", format: fmt as "dxf" | "dwg" | "shp" | "ods", project: nextProject });
         message = message || `Exportação ${fmt.toUpperCase()} iniciada.`;

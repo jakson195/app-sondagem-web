@@ -341,7 +341,7 @@ export interface CadAiInterpretRequest {
 export type CadAiSideEffect =
   | { type: "download_memorial"; entityId: string; project: import("./types").CadProject }
   | { type: "fit_view"; entities: import("./types").CadEntity[] }
-  | { type: "export_cad"; format: "dxf" | "dwg" | "shp" | "ods"; project: import("./types").CadProject }
+  | { type: "export_cad"; format: "dxf" | "dwg" | "shp" | "ods" | "kmz_humanizado"; project: import("./types").CadProject }
   | { type: "download_text"; filename: string; content: string; mime?: string }
   | { type: "download_binary"; filename: string; bytes: Uint8Array; mime?: string }
   | { type: "print_pdf" }

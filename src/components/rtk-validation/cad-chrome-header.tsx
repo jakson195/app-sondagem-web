@@ -45,7 +45,7 @@ type CadChromeHeaderProps = {
   onSaveCloud: () => void;
   onImportKind: (kind: CadImportKind) => void;
   onInsertKind: (kind: CadInsertKind) => void;
-  onExport: (format: "dxf" | "dwg" | "shp" | "kmz") => void;
+  onExport: (format: "dxf" | "dwg" | "shp" | "kmz" | "kmz_humanizado") => void;
   onExportOds: () => void;
   onToggleAi: () => void;
   onToggleGrid: (next: boolean) => void;
@@ -211,6 +211,15 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
           disabled={props.exportingFormat !== null}
           onClick={() => {
             closeMenu();
+            props.onExport("kmz_humanizado");
+          }}
+        >
+          {t("actions.exportKmzHumanizado")}
+        </CadMenuItem>
+        <CadMenuItem
+          disabled={props.exportingFormat !== null}
+          onClick={() => {
+            closeMenu();
             props.onExport("shp");
           }}
         >
@@ -326,6 +335,15 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
           }}
         >
           {props.exportingFormat === "kmz" ? t("export.working") : t("actions.exportKmz")}
+        </CadMenuItem>
+        <CadMenuItem
+          disabled={props.exportingFormat !== null}
+          onClick={() => {
+            closeMenu();
+            props.onExport("kmz_humanizado");
+          }}
+        >
+          {props.exportingFormat === "kmz_humanizado" ? t("export.working") : t("actions.exportKmzHumanizado")}
         </CadMenuItem>
         <CadMenuItem
           disabled={props.exportingFormat !== null}

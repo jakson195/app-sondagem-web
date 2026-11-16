@@ -495,7 +495,7 @@ const SCHEMA_PROPS = {
   },
   formato: {
     type: "string",
-    enum: ["dxf", "dwg", "shp", "csv", "kml", "kmz", "pdf", "ods"],
+    enum: ["dxf", "dwg", "shp", "csv", "kml", "kmz", "kmz_humanizado", "pdf", "ods"],
     description: "Formato de exportação.",
   },
   conteudo: { type: "string", description: "Conteúdo textual do arquivo anexado (já enviado no contexto)." },

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { apiUrl } from "@/lib/api-url";
+import { DiretorioPerfilSection } from "@/components/diretorio/diretorio-perfil-section";
 import {
   MODULO_ROTULO,
   MODULOS_PLATAFORMA,
@@ -517,6 +518,8 @@ export default function EmpresaGestaoPage() {
           </table>
         </div>
       </section>
+
+      <DiretorioPerfilSection empresaId={empresaId} />
     </div>
   );
 }
