@@ -1532,11 +1532,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
     [project, selectedId],
   );
 
-  const hasLoteamentoLots = useMemo(
-    () => project.entities.some(isLoteamentoLotEntity),
-    [project.entities],
-  );
-
   const orangeQuadraCoverage = useMemo(
     () => summarizeOrangeQuadraCoverage(project),
     [project],
@@ -9186,67 +9181,6 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       </label>
                     ) : null}
                   </div>
-                  {hasLoteamentoLots ? (
-                    <div className="rounded-lg border border-[#bfdbfe] bg-[#eff6ff] px-3 py-2 space-y-2">
-                      <h4 className="text-xs font-semibold text-[#0f2848]">{t("loteamento.ajusteTitle")}</h4>
-                      <p className="text-[10px] text-[#6b7280]">{t("loteamento.ajusteHint")}</p>
-                      <label className="block text-[10px] text-[#6b7280]">
-                        {t("loteamento.ajusteTestada")}
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={ajusteTestada}
-                          onChange={(e) => setAjusteTestada(e.target.value)}
-                          className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                        />
-                      </label>
-                      <label className="block text-[10px] text-[#6b7280]">
-                        {t("loteamento.ajusteProfundidade")}
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={ajusteProfundidade}
-                          onChange={(e) => setAjusteProfundidade(e.target.value)}
-                          className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                        />
-                      </label>
-                      <label className="block text-[10px] text-[#6b7280]">
-                        {t("loteamento.ajusteArea")}
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={ajusteArea}
-                          onChange={(e) => setAjusteArea(e.target.value)}
-                          className="mt-1 w-full rounded-lg border border-[#d1d5db] px-3 py-1.5 font-mono text-xs"
-                        />
-                      </label>
-                      <p className="text-[10px] text-[#9ca3af]">{t("loteamento.ajusteAreaHint")}</p>
-                      <button
-                        type="button"
-                        disabled={loteamentoBusy || !ajusteTarget}
-                        onClick={() => applyLoteamentoLotSizeFromPanel("quadra")}
-                        className="w-full rounded-lg bg-[#0f2848] px-3 py-2 text-xs font-medium text-white hover:bg-[#1e3a5f] disabled:opacity-50"
-                      >
-                        {loteamentoBusy ? t("loteamento.ajusteWorking") : t("loteamento.ajusteAplicarQuadra")}
-                      </button>
-                      {ajusteTarget?.kind === "lote" ? (
-                        <button
-                          type="button"
-                          disabled={loteamentoBusy}
-                          onClick={() => applyLoteamentoLotSizeFromPanel("lote")}
-                          className="w-full rounded-lg border border-[#0f2848] px-3 py-1.5 text-xs font-medium text-[#0f2848] hover:bg-[#f0f4f8] disabled:opacity-50"
-                        >
-                          {loteamentoBusy ? t("loteamento.ajusteWorking") : t("loteamento.ajusteAplicarLote")}
-                        </button>
-                      ) : null}
-                      {loteamentoError ? (
-                        <p className="text-xs text-red-600">{loteamentoError}</p>
-                      ) : null}
-                      {loteamentoNotice ? (
-                        <p className="text-xs text-emerald-700">{loteamentoNotice}</p>
-                      ) : null}
-                    </div>
-                  ) : null}
                   <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 space-y-2">
                     <h4 className="text-xs font-semibold text-[#14532d]">{t("loteamento.reservaTitle")}</h4>
                     <p className="text-[10px] text-[#6b7280]">{t("loteamento.reservaHint")}</p>
