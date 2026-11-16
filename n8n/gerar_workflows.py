@@ -20,7 +20,7 @@ SB = 'https://kkkvdykwojgkalwboqrk.supabase.co'
 SB_PUB = 'sb_publishable_EQo4Dq6dXNUqGORm27w9GA_sPzdrV_n'   # chave publicável (pública por natureza; a proteção é a x-dgeo-key)
 EMAIL_DE = 'jaksonn@gmail.com'   # Gmail (a caixa @datageodigital ainda não existe)
 MODELO = "'claude-sonnet-5-5'"
-CRED_DG = {'httpHeaderAuth': {'name': 'DataGeo chave'}}
+CRED_DG = {'httpHeaderAuth': {'id': 'K5DzynP63ByJEnTy', 'name': 'DataGeo chave'}}
 CRED_IA = {'httpHeaderAuth': {'id': '2ZaUCiMyO6V8keQB', 'name': 'Anthropic API'}}
 
 class WF:
@@ -113,7 +113,7 @@ fi = so_itens(w)
 mp = code(w, 'Montar prompt', 'const SIS = ' + json.dumps(P('qualificacao.md'), ensure_ascii=False) + ';\n' + r"""const emp = { nome: $json.nome, dominio: $json.dominio, uf: $json.uf, cidade: $json.cidade, segmento: $json.segmento_nome || $json.segmento,
   cnae: $json.cnae, cnae_descricao: $json.cnae_descricao, cnaes_secundarios: $json.cnaes_secundarios, natureza_juridica: $json.natureza_juridica,
   porte: $json.porte, situacao_cadastral: $json.situacao_cadastral, tem_contato_no_cadastro: $json.tem_contato_cadastro, especialidades: $json.especialidades, nota_regras: $json.score };
-const req = { model: """ + MODELO + r""", max_tokens: 1400, system: SIS,
+const req = { model: """ + MODELO + r""", max_tokens: 3000, system: SIS,
   messages: [{ role: 'user', content: `<empresa>${JSON.stringify(emp)}</empresa>\n<evidencias>\n${JSON.stringify($json.evidencias || [])}\n</evidencias>` }] };
 return { json: { id: $json.id, req } };""")
 ia = anthropic(w)
@@ -133,7 +133,7 @@ ag = agenda(w, 'Dias úteis 9h47, 13h47, 17h47', '47 9,13,17 * * 1-5')
 q = rpc(w, 'Aprovadas sem mensagem', 'dgeo_n8n_para_redigir', '{ lim: 10 }')
 fi = so_itens(w)
 mp = code(w, 'Montar prompt', 'const FATOS = ' + json.dumps(P('fatos-produto.md'), ensure_ascii=False) + ';\nconst SIS = ' + json.dumps(P('redacao.md'), ensure_ascii=False) + ';\n' + r"""const emp = { nome: $json.nome, dominio: $json.dominio, uf: $json.uf, cidade: $json.cidade, segmento: $json.segmento };
-const req = { model: """ + MODELO + r""", max_tokens: 1800, system: SIS,
+const req = { model: """ + MODELO + r""", max_tokens: 4000, system: SIS,
   messages: [{ role: 'user', content: `<fatos_produto>\n${FATOS}\n</fatos_produto>\n<empresa>${JSON.stringify(emp)}</empresa>\n<produto>${$json.produto}</produto>\n<resumo>${$json.resumo || ''}</resumo>\n<abordagem>${$json.abordagem || ''}</abordagem>\n<evidencias>\n${JSON.stringify($json.evidencias || [])}\n</evidencias>\n<tem_email>${!!$json.tem_email}</tem_email>\n<tem_whatsapp>${!!$json.tem_whatsapp}</tem_whatsapp>` }] };
 return { json: { id: $json.id, req } };""")
 ia = anthropic(w)

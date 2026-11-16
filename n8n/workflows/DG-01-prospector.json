@@ -7,7 +7,7 @@
         "height": 380,
         "width": 460
       },
-      "id": "509272ee-747d-4713-b90d-771e26aeaebb",
+      "id": "0c8d5e3e-04b3-495d-a4cd-7bb2a52bb7fb",
       "name": "Leia-me",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
@@ -27,7 +27,7 @@
           ]
         }
       },
-      "id": "1df7a73c-e379-41d7-a1e0-7d3aec70a1a3",
+      "id": "db657f4f-1018-4712-80d9-6af7a21d6b47",
       "name": "Dias úteis 8h41",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -49,7 +49,7 @@
           "timeout": 60000
         }
       },
-      "id": "c3d4aa33-2a34-4172-8be3-31d480a163f5",
+      "id": "5302909d-53b8-4fa4-97c2-75e2e8a7f790",
       "name": "Rodada de descoberta",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -60,6 +60,7 @@
       "onError": "continueRegularOutput",
       "credentials": {
         "httpHeaderAuth": {
+          "id": "K5DzynP63ByJEnTy",
           "name": "DataGeo chave"
         }
       }
@@ -68,7 +69,7 @@
       "parameters": {
         "amount": 30
       },
-      "id": "78cf3694-5ec8-41d8-8aff-1652aa9ead24",
+      "id": "e3df9375-8ab3-4b03-a9d3-b08b1185fff5",
       "name": "Pausa 30s",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
@@ -90,7 +91,7 @@
           "timeout": 60000
         }
       },
-      "id": "bdb847ad-ce54-4bad-a9d6-b0c44295746c",
+      "id": "f1029a3a-5af7-4266-93c4-e83d773ae112",
       "name": "Completar contatos",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -101,6 +102,7 @@
       "onError": "continueRegularOutput",
       "credentials": {
         "httpHeaderAuth": {
+          "id": "K5DzynP63ByJEnTy",
           "name": "DataGeo chave"
         }
       }

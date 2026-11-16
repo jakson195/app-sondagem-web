@@ -7,7 +7,7 @@
         "height": 380,
         "width": 460
       },
-      "id": "f1217547-8fbb-4fb9-b7b4-eb063adc43ec",
+      "id": "0ec83302-aa2f-4f16-b6db-2d7ac45674ab",
       "name": "Leia-me",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
@@ -27,7 +27,7 @@
           ]
         }
       },
-      "id": "f2fdd7af-ad24-4cb2-a965-91db02f90d75",
+      "id": "6a4e5aca-c55f-4fd8-9303-50863ea0f6d8",
       "name": "Dias úteis de hora em hora",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -58,7 +58,7 @@
           "timeout": 60000
         }
       },
-      "id": "00784e9b-169d-4bcb-8151-ad7aaabeeeea",
+      "id": "f35764c9-a5bb-448c-8d00-6a30d1150815",
       "name": "Fila de envio",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -68,6 +68,7 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
+          "id": "K5DzynP63ByJEnTy",
           "name": "DataGeo chave"
         }
       }
@@ -76,7 +77,7 @@
       "parameters": {
         "jsCode": "return $input.all().filter(i => i.json && (i.json.id !== undefined && i.json.id !== null));"
       },
-      "id": "bea4afe4-6531-4dc0-ae47-bcb44e7bd89f",
+      "id": "f171856c-0501-4fe1-9510-ccc3f8a288ae",
       "name": "Só itens válidos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -97,7 +98,7 @@
           "replyTo": "jaksonn@gmail.com"
         }
       },
-      "id": "97dbd039-e17c-4d51-8f74-576ce8fb063d",
+      "id": "cf479c41-35c2-44de-81e0-01e3aff9ae68",
       "name": "Enviar",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
@@ -135,7 +136,7 @@
           "timeout": 60000
         }
       },
-      "id": "974f73c8-9d39-4fca-ae08-60f291c46dc5",
+      "id": "6827b4e9-a51d-498c-80d9-208022f7e1fb",
       "name": "Resultado: enviado",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -145,6 +146,7 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
+          "id": "K5DzynP63ByJEnTy",
           "name": "DataGeo chave"
         }
       }
@@ -171,7 +173,7 @@
           "timeout": 60000
         }
       },
-      "id": "07c78c0e-968c-4ae2-9e77-4b3c70072832",
+      "id": "fc8c73fe-dd5e-45b1-b390-388a87901fbc",
       "name": "Resultado: erro",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -181,6 +183,7 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
+          "id": "K5DzynP63ByJEnTy",
           "name": "DataGeo chave"
         }
       }

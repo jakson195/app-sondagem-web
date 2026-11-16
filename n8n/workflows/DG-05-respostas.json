@@ -7,7 +7,7 @@
         "height": 380,
         "width": 460
       },
-      "id": "db686ede-c3e7-4246-b35a-e40700cbf943",
+      "id": "6bd5eac2-daf8-4b3b-b2e8-0374eb80a9bb",
       "name": "Leia-me",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
@@ -24,7 +24,7 @@
           "customEmailConfig": "[\"UNSEEN\", [\"SUBJECT\", \"DataGeo\"]]"
         }
       },
-      "id": "d8cc4d07-0878-4172-bc4a-e265656efec5",
+      "id": "d716434d-f98e-49c5-b83f-0c9b498e6e90",
       "name": "Nova resposta",
       "type": "n8n-nodes-base.emailReadImap",
       "typeVersion": 2,
@@ -44,7 +44,7 @@
         "jsCode": "const de = String($json.from || '').match(/[^<\\s]+@[^>\\s]+/);\nconst txt = String($json.textPlain || $json.text || '').split(/\\n>|\\nEm .* escreveu:|\\nOn .* wrote:/)[0].slice(0, 2000);\nreturn { json: { de: de ? de[0].toLowerCase() : '', texto: (String($json.subject || '') + '\\n' + txt).slice(0, 2300) } };",
         "mode": "runOnceForEachItem"
       },
-      "id": "5ab8b730-9906-4781-bdb8-2748692bc604",
+      "id": "177aca67-23a2-45c0-939b-d5a0f60aaf53",
       "name": "Remetente e texto",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -75,7 +75,7 @@
           "timeout": 60000
         }
       },
-      "id": "c8be5933-595c-4b11-95a1-16f2fd4a2d78",
+      "id": "242373b6-9d34-48c6-a804-87eb02897102",
       "name": "Registrar resposta",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -85,6 +85,7 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
+          "id": "K5DzynP63ByJEnTy",
           "name": "DataGeo chave"
         }
       }
