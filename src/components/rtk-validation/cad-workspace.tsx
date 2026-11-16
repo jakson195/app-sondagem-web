@@ -733,6 +733,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [drenagem3dOpen, setDrenagem3dOpen] = useState(false);
   const [loteamentoAreaUtil, setLoteamentoAreaUtil] = useState("35");
   const [loteamentoAreaUtilAtiva, setLoteamentoAreaUtilAtiva] = useState(true);
+  /** Ao definir, mover ou excluir área verde / utilidade pública, refaz os lotes na hora. */
+  const [loteamentoAutoAtualizar, setLoteamentoAutoAtualizar] = useState(true);
   const [reservaPercent, setReservaPercent] = useState("20");
   const [reservaCanto, setReservaCanto] = useState<ReservaCanto>("superior_direita");
   const [areaUtilCanto, setAreaUtilCanto] = useState<ReservaCanto>("superior_direita");
@@ -838,6 +840,9 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const eixoEditActiveRef = useRef(false);
   const loteamentoRebuildInFlightRef = useRef(false);
   const loteamentoRebuildTimerRef = useRef<number | null>(null);
+  /** Área verde / utilidade pública sendo arrastada: ao soltar, os lotes são refeitos. */
+  const areaLoteamentoEditRef = useRef<{ id: string; antes: string; project: CadProject } | null>(null);
+  const ultimaGlebaLoteamentoRef = useRef<string | null>(null);
   const cursorRafRef = useRef<number | null>(null);
   const pendingCursorRef = useRef<{ x: number; y: number; z: number } | null>(null);
   const hudXRef = useRef<HTMLSpanElement>(null);
@@ -4159,13 +4164,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
     return true;
   }
 
-  function generateLoteamentoFromPanel() {
+  function generateLoteamentoFromPanel(opts?: { source?: CadProject; automatico?: boolean }) {
+    const src = opts?.source ?? project;
+    const automatico = opts?.automatico === true;
     setLoteamentoNotice(null);
     setLoteamentoError(null);
 
-    const glebaId = loteamentoGlebaId.trim() || selectedId;
+    const glebaId = automatico
+      ? acharGlebaDoLoteamento(src)
+      : loteamentoGlebaId.trim() || selectedId;
     const gleba = glebaId
-      ? project.entities.find((entity) => entity.id === glebaId)
+      ? src.entities.find((entity) => entity.id === glebaId)
       : null;
     if (
       !gleba ||
@@ -4232,7 +4241,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     const larguraFaixaDominioM = faixaRaw === "" ? (faixaOn ? 15 : undefined) : parseDrawNumber(faixaRaw);
     if (faixaOn && loteamentoLadosFaixa.length === 0) {
       setLoteamentoError(t("loteamento.pickFaixaNeedLado"));
-      void startPickFaixaDominio();
+      if (!automatico) void startPickFaixaDominio();
       return;
     }
     if (faixaOn && (larguraFaixaDominioM == null || larguraFaixaDominioM <= 0)) {
@@ -4243,7 +4252,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     setLoteamentoBusy(true);
     try {
       const result = executeCadAiCommand(
-        project,
+        src,
         {
           acao: "gerar_loteamento",
           entidade_id: gleba.id,
@@ -4268,7 +4277,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
           prefixo_quadra: loteamentoPrefixo.trim() || "Quadra",
           percentual_area_util: percentAreaUtil ?? undefined,
           canto_area_util: parseReservaCanto(areaUtilCanto) ?? areaUtilCanto,
-          area_util_automatica: loteamentoAreaUtilAtiva,
+          // Atualização automática: a área de utilidade pública fica onde o usuário deixou.
+          area_util_automatica: automatico ? false : loteamentoAreaUtilAtiva,
           percentual_esquina: parseEsquinaPercent(),
           area_minima_m2: resolveCurrentAreaMinimaInterno(),
         },
@@ -4278,18 +4288,87 @@ export function CadWorkspace({ userId }: { userId: string }) {
         setLoteamentoError(result.message);
         return;
       }
+      projectLiveRef.current = result.project;
       setProject(result.project);
-      if (result.selectedId !== undefined) setSelectedId(result.selectedId);
+      ultimaGlebaLoteamentoRef.current = gleba.id;
+      if (!automatico && result.selectedId !== undefined) setSelectedId(result.selectedId);
       for (const effect of result.sideEffects ?? []) {
         handleAiSideEffect(effect);
       }
-      setLoteamentoNotice(result.message);
+      setLoteamentoNotice(automatico ? `${t("loteamento.autoAtualizado")} ${result.message}` : result.message);
     } catch (err) {
       setLoteamentoError(err instanceof Error ? err.message : t("commands.error"));
     } finally {
       setLoteamentoBusy(false);
     }
   }
+  function temLotesGerados(src: CadProject): boolean {
+    return src.entities.some((e) => e.type === "polyline" && e.closed && e.layerId === LOTEAMENTO_LOTES_LAYER_ID);
+  }
+
+  /** Gleba do loteamento atual: a última usada, a escolhida no painel ou o maior polígono que contém os lotes. */
+  function acharGlebaDoLoteamento(src: CadProject): string | null {
+    const valida = (id: string | null | undefined) =>
+      Boolean(id) &&
+      src.entities.some((e) => e.id === id && e.type === "polyline" && e.closed && e.vertices.length >= 3);
+    if (valida(ultimaGlebaLoteamentoRef.current)) return ultimaGlebaLoteamentoRef.current;
+    if (valida(loteamentoGlebaId.trim())) return loteamentoGlebaId.trim();
+    const lote = src.entities.find(
+      (e): e is CadPolylineEntity =>
+        e.type === "polyline" && Boolean(e.closed) && e.layerId === LOTEAMENTO_LOTES_LAYER_ID,
+    );
+    if (!lote) return null;
+    const c = polygonCentroid(lote.vertices);
+    const fora = new Set<string>([
+      AREA_RESERVA_LEGAL_LAYER_ID,
+      AREA_UTIL_LAYER_ID,
+      AREA_APP_LAYER_ID,
+      AREA_FAIXA_DOMINIO_LAYER_ID,
+      CAD_TEXT_LAYER.id,
+    ]);
+    let melhor: { id: string; area: number } | null = null;
+    for (const e of src.entities) {
+      if (e.type !== "polyline" || !e.closed || e.vertices.length < 3) continue;
+      if (fora.has(e.layerId) || e.layerId.startsWith("loteamento_") || e.layerId.startsWith("area_")) continue;
+      if (!pointInPolygon(c.x, c.y, e.vertices)) continue;
+      const area = computePolygonMetrics(e.vertices, true).areaM2;
+      if (!melhor || area > melhor.area) melhor = { id: e.id, area };
+    }
+    return melhor?.id ?? null;
+  }
+
+  /** Refaz os lotes depois de mexer na área verde / utilidade pública (se já houver loteamento). */
+  function atualizarLotesAposArea(antes: CadProject, depois: CadProject) {
+    if (!loteamentoAutoAtualizar || !temLotesGerados(depois)) return;
+    window.setTimeout(() => {
+      pushUndo(modifyUndoRef.current, { project: antes, selectedId });
+      modifyRedoRef.current.length = 0;
+      generateLoteamentoFromPanel({ source: projectLiveRef.current, automatico: true });
+    }, 0);
+  }
+
+  function iniciarEdicaoAreaLoteamento(entity: CadPolylineEntity) {
+    if (entity.layerId !== AREA_RESERVA_LEGAL_LAYER_ID && entity.layerId !== AREA_UTIL_LAYER_ID) {
+      areaLoteamentoEditRef.current = null;
+      return;
+    }
+    areaLoteamentoEditRef.current = {
+      id: entity.id,
+      antes: JSON.stringify(entity.vertices),
+      project: projectLiveRef.current,
+    };
+  }
+
+  function concluirEdicaoAreaLoteamento() {
+    const ed = areaLoteamentoEditRef.current;
+    areaLoteamentoEditRef.current = null;
+    if (!ed) return;
+    const atual = projectLiveRef.current;
+    const ent = atual.entities.find((e) => e.id === ed.id);
+    if (!ent || ent.type !== "polyline" || JSON.stringify(ent.vertices) === ed.antes) return;
+    atualizarLotesAposArea(ed.project, atual);
+  }
+
 
   function applyLoteamentoLotSizeFromPanel(mode: "quadra" | "lote") {
     setLoteamentoNotice(null);
@@ -4388,6 +4467,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
           })}`
         : "";
       setLoteamentoNotice(`${done}${reduzido} ${t("loteamento.reservaDragHint")}`);
+      projectLiveRef.current = result.project;
+      atualizarLotesAposArea(project, result.project);
       setPointActionNotice(
         `Reservados ${formatAreaBr(result.reservedM2)} (${pct}%) — arraste o polígono verde para mover.`,
       );
@@ -4478,6 +4559,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
     setSelectedId(null);
     setSelectedIds([]);
     setLoteamentoNotice(t("loteamento.reservaRemoved"));
+    projectLiveRef.current = result.project;
+    atualizarLotesAposArea(project, result.project);
   }
 
   function apagarAreaUtil() {
@@ -4492,6 +4575,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
     setSelectedIds([]);
     setLoteamentoAreaUtilAtiva(false);
     setLoteamentoNotice(t("loteamento.areaUtilRemoved"));
+    projectLiveRef.current = result.project;
+    atualizarLotesAposArea(project, result.project);
   }
 
   function resetarLoteamento() {
@@ -8976,7 +9061,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     <button
                       type="button"
                       disabled={loteamentoBusy}
-                      onClick={generateLoteamentoFromPanel}
+                      onClick={() => generateLoteamentoFromPanel()}
                       className="mt-3 w-full rounded-lg bg-[#0f2848] px-3 py-2 text-xs font-medium text-white hover:bg-[#1e3a5f] disabled:opacity-50"
                     >
                       {loteamentoBusy ? t("loteamento.working") : t("loteamento.generate")}
@@ -9114,6 +9199,15 @@ export function CadWorkspace({ userId }: { userId: string }) {
                         <option value="inferior_direita">{t("loteamento.cantoInferiorDireita")}</option>
                         <option value="inferior_esquerda">{t("loteamento.cantoInferiorEsquerda")}</option>
                       </select>
+                    </label>
+                    <label className="flex items-start gap-2 text-[10px] text-[#374151]">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={loteamentoAutoAtualizar}
+                        onChange={(e) => setLoteamentoAutoAtualizar(e.target.checked)}
+                      />
+                      <span>{t("loteamento.autoAtualizarLabel")}</span>
                     </label>
                     <button
                       type="button"
@@ -10980,6 +11074,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       setSelectedId(cand.id);
                       setSelectedVertexIndex(vtx);
                       setVertexDragIndex(vtx);
+                      iniciarEdicaoAreaLoteamento(cand);
                       return;
                     }
                   }
@@ -11033,6 +11128,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                             pointInPolygon(c.x, c.y, item.vertices),
                         ));
                     setSelectedId(hitReserva.id);
+                    iniciarEdicaoAreaLoteamento(hitReserva);
                     setEntityMove({
                       id: hitReserva.id,
                       originX: world.x,
@@ -11147,6 +11243,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 setEntityMove(null);
                 setPvDrag(null);
                 if (shouldRebuildEixo) applyEditedEixosToLoteamento();
+                concluirEdicaoAreaLoteamento();
               }}
               onMouseLeave={() => {
                 if (alterarEixoIgnoreUpRef.current) {
@@ -11167,6 +11264,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 setHoverLotId(null);
                 setDrawPreview(null);
                 if (shouldRebuildEixo) applyEditedEixosToLoteamento();
+                concluirEdicaoAreaLoteamento();
               }}
               onDoubleClick={() => {
                 if (tool === "polyline" && draft.length >= 3) finishPolyline(true);

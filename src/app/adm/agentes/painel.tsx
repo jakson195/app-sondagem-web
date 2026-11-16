@@ -17,7 +17,7 @@ export default function PainelAgentes() {
   return (
     <>
       <div id="ag-raiz" className="ag-escopo" />
-      <Script src="/adm-agentes.js?v=1" strategy="afterInteractive" />
+      <Script src="/adm-agentes.js?v=2" strategy="afterInteractive" />
     </>
   );
 }

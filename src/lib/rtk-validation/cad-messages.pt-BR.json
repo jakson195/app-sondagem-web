@@ -469,6 +469,8 @@
       "reservaApply": "Definir área verde",
       "reservaRemove": "Excluir área verde",
       "reservaRemoved": "Área verde excluída.",
+      "autoAtualizado": "Lotes atualizados automaticamente.",
+      "autoAtualizarLabel": "Atualizar lotes automaticamente ao definir, mover ou excluir a área verde e a área de utilidade pública",
       "retanguloReduzido": "Não coube {pedido} como retângulo nesse canto — criado com {area}. Tente outro canto para a área inteira.",
       "reservaWorking": "Criando área verde…",
       "reservaDragHint": "Arraste o quadrado verde para mover ou puxe os vértices (quadrados) para ajustar a forma. Lotes e vias sob a área verde são recortados.",
