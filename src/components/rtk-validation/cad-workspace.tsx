@@ -308,6 +308,12 @@ import {
   CadToolsSidebar,
   type CadToolsTab,
 } from "@/components/rtk-validation/cad-tools-sidebar";
+import {
+  CAD_MODULES,
+  CadModuleBar,
+  moduloAtivo,
+  type CadModuleId,
+} from "@/components/rtk-validation/cad-module-bar";
 import { CadChromeHeader } from "@/components/rtk-validation/cad-chrome-header";
 import { CadChromeToolbar } from "@/components/rtk-validation/cad-chrome-toolbar";
 import { CadModifyPanel } from "@/components/rtk-validation/cad-modify-panel";
@@ -812,6 +818,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [profilePickIds, setProfilePickIds] = useState<string[]>([]);
   const [alignmentPickMode, setAlignmentPickMode] = useState(false);
   const [toolsTab, setToolsTab] = useState<CadToolsTab>("draw");
+  const [moduloEscolhido, setModuloEscolhido] = useState<CadModuleId | null>(null);
+  const viasSecaoRef = useRef<HTMLDivElement | null>(null);
   const [importKind, setImportKind] = useState<CadImportKind | null>(null);
   const importKindRef = useRef<CadImportKind | null>(null);
   importKindRef.current = importKind;
@@ -4164,7 +4172,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
     return true;
   }
 
-  function generateLoteamentoFromPanel(opts?: { source?: CadProject; automatico?: boolean }) {
+  function generateLoteamentoFromPanel(opts?: { source?: CadProject; automatico?: boolean; criarAreaUtil?: boolean }) {
     const src = opts?.source ?? project;
     const automatico = opts?.automatico === true;
     setLoteamentoNotice(null);
@@ -4278,7 +4286,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
           percentual_area_util: percentAreaUtil ?? undefined,
           canto_area_util: parseReservaCanto(areaUtilCanto) ?? areaUtilCanto,
           // Atualização automática: a área de utilidade pública fica onde o usuário deixou.
-          area_util_automatica: automatico ? false : loteamentoAreaUtilAtiva,
+          area_util_automatica: opts?.criarAreaUtil ? true : automatico ? false : loteamentoAreaUtilAtiva,
           percentual_esquina: parseEsquinaPercent(),
           area_minima_m2: resolveCurrentAreaMinimaInterno(),
         },
@@ -4302,6 +4310,31 @@ export function CadWorkspace({ userId }: { userId: string }) {
       setLoteamentoBusy(false);
     }
   }
+  /** Barra de módulos: abre as ferramentas do módulo no painel lateral (ou a maquete, no 3D). */
+  function abrirModulo(id: CadModuleId) {
+    if (id === "3d") {
+      if (!maqueteReady.ok) {
+        setModuloEscolhido("loteamento");
+        setToolsTab("loteamento");
+        setSidebarCollapsed(false);
+        setLoteamentoNotice(t("modules.need3d"));
+        return;
+      }
+      setDrenagem3dOpen(false);
+      setMaqueteOpen(true);
+      return;
+    }
+    const mod = CAD_MODULES.find((m) => m.id === id);
+    if (!mod) return;
+    setModuloEscolhido(id);
+    setSidebarCollapsed(false);
+    if (!mod.tabs.includes(toolsTab)) setToolsTab(mod.tabs[0]!);
+    if (id === "vias") {
+      setToolsTab("loteamento");
+      window.setTimeout(() => viasSecaoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    }
+  }
+
   function temLotesGerados(src: CadProject): boolean {
     return src.entities.some((e) => e.type === "polyline" && e.closed && e.layerId === LOTEAMENTO_LOTES_LAYER_ID);
   }
@@ -4345,6 +4378,22 @@ export function CadWorkspace({ userId }: { userId: string }) {
       modifyRedoRef.current.length = 0;
       generateLoteamentoFromPanel({ source: projectLiveRef.current, automatico: true });
     }, 0);
+  }
+
+  /** Cria (ou recria) a área de utilidade pública: ela depende das ruas, então o loteamento é refeito. */
+  function criarAreaUtil() {
+    setLoteamentoNotice(null);
+    setLoteamentoError(null);
+    setLoteamentoAreaUtilAtiva(true);
+    if (!temLotesGerados(projectLiveRef.current)) {
+      setLoteamentoNotice(t("loteamento.areaUtilSeraCriada"));
+      return;
+    }
+    pushUndo(modifyUndoRef.current, { project: projectLiveRef.current, selectedId });
+    modifyRedoRef.current.length = 0;
+    const glebaId = acharGlebaDoLoteamento(projectLiveRef.current);
+    if (glebaId) ultimaGlebaLoteamentoRef.current = glebaId;
+    generateLoteamentoFromPanel({ source: projectLiveRef.current, automatico: true, criarAreaUtil: true });
   }
 
   function iniciarEdicaoAreaLoteamento(entity: CadPolylineEntity) {
@@ -6676,6 +6725,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
       */}
 
           <div className="relative z-[60] flex min-h-0 flex-1 flex-col">
+          <CadModuleBar
+            active={moduloAtivo(toolsTab, moduloEscolhido)}
+            disabled3d={!maqueteReady.ok}
+            onSelect={abrirModulo}
+          />
           <div className="flex min-h-0 flex-1 gap-0">
           <div
             className="flex h-full min-h-0 shrink-0 flex-col"
@@ -9283,7 +9337,16 @@ export function CadWorkspace({ userId }: { userId: string }) {
                           {t("loteamento.areaUtilRemove")}
                         </button>
                       </>
-                    ) : null}
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={criarAreaUtil}
+                        disabled={loteamentoBusy}
+                        className="w-full rounded-lg bg-orange-600 px-3 py-2 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+                      >
+                        {t("loteamento.areaUtilApply")}
+                      </button>
+                    )}
                   </div>
                   <div className="rounded-lg border border-teal-200 bg-teal-50/70 px-3 py-2 space-y-2">
                     <h4 className="text-xs font-semibold text-[#115e59]">{t("loteamento.appTitle")}</h4>
@@ -9381,7 +9444,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-[#64748b]">{t("loteamento.urbano.exportar")}</p>
                     <button type="button" title={t("loteamento.urbano.kmlHint")} onClick={exportarLoteamentoKml} className="w-full rounded-lg border border-emerald-700 px-2 py-1.5 text-[11px] font-medium text-emerald-800 hover:bg-emerald-50">{t("loteamento.urbano.kml")}</button>
                   </div>
-                  <div className="rounded-lg border border-[#bfdbfe] bg-[#eff6ff] px-3 py-2 space-y-2">
+                  <div ref={viasSecaoRef} className="scroll-mt-2 rounded-lg border border-[#bfdbfe] bg-[#eff6ff] px-3 py-2 space-y-2">
                     <h4 className="text-xs font-semibold text-[#0f2848]">{t("loteamento.perfil.title")}</h4>
                     <p className="text-[10px] text-[#6b7280]">{t("loteamento.perfil.hint")}</p>
                     <button

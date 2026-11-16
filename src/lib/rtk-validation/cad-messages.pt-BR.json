@@ -1,5 +1,23 @@
 {
   "rtkCad": {
+    "modules": {
+      "aria": "Módulos do projeto",
+      "gleba": "Gleba",
+      "glebaHint": "Desenhar ou importar a gleba, camadas, propriedades e comandos.",
+      "loteamento": "Loteamento",
+      "loteamentoHint": "Gerar quadras e lotes, área verde, utilidade pública, APP e REURB.",
+      "vias": "Vias",
+      "viasHint": "Eixos, perfis das ruas projetadas e seção-tipo.",
+      "terreno": "Terreno",
+      "terrenoHint": "Curvas de nível, TIN, hipsometria, perfis e volumetria.",
+      "infra": "Infraestrutura",
+      "infraHint": "Redes de drenagem e esgoto.",
+      "documentos": "Documentos",
+      "documentosHint": "Memorial descritivo e documentos do projeto.",
+      "3d": "3D",
+      "3dHint": "Abrir a maquete eletrônica do loteamento.",
+      "need3d": "Gere o loteamento (vias e lotes) para abrir a maquete 3D."
+    },
     "pageTitle": "Ambiente CAD",
     "pageDescription": "Importe pontos, desenhe geometrias e exporte para DXF, DWG, SHP ou ODS.",
     "meta": {
@@ -449,6 +467,7 @@
       "areaUtilPercent": "Utilidade pública (% da gleba, com ruas)",
       "areaUtilCanto": "Posição",
       "areaUtilApply": "Criar área útil",
+      "areaUtilSeraCriada": "Área útil ativada: ela será criada quando você clicar em Gerar loteamento (as ruas entram na conta do %).",
       "areaUtilRemove": "Remover área útil",
       "areaUtilRemoved": "Área útil removida. O próximo loteamento ocupa a gleba inteira.",
       "areaUtilAtiva": "Área útil atual: {area} (recalculada a cada geração).",

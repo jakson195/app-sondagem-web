@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { executeCadAiCommand } from "./ai-command-executor";
-import { applyReservaLegalToProject, AREA_RESERVA_LEGAL_LAYER_ID, AREA_UTIL_LAYER_ID } from "./loteamento-tools";
+import { applyReservaLegalToProject, AREA_RESERVA_LEGAL_LAYER_ID, AREA_UTIL_LAYER_ID, removerAreaUtil } from "./loteamento-tools";
 import { pointInPolygon } from "./polygon-utils";
 import type { CadPolylineEntity, CadProject } from "./types";
 
@@ -113,5 +113,20 @@ describe("atualização automática dos lotes ao mexer nas áreas", () => {
         (e) => e.type === "polyline" && e.layerId === "loteamento_vias" && pointInPolygon(c1.x, c1.y, e.vertices),
       );
     assert.ok(ocupado, "o lugar antigo da área verde ficou vazio");
+  });
+
+  it("área útil removida e criada de novo pelo botão (regera com área útil automática)", () => {
+    const util = { area_util_automatica: true, percentual_area_util: 35, canto_area_util: "inferior_direita" };
+    const r1 = gerar(glebaProject(), util);
+    assert.equal(r1.ok, true, r1.ok ? "" : r1.message);
+    const semUtil = removerAreaUtil(r1.project).project;
+    const r2 = gerar(semUtil, { area_util_automatica: false });
+    assert.equal(r2.ok, true, r2.ok ? "" : r2.message);
+    assert.equal(r2.project.entities.some((e) => e.layerId === AREA_UTIL_LAYER_ID), false, "área útil voltou sozinha");
+    const r3 = gerar(r2.project, util);
+    assert.equal(r3.ok, true, r3.ok ? "" : r3.message);
+    const nova = r3.project.entities.find((e) => e.layerId === AREA_UTIL_LAYER_ID) as CadPolylineEntity;
+    assert.ok(nova, "o botão Criar área útil não recriou a área");
+    assert.equal(lotesDentro(r3.project, nova), 0);
   });
 });
