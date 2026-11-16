@@ -61,6 +61,22 @@
   .ag-modal{position:fixed;top:0;right:0;bottom:0;width:min(620px,100%);background:var(--ag-paper);border-left:1px solid var(--ag-line);z-index:31;overflow-y:auto;box-shadow:-8px 0 24px rgba(22,35,58,.18)}
   .ag-escopo .ag-ev{font-size:13px;border-bottom:1px solid #E3DCCB;padding:6px 0;word-break:break-word} .ag-ev a{font-weight:600}
   .ag-escopo .ag-crit{display:grid;grid-template-columns:1fr auto;gap:2px 12px;font-size:13px}
+
+  .ag-escopo [hidden]{display:none!important}
+  .ag-escopo .ag-shell{display:grid;grid-template-columns:220px minmax(0,1fr);gap:22px;align-items:start}
+  .ag-escopo .ag-lado{position:sticky;top:12px;background:var(--ag-card);border:1px solid var(--ag-line);border-radius:var(--ag-radius);padding:10px}
+  .ag-escopo .ag-lado .t{font-family:ui-monospace,Consolas,monospace;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ag-ink-soft);padding:4px 8px 8px}
+  .ag-escopo .ag-lado nav{display:flex;flex-direction:column;gap:2px}
+  .ag-escopo .ag-lado a{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;color:var(--ag-ink);text-decoration:none;font-size:13.5px;font-weight:500}
+  .ag-escopo .ag-lado a:hover{background:var(--ag-paper-dim)}
+  .ag-escopo .ag-lado a[aria-current=page]{background:var(--ag-seal);color:#fff}
+  .ag-escopo .ag-lado .bd{font-size:11px;min-width:22px;text-align:center;padding:1px 7px;border-radius:10px;background:var(--ag-paper-dim);color:var(--ag-ink-soft)}
+  .ag-escopo .ag-lado a[aria-current=page] .bd{background:rgba(255,255,255,.25);color:#fff}
+  .ag-escopo .ag-lado .bd.alerta{background:#fef3c7;color:#92400e}
+  .ag-escopo .ag-lado .rodape{border-top:1px solid var(--ag-line);margin-top:10px;padding:10px 8px 2px;font-size:12px;color:var(--ag-ink-soft)}
+  .ag-escopo .ag-lado .rodape b{color:var(--ag-green)} .ag-escopo .ag-lado .rodape b.off{color:#b91c1c}
+  .ag-escopo .ag-sec h2{font-size:20px;font-weight:600;margin:0 0 4px} .ag-escopo .ag-sec .sub{font-size:13px;color:var(--ag-ink-soft);margin:0 0 14px}
+  @media (max-width:820px){.ag-escopo .ag-shell{grid-template-columns:1fr}.ag-escopo .ag-lado{position:static}.ag-escopo .ag-lado nav{flex-direction:row;flex-wrap:wrap}}
   `;
   const PRODUTO = { cad: 'Ambiente CAD', geo: 'GEO & temporal', viabilidade: 'Viabilidade', completo: 'Plataforma completa', nenhum: 'Nenhum' };
   const ETAPA = { DESCOBERTO: 'Descoberto', EM_ANALISE: 'Em an\u00e1lise', QUALIFICADO: 'Qualificado', APROVADO: 'Aprovado p/ contato', CONTATADO: 'Contatado',
@@ -68,7 +84,60 @@
   const CRIT = { aderencia_produto: ['Ader\u00eancia aos produtos', 35], evidencia_servico: ['Evid\u00eancia do servi\u00e7o', 25], volume_recorrente: ['Volume recorrente', 15],
     segmento: ['Segmento', 10], canal_comercial: ['Canal comercial', 10], qualidade_evidencias: ['Qualidade das evid\u00eancias', 5] };
 
-  let api, avisar, raiz, estado = { painel: null, filtro: {}, lista: null, pagina: 1 };
+  let api, avisar, raiz, estado = { painel: null, filtro: {}, lista: null, pagina: 1, secao: 'geral' };
+
+  // ------------------------------------------------------------ menu lateral (uma seção por vez; #hash guarda a seção)
+  const SECOES = [
+    ['geral', 'Visão geral', 'Agentes, chaves liga/desliga e números do dia.'],
+    ['empresas', 'Empresas (funil)', 'Todas as organizações encontradas, por etapa do funil. Clique para ver detalhes e agir.'],
+    ['whatsapp', 'WhatsApp a enviar', 'Mensagens prontas; você envia pelo seu WhatsApp, 1 clique por empresa.'],
+    ['mensagens', 'E-mails e fila', 'O que o agente de contato enviou, agendou ou recusou.'],
+    ['segmentos', 'Por segmento', 'Resultado da prospecção por segmento.'],
+    ['rodadas', 'Rodadas de descoberta', 'Histórico das execuções do Prospector.'],
+  ];
+  const secaoDoHash = () => { const h = (location.hash || '').replace('#', ''); return SECOES.some(([k]) => k === h) ? h : 'geral'; };
+  function irPara(sec) {
+    estado.secao = sec;
+    if (location.hash !== '#' + sec) history.replaceState(null, '', '#' + sec);
+    desenhar();
+  }
+  function menuLateral(p) {
+    const m = estado.msgs || {}; const c = p.config || {};
+    const badge = { empresas: [p.total, false], whatsapp: [(m.whatsapp || []).length, (m.whatsapp || []).length > 0],
+      mensagens: [m.agendados, false], geral: [p.em_revisao, p.em_revisao > 0] };
+    return el('aside', { class: 'ag-lado', 'aria-label': 'Seções dos agentes comerciais' },
+      el('div', { class: 't' }, 'Agentes comerciais'),
+      el('nav', {}, SECOES.map(([k, t]) => {
+        const b = badge[k];
+        return el('a', { href: '#' + k, 'aria-current': estado.secao === k ? 'page' : null,
+          onclick: (e) => { e.preventDefault(); irPara(k); } }, t,
+          b && b[0] ? el('span', { class: 'bd' + (b[1] ? ' alerta' : ''), title: k === 'geral' ? 'em revisão' : '' }, String(b[0])) : null);
+      })),
+      el('div', { class: 'rodape' }, 'Agentes: ', el('b', { class: c.growth_enabled ? '' : 'off' }, c.growth_enabled ? 'ligados' : 'pausados'),
+        el('br'), 'Contato por e-mail: ', el('b', { class: c.growth_enabled && c.auto_outreach ? '' : 'off' }, c.growth_enabled && c.auto_outreach ? 'ligado' : 'desligado')));
+  }
+  function conteudoSecao(p) {
+    const sec = estado.secao; const [, titulo, sub] = SECOES.find(([k]) => k === sec);
+    const cab = [el('h2', {}, titulo), el('p', { class: 'sub' }, sub)];
+    if (sec === 'geral') return [cab,
+      el('p', { class: 'ag-intro' }, 'Campanha da DataGeo Digital (loteamento: CAD, GEO e viabilidade), separada das outras marcas. ',
+        'Os agentes só pesquisam fontes públicas autorizadas. O e-mail automático (agente 4) só sai com a chave Contato ligada, dentro do limite diário.'),
+      agentes(p),
+      el('div', { class: 'barra' },
+        el('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: rodar }, 'Rodar descoberta agora'),
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => carregar() }, 'Atualizar')),
+      cartoes(p)];
+    if (sec === 'empresas') return [cab, filtros(p), el('div', { id: 'ag-lista' }, el('div', { class: 'vazio' }, 'Carregando empresas…'))];
+    if (sec === 'whatsapp') return [cab, whatsapp(estado.msgs)];
+    if (sec === 'mensagens') return [cab, mensagens(estado.msgs)];
+    if (sec === 'segmentos') return [cab, tabelaSegmentos(p)];
+    return [cab, execucoes(p)];
+  }
+  function desenhar() {
+    const p = estado.painel; if (!p || !raiz) return;
+    raiz.replaceChildren(el('div', { class: 'ag-shell' }, menuLateral(p), el('section', { class: 'ag-sec' }, conteudoSecao(p))));
+    if (estado.secao === 'empresas') { if (estado.lista) document.getElementById('ag-lista').replaceChildren(tabelaEmpresas(estado.lista)); else carregarLista(); }
+  }
 
   function el(tag, attrs, ...filhos) {
     const n = document.createElement(tag);
@@ -114,7 +183,9 @@
         const k = card('4 \u00b7 Contato (e-mail)', chave('auto_outreach', c.auto_outreach), lig,
           `Escreve e envia e-mail do contato@datageodigital.com.br para as aprovadas que publicam e-mail no pr\u00f3prio dom\u00ednio. 1 lembrete ap\u00f3s ${c.lembrete_dias || 7} dias; quem responde ou se descadastra sai da fila.`,
           lig ? `Hoje: ${m.enviados_hoje ?? 0}/${m.limite_dia ?? c.limite_envio_dia} \u00b7 ${m.agendados ?? 0} na fila` : 'DESLIGADO \u2014 nada \u00e9 enviado');
-        k.append(el('label', { style: 'margin:4px 0 0' }, 'Limite di\u00e1rio'), sel);
+        k.append(el('label', { style: 'margin:4px 0 0' }, 'Limite di\u00e1rio'), sel,
+          el('label', { style: 'margin:8px 0 0;display:flex;align-items:center;gap:8px' }, chave('envio_revisao', c.envio_revisao !== false),
+            c.envio_revisao !== false ? 'Revisar antes de enviar (cada e-mail espera o seu \u201cAprovar\u201d)' : 'Envio direto (sem revis\u00e3o)'));
         return k;
       })());
   }
@@ -176,14 +247,20 @@
   }
 
   const TIPO = { primeiro: 'E-mail', lembrete: 'Lembrete', whatsapp: 'WhatsApp' };
-  const ST_MSG = { agendado: 'Na fila', enviando: 'Enviando', enviado: 'Enviado', erro: 'Erro', cancelado: 'Cancelado', rascunho: 'Recusado' };
+  const ST_MSG = { agendado: 'Na fila', enviando: 'Enviando', enviado: 'Enviado', erro: 'Erro', cancelado: 'Cancelado', rascunho: 'Aguardando sua aprova\u00e7\u00e3o' };
+  async function aprovarMsg(id, ev) {
+    if (ev) ev.currentTarget.disabled = true;
+    try { const r = await api('/api/adm/agentes?acao=agentes_aprovar_msg', { method: 'POST', body: JSON.stringify({ id }) });
+      avisar(r && r.ok ? 'Aprovado \u2014 entra na fila de envio.' : 'N\u00e3o deu para aprovar: ' + ((r && r.motivo) || 'erro'), !(r && r.ok)); carregar(true); }
+    catch (e) { avisar(e.message, true); }
+  }
   async function cancelarMsg(id) {
     try { await api('/api/adm/agentes?acao=agentes_cancelar_msg', { method: 'POST', body: JSON.stringify({ id }) }); avisar('Mensagem cancelada.'); carregar(true); }
     catch (e) { avisar(e.message, true); }
   }
   function mensagens(m) {
     if (!m) return el('div', { class: 'vazio' }, 'N\u00e3o consegui carregar as mensagens.');
-    const topo = el('div', { class: 'contagem' }, `Enviados: ${m.enviados} \u00b7 respostas: ${m.respostas} \u00b7 descadastros: ${m.descadastros} \u00b7 aprovadas sem e-mail nem WhatsApp (n\u00e3o recebem nada): ${m.aprovadas_sem_email}`);
+    const topo = el('div', { class: 'contagem' }, `${m.envio_revisao ? 'Revis\u00e3o ligada: ' + (m.para_aprovar ?? 0) + ' e-mail(s) aguardando sua aprova\u00e7\u00e3o \u00b7 ' : ''}Enviados: ${m.enviados} \u00b7 respostas: ${m.respostas} \u00b7 descadastros: ${m.descadastros} \u00b7 aprovadas sem e-mail nem WhatsApp (n\u00e3o recebem nada): ${m.aprovadas_sem_email}`);
     if (!m.itens.length) return el('div', {}, topo, el('div', { class: 'vazio' }, 'Nenhum e-mail ainda. Com a chave \u201cContato\u201d ligada, o agente escreve para as empresas aprovadas e envia aos poucos ao longo do dia.'));
     return el('div', {}, topo, el('table', { class: 'ag-tab-sm' },
       el('thead', {}, el('tr', {}, ['Quando', 'Empresa', 'Para', 'Assunto', 'Situa\u00e7\u00e3o', ''].map((t) => el('th', {}, t)))),
@@ -193,7 +270,8 @@
         el('td', { 'data-rotulo': 'Para' }, x.para),
         el('td', { 'data-rotulo': 'Assunto', title: x.corpo }, (x.tipo === 'whatsapp' ? 'WhatsApp: ' + String(x.corpo || '').slice(0, 60) + '\u2026' : (x.tipo === 'lembrete' ? '\u21bb ' : '') + x.assunto)),
         el('td', { 'data-rotulo': 'Situa\u00e7\u00e3o' }, (ST_MSG[x.status] || x.status) + (x.erro ? ' \u2014 ' + x.erro : x.cancelado_motivo ? ' \u2014 ' + x.cancelado_motivo : '')),
-        el('td', {}, ['agendado', 'erro'].includes(x.status) ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => cancelarMsg(x.id) }, 'Cancelar') : ''))))));
+        el('td', {}, x.status === 'rascunho' && x.tipo === 'primeiro' ? el('button', { class: 'btn btn-sm', type: 'button', onclick: (ev) => aprovarMsg(x.id, ev) }, 'Aprovar') : '',
+          ['agendado', 'erro', 'rascunho'].includes(x.status) ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => cancelarMsg(x.id) }, 'Cancelar') : ''))))));
   }
 
   const foneFmt = (n) => String(n || '').replace(/^55(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3');
@@ -317,7 +395,7 @@
     const qs = new URLSearchParams({ acao: 'agentes_empresas', limite: '50', pagina: String(estado.pagina) });
     for (const [k, v] of Object.entries(estado.filtro)) if (v) qs.set(k, v);
     try {
-      const d = await api('/api/admin?' + qs);
+      const d = await api('/api/adm/agentes?' + qs);
       estado.lista = somar && estado.lista ? { total: d.total, itens: estado.lista.itens.concat(d.itens) } : d;
       area.replaceChildren(tabelaEmpresas(estado.lista));
     } catch (e) { area.replaceChildren(el('div', { class: 'vazio' }, e.message)); }
@@ -325,21 +403,8 @@
   async function carregar(silencioso) {
     try {
       const [p, msgs] = await Promise.all([api('/api/adm/agentes?acao=agentes_painel'), api('/api/adm/agentes?acao=agentes_mensagens').catch(() => null)]);
-      estado.painel = p; estado.msgs = msgs;
-      raiz.replaceChildren(
-        el('p', { class: 'ag-intro' }, 'Campanha da DataGeo Digital (loteamento: CAD, GEO e viabilidade), separada das outras marcas. ',
-          'Os agentes s\u00f3 pesquisam fontes p\u00fablicas autorizadas. O e-mail autom\u00e1tico (agente 4) s\u00f3 sai com a chave Contato ligada, dentro do limite di\u00e1rio.'),
-        agentes(p),
-        el('div', { class: 'barra' },
-          el('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: rodar }, 'Rodar descoberta agora'),
-          el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: () => carregar() }, 'Atualizar')),
-        cartoes(p),
-        el('h3', { class: 'ag-h3' }, 'Empresas'), filtros(p), el('div', { id: 'ag-lista' }),
-        el('h3', { class: 'ag-h3' }, 'WhatsApp para enviar'), whatsapp(estado.msgs),
-        el('h3', { class: 'ag-h3' }, 'Mensagens enviadas e na fila'), mensagens(estado.msgs),
-        el('h3', { class: 'ag-h3' }, 'Por segmento'), tabelaSegmentos(p),
-        el('h3', { class: 'ag-h3' }, 'Rodadas de descoberta'), execucoes(p));
-      estado.pagina = 1; await carregarLista();
+      estado.painel = p; estado.msgs = msgs; estado.lista = null; estado.pagina = 1;
+      desenhar();
     } catch (e) {
       raiz.replaceChildren(el('div', { class: 'vazio' }, e.status === 503 ? e.message : 'N\u00e3o consegui carregar os agentes: ' + e.message));
       if (!silencioso) avisar(e.message, true);
@@ -372,7 +437,7 @@
   }
   function iniciar() {
     const alvo = document.getElementById('ag-raiz'); if (!alvo) return;
-    api = apiLocal; avisar = avisarLocal; raiz = alvo;
+    api = apiLocal; avisar = avisarLocal; raiz = alvo; estado.secao = secaoDoHash();
     if (!document.getElementById('ag-css')) document.head.append(el('style', { id: 'ag-css' }, CSS));
     if (!raiz.dataset.carregado) { raiz.dataset.carregado = '1'; raiz.replaceChildren(el('div', { class: 'vazio' }, 'Carregando agentes\u2026')); }
     carregar();
@@ -380,4 +445,5 @@
   window.DgeoAgentesIniciar = iniciar;   // a p\u00e1gina chama de novo ao voltar para /adm/agentes (navega\u00e7\u00e3o do Next)
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciar); else iniciar();
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') fechar(); });
+  window.addEventListener('hashchange', () => { if (raiz && document.body.contains(raiz) && secaoDoHash() !== estado.secao) { estado.secao = secaoDoHash(); desenhar(); } });
 })();

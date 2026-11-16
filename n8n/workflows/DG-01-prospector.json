@@ -1,0 +1,150 @@
+{
+  "name": "DataGeo 01 · Prospector (dias úteis)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Agente 1 · Prospector\nDias úteis às 8h41: o app busca empresas no Brave (meta diária e combinações UF × segmento definidas em /adm/agentes)\ne depois lê o site das novas para guardar e-mail/telefone públicos. **Não envia nada a ninguém.**\nCredencial: DataGeo chave. Resultado em /adm/agentes → Rodadas de descoberta.",
+        "height": 380,
+        "width": 460
+      },
+      "id": "5d4d09df-5e66-4dc9-af47-646c3c12ac38",
+      "name": "Leia-me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "41 8 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "e2a9d228-5b20-4765-84bc-0f05e31ef5f3",
+      "name": "Dias úteis 8h41",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.datageodigital.com.br/api/agentes/n8n?acao=agentes_rodada",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "ca648b0c-68f1-47c2-82cf-91df53b556b3",
+      "name": "Rodada de descoberta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "DataGeo chave"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "id": "85c7d33d-eb77-4e50-99fc-4f4e43a0565a",
+      "name": "Pausa 30s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.datageodigital.com.br/api/agentes/n8n?acao=agentes_contatos",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "ab9855ac-c4d6-4097-ba19-8136f89862e9",
+      "name": "Completar contatos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "DataGeo chave"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Dias úteis 8h41": {
+      "main": [
+        [
+          {
+            "node": "Rodada de descoberta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rodada de descoberta": {
+      "main": [
+        [
+          {
+            "node": "Pausa 30s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pausa 30s": {
+      "main": [
+        [
+          {
+            "node": "Completar contatos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "tags": []
+}

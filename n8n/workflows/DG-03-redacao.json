@@ -1,0 +1,273 @@
+{
+  "name": "DataGeo 03 · Redação dos contatos",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Agente 4 · Contato — redação\nDias úteis às 9h47, 13h47 e 17h47 pega até 10 empresas APROVADAS ainda sem mensagem e pede à IA:\n1º e-mail + lembrete (só se a empresa publica e-mail no próprio domínio e a chave \"Contato\" está ligada) e o texto do WhatsApp.\nCom \"Revisar antes de enviar\" ligado no painel (padrão), o e-mail fica **aguardando o seu Aprovar** em /adm/agentes → E-mails e fila.\nWhatsApp sempre fica como rascunho para o seu 1 clique. O banco recusa textos com preço, % ou desconto.\n**Este workflow não envia nada.**",
+        "height": 380,
+        "width": 460
+      },
+      "id": "d848bc74-94c4-483f-b090-0753c5e964f0",
+      "name": "Leia-me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "47 9,13,17 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "3d917ce1-e13d-4746-8661-c40d7006dafc",
+      "name": "Dias úteis 9h47, 13h47, 17h47",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://kkkvdykwojgkalwboqrk.supabase.co/rest/v1/rpc/dgeo_n8n_para_redigir",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "sb_publishable_EQo4Dq6dXNUqGORm27w9GA_sPzdrV_n"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lim: 10 }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "482c51d6-93f0-4803-9e05-daf430ef0d1e",
+      "name": "Aprovadas sem mensagem",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "DataGeo chave"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().filter(i => i.json && (i.json.id !== undefined && i.json.id !== null));"
+      },
+      "id": "20e2c0e9-2c72-45a9-9162-fe3e44196c94",
+      "name": "Só itens válidos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const FATOS = \"DataGeo Digital (www.datageodigital.com.br · contato@datageodigital.com.br)\\n- Plataforma web para loteamentos: roda no navegador, na nuvem, sem instalar nada.\\n- Ambiente CAD para desenhar o loteamento (lotes, quadras e arruamento).\\n- Mapas GEO do terreno e da área do empreendimento.\\n- Estudo de viabilidade gerado a partir do loteamento desenhado no Ambiente CAD, com quantitativos, custos de referência e indicadores.\\n- Resumo: do desenho do loteamento à análise de custos, num só lugar.\\n- Os dados de cada conta ficam separados dos demais clientes.\";\nconst SIS = \"Você redige mensagens de prospecção B2B da DataGeo Digital para o contato comercial de uma empresa brasileira, em português do Brasil.\\n\\nRegras:\\n1. Base legal: interesse legítimo B2B. Tom respeitoso, curto, sem pressão. Nada de urgência falsa, escassez ou \\\"oferta especial\\\".\\n2. Mencione no máximo UM fato verificado sobre a empresa, tirado das <evidencias> ou do <resumo> (ex.: \\\"vi que vocês desenvolvem loteamentos no interior de SP\\\"), sem citar a URL.\\n3. Sobre o produto, use SOMENTE <fatos_produto>, focando no <produto> indicado. Não invente preço, desconto, porcentagem, funcionalidade, cliente, prazo ou resultado. Não escreva \\\"R$\\\", \\\"%\\\", \\\"desconto\\\", \\\"promoção\\\" nem \\\"garantido\\\".\\n4. Um único chamado para ação, de baixo atrito: responder o e-mail para ver uma demonstração curta com um loteamento deles.\\n5. E-mail: no máximo 120 palavras, sem emojis, sem anexos, assinado \\\"Equipe DataGeo Digital\\\". O assunto DEVE conter \\\"DataGeo\\\".\\n6. Lembrete: assunto \\\"Re: \\\" + o mesmo assunto; até 60 palavras, educado, oferece parar de enviar.\\n7. WhatsApp (só se <tem_whatsapp> for true): até 50 palavras, se apresenta como DataGeo Digital e diz como achou a empresa.\\n8. Não inclua link de descadastro nem rodapé (o sistema acrescenta).\\n9. Se as evidências não mostrarem relação com loteamento/urbanismo/infraestrutura, responda {\\\"erro\\\":\\\"evidencias_insuficientes\\\"}.\\n\\nResponda só com JSON:\\n{\\\"assunto\\\": \\\"...\\\", \\\"corpo\\\": \\\"...\\\", \\\"lembrete_assunto\\\": \\\"Re: ...\\\", \\\"lembrete_corpo\\\": \\\"...\\\", \\\"whatsapp\\\": \\\"... ou null\\\"}\";\nconst emp = { nome: $json.nome, dominio: $json.dominio, uf: $json.uf, cidade: $json.cidade, segmento: $json.segmento };\nconst req = { model: 'claude-sonnet-5-5', max_tokens: 1800, system: SIS,\n  messages: [{ role: 'user', content: `<fatos_produto>\\n${FATOS}\\n</fatos_produto>\\n<empresa>${JSON.stringify(emp)}</empresa>\\n<produto>${$json.produto}</produto>\\n<resumo>${$json.resumo || ''}</resumo>\\n<abordagem>${$json.abordagem || ''}</abordagem>\\n<evidencias>\\n${JSON.stringify($json.evidencias || [])}\\n</evidencias>\\n<tem_email>${!!$json.tem_email}</tem_email>\\n<tem_whatsapp>${!!$json.tem_whatsapp}</tem_whatsapp>` }] };\nreturn { json: { id: $json.id, req } };",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "9ca207b4-01a9-4437-bbe0-b402420a4e64",
+      "name": "Montar prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.req) }}",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "0f81272c-adb4-43af-bc89-ae9c7d80bf44",
+      "name": "IA (Anthropic)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2ZaUCiMyO6V8keQB",
+          "name": "Anthropic API"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lê a resposta da IA e garante JSON válido; erros voltam como {erro} para o banco liberar o item\nconst orig = $('Montar prompt').item.json;\nif ($json.type === 'error' || $json.error) {\n  return { json: { id: orig.id, r: { erro: 'IA: ' + String(($json.error && ($json.error.message || $json.error.type)) || 'erro').slice(0, 300) } } };\n}\nconst txt = ($json.content || []).map(c => c.text || '').join('');\nlet r;\ntry { r = JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1)); }\ncatch (e) { r = { erro: 'resposta_invalida_da_ia (stop=' + ($json.stop_reason || '?') + ', ' + txt.length + ' chars): ' + txt.slice(0, 160) }; }\n// o assunto precisa ter \"DataGeo\" (é por ele que o workflow 05 reconhece as respostas)\nif (r && !r.erro && r.assunto && !/datageo/i.test(r.assunto)) { r.assunto = r.assunto + ' | DataGeo'; if (r.lembrete_assunto) r.lembrete_assunto = 'Re: ' + r.assunto; }\nreturn { json: { id: orig.id, r } };",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "c820e7c4-4a8d-444a-ae9c-da25b45b72ba",
+      "name": "Ler resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://kkkvdykwojgkalwboqrk.supabase.co/rest/v1/rpc/dgeo_n8n_salvar_mensagem",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "sb_publishable_EQo4Dq6dXNUqGORm27w9GA_sPzdrV_n"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_id: $json.id, r: $json.r }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "22e4ad1f-6241-40d6-a814-953ac6af040b",
+      "name": "Salvar mensagens",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1440,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "DataGeo chave"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Dias úteis 9h47, 13h47, 17h47": {
+      "main": [
+        [
+          {
+            "node": "Aprovadas sem mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aprovadas sem mensagem": {
+      "main": [
+        [
+          {
+            "node": "Só itens válidos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Só itens válidos": {
+      "main": [
+        [
+          {
+            "node": "Montar prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar prompt": {
+      "main": [
+        [
+          {
+            "node": "IA (Anthropic)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA (Anthropic)": {
+      "main": [
+        [
+          {
+            "node": "Ler resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ler resposta": {
+      "main": [
+        [
+          {
+            "node": "Salvar mensagens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "tags": []
+}

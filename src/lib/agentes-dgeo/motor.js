@@ -407,9 +407,10 @@ export async function painelAcao(metodo, acao, q, b, eu) {
       if (!UUID.test(String(b.id || ''))) return { status: 422, json: { erro: 'Empresa inválida.' } };
       return { status: 200, json: await rpc('dgeo_empresa_acao', { p_id: b.id, p: { acao: String(b.acao || ''), etapa: b.etapa, produto: b.produto, notas: b.notas }, p_por: eu }) };
     }
-    if (acao === 'agentes_whatsapp_enviado' || acao === 'agentes_cancelar_msg') {
+    if (acao === 'agentes_whatsapp_enviado' || acao === 'agentes_cancelar_msg' || acao === 'agentes_aprovar_msg') {
       if (!/^\d{1,12}$/.test(String(b.id || ''))) return { status: 422, json: { erro: 'Mensagem inválida.' } };
-      return { status: 200, json: await rpc(acao === 'agentes_cancelar_msg' ? 'dgeo_mensagem_cancelar' : 'dgeo_whatsapp_enviado', { p_id: Number(b.id), p_por: eu }) };
+      const fn = { agentes_cancelar_msg: 'dgeo_mensagem_cancelar', agentes_whatsapp_enviado: 'dgeo_whatsapp_enviado', agentes_aprovar_msg: 'dgeo_mensagem_aprovar' }[acao];
+      return { status: 200, json: await rpc(fn, { p_id: Number(b.id), p_por: eu }) };
     }
     if (acao === 'agentes_flag') return { status: 200, json: await rpc('dgeo_flag', { p_chave: String(b.chave || ''), p_valor: String(b.valor ?? ''), p_por: eu }) };
     if (acao === 'agentes_config') return { status: 200, json: await rpc('dgeo_config_salvar', { p: { ufs: b.ufs, segmentos: b.segmentos, fontes: b.fontes }, p_por: eu }) };

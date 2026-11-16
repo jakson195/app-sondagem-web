@@ -1,0 +1,122 @@
+{
+  "name": "DataGeo 05 · Respostas e descadastros",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Agente 4 · Contato — respostas\nLê só e-mails NOVOS com \"DataGeo\" no assunto (todas as mensagens levam DataGeo no assunto e as respostas mantêm o \"Re:\"),\nsem marcar como lido nem mover. Quem responde sai da fila (lembrete cancelado) e vai para a etapa RESPONDEU;\npedido de descadastro (não quero, remover, unsubscribe…) descadastra o domínio na hora. Você responde pessoalmente.",
+        "height": 380,
+        "width": 460
+      },
+      "id": "5272037d-3204-4fbb-b534-43ee178c8504",
+      "name": "Leia-me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "nothing",
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\", [\"SUBJECT\", \"DataGeo\"]]"
+        }
+      },
+      "id": "d668e58d-0189-4d57-b21c-7fcc2db9c8fe",
+      "name": "Nova resposta",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "imap": {
+          "name": "IMAP DataGeo"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const de = String($json.from || '').match(/[^<\\s]+@[^>\\s]+/);\nconst txt = String($json.textPlain || $json.text || '').split(/\\n>|\\nEm .* escreveu:|\\nOn .* wrote:/)[0].slice(0, 2000);\nreturn { json: { de: de ? de[0].toLowerCase() : '', texto: (String($json.subject || '') + '\\n' + txt).slice(0, 2300) } };",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "acce7b63-9b53-4f2f-b218-21964b7298de",
+      "name": "Remetente e texto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://kkkvdykwojgkalwboqrk.supabase.co/rest/v1/rpc/dgeo_n8n_resposta",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "sb_publishable_EQo4Dq6dXNUqGORm27w9GA_sPzdrV_n"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_de: $json.de, p_texto: $json.texto }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "e3d2e430-d2db-421e-831e-0bf772e9a3b3",
+      "name": "Registrar resposta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "DataGeo chave"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Nova resposta": {
+      "main": [
+        [
+          {
+            "node": "Remetente e texto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remetente e texto": {
+      "main": [
+        [
+          {
+            "node": "Registrar resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "tags": []
+}

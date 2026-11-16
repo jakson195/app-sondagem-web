@@ -1,0 +1,247 @@
+{
+  "name": "DataGeo 04 · Envio de e-mail (fila)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Agente 4 · Contato — envio\nDias úteis de hora em hora (8h10–17h10): pega SÓ e-mails na fila (dgeo_n8n_fila_envio), que já respeita:\nchave \"Contato\" ligada, limite diário do painel, 2 por rodada, descadastro, empresa que respondeu, lembrete só 7 dias após o 1º.\nCom \"Revisar antes de enviar\" ligado, só entram na fila os que você aprovou.\nEnvia por SMTP de contato@datageodigital.com.br; o rodapé com o link de descadastro vem pronto do banco.",
+        "height": 380,
+        "width": 460
+      },
+      "id": "887c2a74-f8ea-4ded-b324-42b80c5354fe",
+      "name": "Leia-me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "10 8-17 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "1873fe58-e736-42e7-b898-4dad65fda802",
+      "name": "Dias úteis de hora em hora",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://kkkvdykwojgkalwboqrk.supabase.co/rest/v1/rpc/dgeo_n8n_fila_envio",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "sb_publishable_EQo4Dq6dXNUqGORm27w9GA_sPzdrV_n"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "e8251182-3c09-491c-8581-21646d3ba1f5",
+      "name": "Fila de envio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "DataGeo chave"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().filter(i => i.json && (i.json.id !== undefined && i.json.id !== null));"
+      },
+      "id": "2fa0ff58-5a2a-4471-b6ec-f6ec476252fb",
+      "name": "Só itens válidos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "contato@datageodigital.com.br",
+        "toEmail": "={{$json.para}}",
+        "subject": "={{$json.assunto}}",
+        "emailFormat": "text",
+        "text": "={{$json.corpo}}",
+        "options": {
+          "appendAttribution": false,
+          "replyTo": "contato@datageodigital.com.br"
+        }
+      },
+      "id": "7c33dcea-3404-4a61-be7c-1cb56f75a81a",
+      "name": "Enviar",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        720,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "name": "SMTP DataGeo"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://kkkvdykwojgkalwboqrk.supabase.co/rest/v1/rpc/dgeo_n8n_envio_resultado",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "sb_publishable_EQo4Dq6dXNUqGORm27w9GA_sPzdrV_n"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_id: $('Só itens válidos').item.json.id, p_ok: true }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "69bb77e5-5254-4cd7-ae67-c6aeb62b29d3",
+      "name": "Resultado: enviado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "DataGeo chave"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://kkkvdykwojgkalwboqrk.supabase.co/rest/v1/rpc/dgeo_n8n_envio_resultado",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "sb_publishable_EQo4Dq6dXNUqGORm27w9GA_sPzdrV_n"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_id: $('Só itens válidos').item.json.id, p_ok: false, p_erro: String(($json.error && $json.error.message) || 'falha SMTP').slice(0, 300) }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "eaf32517-3df5-45cb-b0e8-ba58aef8a132",
+      "name": "Resultado: erro",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        200
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "DataGeo chave"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Dias úteis de hora em hora": {
+      "main": [
+        [
+          {
+            "node": "Fila de envio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fila de envio": {
+      "main": [
+        [
+          {
+            "node": "Só itens válidos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Só itens válidos": {
+      "main": [
+        [
+          {
+            "node": "Enviar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar": {
+      "main": [
+        [
+          {
+            "node": "Resultado: enviado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resultado: erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "tags": []
+}
