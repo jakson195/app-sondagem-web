@@ -1318,6 +1318,10 @@
       "printLayout": "Layout para Impressão",
       "planilha": "Planilha de cálculo"
     },
+    "floating": {
+      "planilha": "Planilha de cálculo da drenagem",
+      "perfis": "Perfis das ruas e seção-tipo"
+    },
     "drawingCharts": {
       "show": "Mostrar perfis e seção-tipo",
       "hide": "Ocultar perfis e seção-tipo"

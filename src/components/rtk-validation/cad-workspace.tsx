@@ -321,6 +321,7 @@ import {
   isRamalDrenagem,
   pixelsPorMetro,
 } from "@/components/rtk-validation/cad-drainage-symbols";
+import { CadFloatingPanel } from "@/components/rtk-validation/cad-floating-panel";
 import { CadChromeHeader } from "@/components/rtk-validation/cad-chrome-header";
 import { CadChromeToolbar } from "@/components/rtk-validation/cad-chrome-toolbar";
 import { CadModifyPanel } from "@/components/rtk-validation/cad-modify-panel";
@@ -11689,12 +11690,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
           </div>
 
           {drenagemPlanilhaOpen && listDrainagePipes(project).length > 0 ? (
-            <div className="shrink-0">
+            <CadFloatingPanel
+              id="drenagem-planilha"
+              title={t("floating.planilha")}
+              onClose={() => setDrenagemPlanilhaOpen(false)}
+            >
+              {(modo) => (
               <CadDrainagePlanilha
                 project={project}
                 params={currentDrainageParams()}
                 selectedId={selectedId}
-                variant="dock"
+                variant={modo === "solto" ? "page" : "dock"}
                 onSelectId={(id) => {
                   setSelectedId(id);
                   setToolsTab("drenagem");
@@ -11708,7 +11714,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   if (patch.returnPeriodYears != null) setDrenagemTr(patch.returnPeriodYears);
                 }}
               />
-            </div>
+              )}
+            </CadFloatingPanel>
           ) : null}
 
           <div className="shrink-0">
@@ -11721,7 +11728,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
               <span aria-hidden>{drawingChartsOpen ? "▾" : "▸"}</span>
             </button>
             {drawingChartsOpen ? (
-              <div className="mt-2 max-h-40 min-h-0 space-y-2 overflow-y-auto">
+              <CadFloatingPanel
+                id="perfis-secao"
+                title={t("floating.perfis")}
+                onClose={() => setDrawingChartsOpen(false)}
+                padrao={{ y: 90 }}
+              >
+              {(modo) => (
+              <div className={modo === "solto" ? "space-y-2 p-2" : "mt-2 max-h-40 min-h-0 space-y-2 overflow-y-auto"}>
                 {(() => {
                   const activeStreet = streetProfiles.find((p) => p.streetId === streetProfileId) ?? streetProfiles[0];
                   const secaoApplied =
@@ -11807,18 +11821,9 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     setProject={setProject}
                   />
                 ) : null}
-                {listDrainagePipes(project).length > 0 ? (
-                  <CadDrainageWaterProfileChart
-                    project={project}
-                    selectedPipeId={
-                      selectedId && listDrainagePipes(project).some((p) => p.id === selectedId)
-                        ? selectedId
-                        : listDrainagePipes(project)[0]?.id ?? null
-                    }
-                    setProject={setProject}
-                  />
-                ) : null}
               </div>
+              )}
+              </CadFloatingPanel>
             ) : null}
           </div>
             </>
