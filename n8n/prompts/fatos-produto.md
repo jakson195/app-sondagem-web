@@ -1,4 +1,4 @@
-DataGeo Digital (www.datageodigital.com.br · contato@datageodigital.com.br)
+DataGeo Digital (www.datageodigital.com.br · jaksonn@gmail.com)
 - Plataforma web para loteamentos: roda no navegador, na nuvem, sem instalar nada.
 - Ambiente CAD para desenhar o loteamento (lotes, quadras e arruamento).
 - Mapas GEO do terreno e da área do empreendimento.

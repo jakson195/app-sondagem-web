@@ -7,7 +7,7 @@
         "height": 380,
         "width": 460
       },
-      "id": "5d4d09df-5e66-4dc9-af47-646c3c12ac38",
+      "id": "509272ee-747d-4713-b90d-771e26aeaebb",
       "name": "Leia-me",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
@@ -27,7 +27,7 @@
           ]
         }
       },
-      "id": "e2a9d228-5b20-4765-84bc-0f05e31ef5f3",
+      "id": "1df7a73c-e379-41d7-a1e0-7d3aec70a1a3",
       "name": "Dias úteis 8h41",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -49,7 +49,7 @@
           "timeout": 60000
         }
       },
-      "id": "ca648b0c-68f1-47c2-82cf-91df53b556b3",
+      "id": "c3d4aa33-2a34-4172-8be3-31d480a163f5",
       "name": "Rodada de descoberta",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -68,7 +68,7 @@
       "parameters": {
         "amount": 30
       },
-      "id": "85c7d33d-eb77-4e50-99fc-4f4e43a0565a",
+      "id": "78cf3694-5ec8-41d8-8aff-1652aa9ead24",
       "name": "Pausa 30s",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
@@ -90,7 +90,7 @@
           "timeout": 60000
         }
       },
-      "id": "ab9855ac-c4d6-4097-ba19-8136f89862e9",
+      "id": "bdb847ad-ce54-4bad-a9d6-b0c44295746c",
       "name": "Completar contatos",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,

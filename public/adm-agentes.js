@@ -181,7 +181,7 @@
         const sel = el('select', { 'aria-label': 'Limite de e-mails por dia', style: 'width:auto;padding:3px 6px;font-size:12.5px',
           onchange: (e) => flag('limite_envio_dia', e.target.value) }, [0, 5, 8, 10, 12, 15, 20, 25, 30].map((n) => el('option', { value: String(n), selected: n === c.limite_envio_dia }, n + ' por dia')));
         const k = card('4 \u00b7 Contato (e-mail)', chave('auto_outreach', c.auto_outreach), lig,
-          `Escreve e envia e-mail do contato@datageodigital.com.br para as aprovadas que publicam e-mail no pr\u00f3prio dom\u00ednio. 1 lembrete ap\u00f3s ${c.lembrete_dias || 7} dias; quem responde ou se descadastra sai da fila.`,
+          `Escreve e envia e-mail pelo jaksonn@gmail.com para as aprovadas que publicam e-mail no pr\u00f3prio dom\u00ednio. 1 lembrete ap\u00f3s ${c.lembrete_dias || 7} dias; quem responde ou se descadastra sai da fila.`,
           lig ? `Hoje: ${m.enviados_hoje ?? 0}/${m.limite_dia ?? c.limite_envio_dia} \u00b7 ${m.agendados ?? 0} na fila` : 'DESLIGADO \u2014 nada \u00e9 enviado');
         k.append(el('label', { style: 'margin:4px 0 0' }, 'Limite di\u00e1rio'), sel,
           el('label', { style: 'margin:8px 0 0;display:flex;align-items:center;gap:8px' }, chave('envio_revisao', c.envio_revisao !== false),

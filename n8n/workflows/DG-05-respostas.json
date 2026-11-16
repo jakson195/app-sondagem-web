@@ -7,7 +7,7 @@
         "height": 380,
         "width": 460
       },
-      "id": "5272037d-3204-4fbb-b534-43ee178c8504",
+      "id": "db686ede-c3e7-4246-b35a-e40700cbf943",
       "name": "Leia-me",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
@@ -24,7 +24,7 @@
           "customEmailConfig": "[\"UNSEEN\", [\"SUBJECT\", \"DataGeo\"]]"
         }
       },
-      "id": "d668e58d-0189-4d57-b21c-7fcc2db9c8fe",
+      "id": "d8cc4d07-0878-4172-bc4a-e265656efec5",
       "name": "Nova resposta",
       "type": "n8n-nodes-base.emailReadImap",
       "typeVersion": 2,
@@ -34,7 +34,8 @@
       ],
       "credentials": {
         "imap": {
-          "name": "IMAP DataGeo"
+          "id": "J7jjJkYouaiQOagj",
+          "name": "IMAP ERTimg"
         }
       }
     },
@@ -43,7 +44,7 @@
         "jsCode": "const de = String($json.from || '').match(/[^<\\s]+@[^>\\s]+/);\nconst txt = String($json.textPlain || $json.text || '').split(/\\n>|\\nEm .* escreveu:|\\nOn .* wrote:/)[0].slice(0, 2000);\nreturn { json: { de: de ? de[0].toLowerCase() : '', texto: (String($json.subject || '') + '\\n' + txt).slice(0, 2300) } };",
         "mode": "runOnceForEachItem"
       },
-      "id": "acce7b63-9b53-4f2f-b218-21964b7298de",
+      "id": "5ab8b730-9906-4781-bdb8-2748692bc604",
       "name": "Remetente e texto",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -74,7 +75,7 @@
           "timeout": 60000
         }
       },
-      "id": "e3d2e430-d2db-421e-831e-0bf772e9a3b3",
+      "id": "c8be5933-595c-4b11-95a1-16f2fd4a2d78",
       "name": "Registrar resposta",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,

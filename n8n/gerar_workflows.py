@@ -4,8 +4,8 @@ Rode de novo depois de editar os prompts:  python n8n/gerar_workflows.py
 Credenciais no n8n (criar uma vez; depois de importar, selecionar nos nós que pedirem):
   "DataGeo chave"  Header Auth — nome x-dgeo-key, valor = DGEO_AGENTES_KEY da Vercel
   "Anthropic API"  Header Auth — nome x-api-key (já existe no n8n, usada pelo ERTimg)
-  "SMTP DataGeo"   SMTP de contato@datageodigital.com.br
-  "IMAP DataGeo"   IMAP da mesma caixa (leitura das respostas)
+  "Conta SMTP"     Gmail jaksonn@gmail.com (já existe; a mesma do ERTimg)
+  "IMAP ERTimg"    IMAP do Gmail jaksonn@gmail.com (já existe; o filtro "DataGeo" no assunto separa as respostas)
 O n8n fala com o banco só pelas funções dgeo_n8n_* do Supabase, que exigem a chave x-dgeo-key.
 Todos os workflows são importados DESATIVADOS.
 """
@@ -18,7 +18,7 @@ OUT = os.path.join(AQUI, 'workflows'); os.makedirs(OUT, exist_ok=True)
 SITE = 'https://www.datageodigital.com.br'
 SB = 'https://kkkvdykwojgkalwboqrk.supabase.co'
 SB_PUB = 'sb_publishable_EQo4Dq6dXNUqGORm27w9GA_sPzdrV_n'   # chave publicável (pública por natureza; a proteção é a x-dgeo-key)
-EMAIL_DE = 'contato@datageodigital.com.br'
+EMAIL_DE = 'jaksonn@gmail.com'   # Gmail (a caixa @datageodigital ainda não existe)
 MODELO = "'claude-sonnet-5-5'"
 CRED_DG = {'httpHeaderAuth': {'name': 'DataGeo chave'}}
 CRED_IA = {'httpHeaderAuth': {'id': '2ZaUCiMyO6V8keQB', 'name': 'Anthropic API'}}
@@ -148,13 +148,13 @@ w = WF('DataGeo 04 · Envio de e-mail (fila)', """## Agente 4 · Contato — env
 Dias úteis de hora em hora (8h10–17h10): pega SÓ e-mails na fila (dgeo_n8n_fila_envio), que já respeita:
 chave "Contato" ligada, limite diário do painel, 2 por rodada, descadastro, empresa que respondeu, lembrete só 7 dias após o 1º.
 Com "Revisar antes de enviar" ligado, só entram na fila os que você aprovou.
-Envia por SMTP de contato@datageodigital.com.br; o rodapé com o link de descadastro vem pronto do banco.""")
+Envia pelo Gmail jaksonn@gmail.com (credencial Conta SMTP); o rodapé com o link de descadastro vem pronto do banco.""")
 ag = agenda(w, 'Dias úteis de hora em hora', '10 8-17 * * 1-5')
 q = rpc(w, 'Fila de envio', 'dgeo_n8n_fila_envio', '{}')
 fi = so_itens(w)
 em = w.add('n8n-nodes-base.emailSend', 'Enviar', {'fromEmail': EMAIL_DE, 'toEmail': '={{$json.para}}', 'subject': '={{$json.assunto}}',
            'emailFormat': 'text', 'text': '={{$json.corpo}}', 'options': {'appendAttribution': False, 'replyTo': EMAIL_DE}}, 2.1, None,
-           {'credentials': {'smtp': {'name': 'SMTP DataGeo'}}, 'onError': 'continueErrorOutput'})
+           {'credentials': {'smtp': {'id': 'tBaIpCjPDPIgqIfN', 'name': 'Conta SMTP'}}, 'onError': 'continueErrorOutput'})
 ok = rpc(w, 'Resultado: enviado', 'dgeo_n8n_envio_resultado', "{ p_id: $('Só itens válidos').item.json.id, p_ok: true }")
 er = rpc(w, 'Resultado: erro', 'dgeo_n8n_envio_resultado', "{ p_id: $('Só itens válidos').item.json.id, p_ok: false, p_erro: String(($json.error && $json.error.message) || 'falha SMTP').slice(0, 300) }", (960, 200))
 w.cadeia(ag, q, fi, em); w.liga(em, ok, 0); w.liga(em, er, 1)
@@ -166,7 +166,7 @@ Lê só e-mails NOVOS com "DataGeo" no assunto (todas as mensagens levam DataGeo
 sem marcar como lido nem mover. Quem responde sai da fila (lembrete cancelado) e vai para a etapa RESPONDEU;
 pedido de descadastro (não quero, remover, unsubscribe…) descadastra o domínio na hora. Você responde pessoalmente.""")
 im = w.add('n8n-nodes-base.emailReadImap', 'Nova resposta', {'mailbox': 'INBOX', 'postProcessAction': 'nothing',
-           'options': {'customEmailConfig': '["UNSEEN", ["SUBJECT", "DataGeo"]]'}}, 2, None, {'credentials': {'imap': {'name': 'IMAP DataGeo'}}})
+           'options': {'customEmailConfig': '["UNSEEN", ["SUBJECT", "DataGeo"]]'}}, 2, None, {'credentials': {'imap': {'id': 'J7jjJkYouaiQOagj', 'name': 'IMAP ERTimg'}}})
 cl = code(w, 'Remetente e texto', r"""const de = String($json.from || '').match(/[^<\s]+@[^>\s]+/);
 const txt = String($json.textPlain || $json.text || '').split(/\n>|\nEm .* escreveu:|\nOn .* wrote:/)[0].slice(0, 2000);
 return { json: { de: de ? de[0].toLowerCase() : '', texto: (String($json.subject || '') + '\n' + txt).slice(0, 2300) } };""")

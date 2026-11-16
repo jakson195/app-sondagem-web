@@ -7,7 +7,7 @@
         "height": 380,
         "width": 460
       },
-      "id": "d848bc74-94c4-483f-b090-0753c5e964f0",
+      "id": "a29c6077-39d6-4d2e-8d3c-418d76486073",
       "name": "Leia-me",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
@@ -27,7 +27,7 @@
           ]
         }
       },
-      "id": "3d917ce1-e13d-4746-8661-c40d7006dafc",
+      "id": "05238dad-6d5e-42b1-9c85-2b8a63bca8f8",
       "name": "Dias úteis 9h47, 13h47, 17h47",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -58,7 +58,7 @@
           "timeout": 60000
         }
       },
-      "id": "482c51d6-93f0-4803-9e05-daf430ef0d1e",
+      "id": "2663234d-fbed-4740-b286-0bb6be6cdb15",
       "name": "Aprovadas sem mensagem",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -76,7 +76,7 @@
       "parameters": {
         "jsCode": "return $input.all().filter(i => i.json && (i.json.id !== undefined && i.json.id !== null));"
       },
-      "id": "20e2c0e9-2c72-45a9-9162-fe3e44196c94",
+      "id": "3e74c8c3-5a04-444b-acb0-bbd150efb7f2",
       "name": "Só itens válidos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -87,10 +87,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const FATOS = \"DataGeo Digital (www.datageodigital.com.br · contato@datageodigital.com.br)\\n- Plataforma web para loteamentos: roda no navegador, na nuvem, sem instalar nada.\\n- Ambiente CAD para desenhar o loteamento (lotes, quadras e arruamento).\\n- Mapas GEO do terreno e da área do empreendimento.\\n- Estudo de viabilidade gerado a partir do loteamento desenhado no Ambiente CAD, com quantitativos, custos de referência e indicadores.\\n- Resumo: do desenho do loteamento à análise de custos, num só lugar.\\n- Os dados de cada conta ficam separados dos demais clientes.\";\nconst SIS = \"Você redige mensagens de prospecção B2B da DataGeo Digital para o contato comercial de uma empresa brasileira, em português do Brasil.\\n\\nRegras:\\n1. Base legal: interesse legítimo B2B. Tom respeitoso, curto, sem pressão. Nada de urgência falsa, escassez ou \\\"oferta especial\\\".\\n2. Mencione no máximo UM fato verificado sobre a empresa, tirado das <evidencias> ou do <resumo> (ex.: \\\"vi que vocês desenvolvem loteamentos no interior de SP\\\"), sem citar a URL.\\n3. Sobre o produto, use SOMENTE <fatos_produto>, focando no <produto> indicado. Não invente preço, desconto, porcentagem, funcionalidade, cliente, prazo ou resultado. Não escreva \\\"R$\\\", \\\"%\\\", \\\"desconto\\\", \\\"promoção\\\" nem \\\"garantido\\\".\\n4. Um único chamado para ação, de baixo atrito: responder o e-mail para ver uma demonstração curta com um loteamento deles.\\n5. E-mail: no máximo 120 palavras, sem emojis, sem anexos, assinado \\\"Equipe DataGeo Digital\\\". O assunto DEVE conter \\\"DataGeo\\\".\\n6. Lembrete: assunto \\\"Re: \\\" + o mesmo assunto; até 60 palavras, educado, oferece parar de enviar.\\n7. WhatsApp (só se <tem_whatsapp> for true): até 50 palavras, se apresenta como DataGeo Digital e diz como achou a empresa.\\n8. Não inclua link de descadastro nem rodapé (o sistema acrescenta).\\n9. Se as evidências não mostrarem relação com loteamento/urbanismo/infraestrutura, responda {\\\"erro\\\":\\\"evidencias_insuficientes\\\"}.\\n\\nResponda só com JSON:\\n{\\\"assunto\\\": \\\"...\\\", \\\"corpo\\\": \\\"...\\\", \\\"lembrete_assunto\\\": \\\"Re: ...\\\", \\\"lembrete_corpo\\\": \\\"...\\\", \\\"whatsapp\\\": \\\"... ou null\\\"}\";\nconst emp = { nome: $json.nome, dominio: $json.dominio, uf: $json.uf, cidade: $json.cidade, segmento: $json.segmento };\nconst req = { model: 'claude-sonnet-5-5', max_tokens: 1800, system: SIS,\n  messages: [{ role: 'user', content: `<fatos_produto>\\n${FATOS}\\n</fatos_produto>\\n<empresa>${JSON.stringify(emp)}</empresa>\\n<produto>${$json.produto}</produto>\\n<resumo>${$json.resumo || ''}</resumo>\\n<abordagem>${$json.abordagem || ''}</abordagem>\\n<evidencias>\\n${JSON.stringify($json.evidencias || [])}\\n</evidencias>\\n<tem_email>${!!$json.tem_email}</tem_email>\\n<tem_whatsapp>${!!$json.tem_whatsapp}</tem_whatsapp>` }] };\nreturn { json: { id: $json.id, req } };",
+        "jsCode": "const FATOS = \"DataGeo Digital (www.datageodigital.com.br · jaksonn@gmail.com)\\n- Plataforma web para loteamentos: roda no navegador, na nuvem, sem instalar nada.\\n- Ambiente CAD para desenhar o loteamento (lotes, quadras e arruamento).\\n- Mapas GEO do terreno e da área do empreendimento.\\n- Estudo de viabilidade gerado a partir do loteamento desenhado no Ambiente CAD, com quantitativos, custos de referência e indicadores.\\n- Resumo: do desenho do loteamento à análise de custos, num só lugar.\\n- Os dados de cada conta ficam separados dos demais clientes.\";\nconst SIS = \"Você redige mensagens de prospecção B2B da DataGeo Digital para o contato comercial de uma empresa brasileira, em português do Brasil.\\n\\nRegras:\\n1. Base legal: interesse legítimo B2B. Tom respeitoso, curto, sem pressão. Nada de urgência falsa, escassez ou \\\"oferta especial\\\".\\n2. Mencione no máximo UM fato verificado sobre a empresa, tirado das <evidencias> ou do <resumo> (ex.: \\\"vi que vocês desenvolvem loteamentos no interior de SP\\\"), sem citar a URL.\\n3. Sobre o produto, use SOMENTE <fatos_produto>, focando no <produto> indicado. Não invente preço, desconto, porcentagem, funcionalidade, cliente, prazo ou resultado. Não escreva \\\"R$\\\", \\\"%\\\", \\\"desconto\\\", \\\"promoção\\\" nem \\\"garantido\\\".\\n4. Um único chamado para ação, de baixo atrito: responder o e-mail para ver uma demonstração curta com um loteamento deles.\\n5. E-mail: no máximo 120 palavras, sem emojis, sem anexos, assinado \\\"Equipe DataGeo Digital\\\". O assunto DEVE conter \\\"DataGeo\\\".\\n6. Lembrete: assunto \\\"Re: \\\" + o mesmo assunto; até 60 palavras, educado, oferece parar de enviar.\\n7. WhatsApp (só se <tem_whatsapp> for true): até 50 palavras, se apresenta como DataGeo Digital e diz como achou a empresa.\\n8. Não inclua link de descadastro nem rodapé (o sistema acrescenta).\\n9. Se as evidências não mostrarem relação com loteamento/urbanismo/infraestrutura, responda {\\\"erro\\\":\\\"evidencias_insuficientes\\\"}.\\n\\nResponda só com JSON:\\n{\\\"assunto\\\": \\\"...\\\", \\\"corpo\\\": \\\"...\\\", \\\"lembrete_assunto\\\": \\\"Re: ...\\\", \\\"lembrete_corpo\\\": \\\"...\\\", \\\"whatsapp\\\": \\\"... ou null\\\"}\";\nconst emp = { nome: $json.nome, dominio: $json.dominio, uf: $json.uf, cidade: $json.cidade, segmento: $json.segmento };\nconst req = { model: 'claude-sonnet-5-5', max_tokens: 1800, system: SIS,\n  messages: [{ role: 'user', content: `<fatos_produto>\\n${FATOS}\\n</fatos_produto>\\n<empresa>${JSON.stringify(emp)}</empresa>\\n<produto>${$json.produto}</produto>\\n<resumo>${$json.resumo || ''}</resumo>\\n<abordagem>${$json.abordagem || ''}</abordagem>\\n<evidencias>\\n${JSON.stringify($json.evidencias || [])}\\n</evidencias>\\n<tem_email>${!!$json.tem_email}</tem_email>\\n<tem_whatsapp>${!!$json.tem_whatsapp}</tem_whatsapp>` }] };\nreturn { json: { id: $json.id, req } };",
         "mode": "runOnceForEachItem"
       },
-      "id": "9ca207b4-01a9-4437-bbe0-b402420a4e64",
+      "id": "33a9aeca-39e2-4bba-90f3-68e1b1f74041",
       "name": "Montar prompt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -126,7 +126,7 @@
           }
         }
       },
-      "id": "0f81272c-adb4-43af-bc89-ae9c7d80bf44",
+      "id": "09dca741-140c-4dc7-94a9-f73b82ac09d6",
       "name": "IA (Anthropic)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -149,7 +149,7 @@
         "jsCode": "// Lê a resposta da IA e garante JSON válido; erros voltam como {erro} para o banco liberar o item\nconst orig = $('Montar prompt').item.json;\nif ($json.type === 'error' || $json.error) {\n  return { json: { id: orig.id, r: { erro: 'IA: ' + String(($json.error && ($json.error.message || $json.error.type)) || 'erro').slice(0, 300) } } };\n}\nconst txt = ($json.content || []).map(c => c.text || '').join('');\nlet r;\ntry { r = JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1)); }\ncatch (e) { r = { erro: 'resposta_invalida_da_ia (stop=' + ($json.stop_reason || '?') + ', ' + txt.length + ' chars): ' + txt.slice(0, 160) }; }\n// o assunto precisa ter \"DataGeo\" (é por ele que o workflow 05 reconhece as respostas)\nif (r && !r.erro && r.assunto && !/datageo/i.test(r.assunto)) { r.assunto = r.assunto + ' | DataGeo'; if (r.lembrete_assunto) r.lembrete_assunto = 'Re: ' + r.assunto; }\nreturn { json: { id: orig.id, r } };",
         "mode": "runOnceForEachItem"
       },
-      "id": "c820e7c4-4a8d-444a-ae9c-da25b45b72ba",
+      "id": "3692746d-c3c1-414e-b715-5ba20a7ef6b8",
       "name": "Ler resposta",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -180,7 +180,7 @@
           "timeout": 60000
         }
       },
-      "id": "22e4ad1f-6241-40d6-a814-953ac6af040b",
+      "id": "c3df5a23-3f26-4995-9b97-121a4e2036ad",
       "name": "Salvar mensagens",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,

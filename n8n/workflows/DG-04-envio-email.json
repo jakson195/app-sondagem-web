@@ -3,11 +3,11 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Agente 4 · Contato — envio\nDias úteis de hora em hora (8h10–17h10): pega SÓ e-mails na fila (dgeo_n8n_fila_envio), que já respeita:\nchave \"Contato\" ligada, limite diário do painel, 2 por rodada, descadastro, empresa que respondeu, lembrete só 7 dias após o 1º.\nCom \"Revisar antes de enviar\" ligado, só entram na fila os que você aprovou.\nEnvia por SMTP de contato@datageodigital.com.br; o rodapé com o link de descadastro vem pronto do banco.",
+        "content": "## Agente 4 · Contato — envio\nDias úteis de hora em hora (8h10–17h10): pega SÓ e-mails na fila (dgeo_n8n_fila_envio), que já respeita:\nchave \"Contato\" ligada, limite diário do painel, 2 por rodada, descadastro, empresa que respondeu, lembrete só 7 dias após o 1º.\nCom \"Revisar antes de enviar\" ligado, só entram na fila os que você aprovou.\nEnvia pelo Gmail jaksonn@gmail.com (credencial Conta SMTP); o rodapé com o link de descadastro vem pronto do banco.",
         "height": 380,
         "width": 460
       },
-      "id": "887c2a74-f8ea-4ded-b324-42b80c5354fe",
+      "id": "f1217547-8fbb-4fb9-b7b4-eb063adc43ec",
       "name": "Leia-me",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
@@ -27,7 +27,7 @@
           ]
         }
       },
-      "id": "1873fe58-e736-42e7-b898-4dad65fda802",
+      "id": "f2fdd7af-ad24-4cb2-a965-91db02f90d75",
       "name": "Dias úteis de hora em hora",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -58,7 +58,7 @@
           "timeout": 60000
         }
       },
-      "id": "e8251182-3c09-491c-8581-21646d3ba1f5",
+      "id": "00784e9b-169d-4bcb-8151-ad7aaabeeeea",
       "name": "Fila de envio",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -76,7 +76,7 @@
       "parameters": {
         "jsCode": "return $input.all().filter(i => i.json && (i.json.id !== undefined && i.json.id !== null));"
       },
-      "id": "2fa0ff58-5a2a-4471-b6ec-f6ec476252fb",
+      "id": "bea4afe4-6531-4dc0-ae47-bcb44e7bd89f",
       "name": "Só itens válidos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -87,17 +87,17 @@
     },
     {
       "parameters": {
-        "fromEmail": "contato@datageodigital.com.br",
+        "fromEmail": "jaksonn@gmail.com",
         "toEmail": "={{$json.para}}",
         "subject": "={{$json.assunto}}",
         "emailFormat": "text",
         "text": "={{$json.corpo}}",
         "options": {
           "appendAttribution": false,
-          "replyTo": "contato@datageodigital.com.br"
+          "replyTo": "jaksonn@gmail.com"
         }
       },
-      "id": "7c33dcea-3404-4a61-be7c-1cb56f75a81a",
+      "id": "97dbd039-e17c-4d51-8f74-576ce8fb063d",
       "name": "Enviar",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
@@ -107,7 +107,8 @@
       ],
       "credentials": {
         "smtp": {
-          "name": "SMTP DataGeo"
+          "id": "tBaIpCjPDPIgqIfN",
+          "name": "Conta SMTP"
         }
       },
       "onError": "continueErrorOutput"
@@ -134,7 +135,7 @@
           "timeout": 60000
         }
       },
-      "id": "69bb77e5-5254-4cd7-ae67-c6aeb62b29d3",
+      "id": "974f73c8-9d39-4fca-ae08-60f291c46dc5",
       "name": "Resultado: enviado",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
@@ -170,7 +171,7 @@
           "timeout": 60000
         }
       },
-      "id": "eaf32517-3df5-45cb-b0e8-ba58aef8a132",
+      "id": "07c78c0e-968c-4ae2-9e77-4b3c70072832",
       "name": "Resultado: erro",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,

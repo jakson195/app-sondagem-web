@@ -441,7 +441,7 @@ export async function n8nAcao(chave, acao, b) {
 // página pública de descadastro
 const PAGINA = (titulo, texto) => `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
 <title>${titulo}</title><style>body{font-family:Arial,sans-serif;background:#f1f5f9;color:#0f172a;margin:0;padding:40px 16px}main{max-width:520px;margin:0 auto;background:#fff;border:1px solid #cbd5e1;border-radius:10px;padding:28px}h1{font-size:21px;margin:0 0 12px;color:#0f766e}p{line-height:1.5}</style></head>
-<body><main><h1>${titulo}</h1><p>${texto}</p><p style="color:#475569;font-size:14px">DataGeo Digital · contato@datageodigital.com.br</p></main></body></html>`;
+<body><main><h1>${titulo}</h1><p>${texto}</p><p style="color:#475569;font-size:14px">DataGeo Digital · jaksonn@gmail.com</p></main></body></html>`;
 export async function descadastroHtml(t) {
   t = String(t || '');
   if (!/^[0-9a-f]{32}$/.test(t)) return { status: 400, html: PAGINA('Link inválido', 'Este link de descadastro não é válido. Se quiser, responda o e-mail pedindo a remoção e nós tiramos o seu contato da lista.') };
