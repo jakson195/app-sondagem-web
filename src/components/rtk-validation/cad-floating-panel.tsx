@@ -2,6 +2,7 @@
 
 import { GripHorizontal, Maximize2, PanelBottom, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * Janela que pode ficar encaixada embaixo do desenho ou solta sobre ele (arrastar pela barra
@@ -81,30 +82,44 @@ export function CadFloatingPanel({
     [id],
   );
 
-  const iniciar = (tipo: "mover" | "tamanho") => (e: React.PointerEvent) => {
-    if (!caixa || modo !== "solto") return;
+  const caixaRef = useRef<Caixa | null>(null);
+  useEffect(() => {
+    caixaRef.current = caixa;
+  }, [caixa]);
+
+  /** Arrasto pela janela inteira (window), para não depender de onde o mouse está. */
+  const iniciar = (tipo: "mover" | "tamanho", e: React.PointerEvent) => {
+    if (!caixa || modo !== "solto" || e.button !== 0) return;
     if (tipo === "mover" && (e.target as HTMLElement).closest("button")) return;
     e.preventDefault();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.stopPropagation();
     arrasto.current = { tipo, px: e.clientX, py: e.clientY, inicio: caixa };
-  };
-  const mover = (e: React.PointerEvent) => {
-    const a = arrasto.current;
-    if (!a) return;
-    const dx = e.clientX - a.px;
-    const dy = e.clientY - a.py;
-    setCaixa(
-      dentroDaTela(
-        a.tipo === "mover"
-          ? { ...a.inicio, x: a.inicio.x + dx, y: a.inicio.y + dy }
-          : { ...a.inicio, w: a.inicio.w + dx, h: a.inicio.h + dy },
-      ),
-    );
-  };
-  const soltar = () => {
-    if (!arrasto.current) return;
-    arrasto.current = null;
-    salvar(modo, caixa);
+    const mover = (ev: PointerEvent) => {
+      const a = arrasto.current;
+      if (!a) return;
+      ev.preventDefault();
+      const dx = ev.clientX - a.px;
+      const dy = ev.clientY - a.py;
+      setCaixa(
+        dentroDaTela(
+          a.tipo === "mover"
+            ? { ...a.inicio, x: a.inicio.x + dx, y: a.inicio.y + dy }
+            : { ...a.inicio, w: a.inicio.w + dx, h: a.inicio.h + dy },
+        ),
+      );
+    };
+    const soltar = () => {
+      arrasto.current = null;
+      window.removeEventListener("pointermove", mover);
+      window.removeEventListener("pointerup", soltar);
+      window.removeEventListener("pointercancel", soltar);
+      document.body.style.userSelect = "";
+      salvar(modo, caixaRef.current);
+    };
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", mover);
+    window.addEventListener("pointerup", soltar);
+    window.addEventListener("pointercancel", soltar);
   };
   const trocarModo = () => {
     const m: PainelModo = modo === "solto" ? "encaixado" : "solto";
@@ -114,11 +129,8 @@ export function CadFloatingPanel({
 
   const cabecalho = (
     <div
-      onPointerDown={iniciar("mover")}
-      onPointerMove={mover}
-      onPointerUp={soltar}
-      onPointerCancel={soltar}
-      className={`flex shrink-0 select-none items-center gap-2 border-b border-[#e5e7eb] bg-[#0f2848] px-2 py-1 text-white ${
+      onPointerDown={(e) => iniciar("mover", e)}
+      className={`flex shrink-0 touch-none select-none items-center gap-2 border-b border-[#e5e7eb] bg-[#0f2848] px-2 py-1 text-white ${
         modo === "solto" ? "cursor-move rounded-t-xl" : "rounded-t-lg"
       }`}
     >
@@ -149,24 +161,22 @@ export function CadFloatingPanel({
       </div>
     );
   }
-  return (
+  return createPortal(
     <div
       role="dialog"
       aria-label={title}
-      className="fixed z-[85] flex flex-col overflow-hidden rounded-xl border border-[#cbd5e1] bg-white shadow-2xl"
-      style={{ left: caixa.x, top: caixa.y, width: caixa.w, height: caixa.h }}
+      className="fixed z-[200] flex flex-col overflow-hidden rounded-xl border border-[#cbd5e1] bg-white shadow-2xl"
+      style={{ position: "fixed", zIndex: 200, left: caixa.x, top: caixa.y, width: caixa.w, height: caixa.h }}
     >
       {cabecalho}
       <div className="min-h-0 flex-1 overflow-auto">{children("solto")}</div>
       <div
-        onPointerDown={iniciar("tamanho")}
-        onPointerMove={mover}
-        onPointerUp={soltar}
-        onPointerCancel={soltar}
+        onPointerDown={(e) => iniciar("tamanho", e)}
         title="Arraste para mudar o tamanho"
-        className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize"
-        style={{ background: "linear-gradient(135deg, transparent 50%, #94a3b8 50%)" }}
+        className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize touch-none"
+        style={{ position: "absolute", right: 0, bottom: 0, width: 18, height: 18, cursor: "nwse-resize", background: "linear-gradient(135deg, transparent 50%, #94a3b8 50%)" }}
       />
-    </div>
+    </div>,
+    document.body,
   );
 }

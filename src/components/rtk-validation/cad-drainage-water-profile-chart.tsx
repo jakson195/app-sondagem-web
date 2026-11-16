@@ -77,7 +77,7 @@ export function CadDrainageWaterProfileChart({
     if (!selectedPipe) return null;
     if (chainSegments.length === 0) return null;
 
-    const nodes: Array<{ id: string; code: string }> = [];
+    const nodes: Array<{ id: string; code: string; groundZ: number | null }> = [];
     const invertZ: number[] = [];
     const waterZ: number[] = [];
     const distM: number[] = [];
@@ -87,6 +87,7 @@ export function CadDrainageWaterProfileChart({
     nodes.push({
       id: firstFromId,
       code: pvById.get(firstFromId)?.drainage?.code ?? pvById.get(firstFromId)?.label ?? firstFromId,
+      groundZ: pvById.get(firstFromId)?.drainage?.groundZ ?? null,
     });
 
     const firstInvertInZ = first.drainage?.invertInZ ?? first.vertices[0].z;
@@ -156,11 +157,14 @@ export function CadDrainageWaterProfileChart({
       nodes.push({
         id: toId,
         code: pvById.get(toId)?.drainage?.code ?? pvById.get(toId)?.label ?? toId,
+        groundZ: pvById.get(toId)?.drainage?.groundZ ?? null,
       });
     }
 
-    const zMin = Math.min(...invertZ, ...waterZ);
-    const zMax = Math.max(...invertZ, ...waterZ);
+    const grounds = nodes.map((n) => n.groundZ).filter((z): z is number => z != null && Number.isFinite(z));
+    const crowns = segmentMeta.flatMap((m) => [m.invertIn + m.D, m.invertOut + m.D]);
+    const zMin = Math.min(...invertZ, ...waterZ) - 0.4;
+    const zMax = Math.max(...invertZ, ...waterZ, ...crowns, ...grounds) + 0.5;
 
     return {
       nodes,
@@ -189,12 +193,12 @@ export function CadDrainageWaterProfileChart({
   const toX = (d: number) => margin.left + innerW * (d / totalLen);
   const toY = (z: number) => margin.top + innerH * (1 - (z - zMin) / (zMax - zMin));
 
-  const zTicks = useMemo(() => {
+  const zTicks = (() => {
     const span = zMax - zMin;
     const tickCount = 4;
     const step = span / tickCount || 1;
     return new Array(tickCount + 1).fill(0).map((_, i) => zMin + step * i);
-  }, [zMin, zMax]);
+  })();
 
   const segment0 = profile.segmentMeta[0]?.pipe;
   const selectedRatio = segment0?.drainage?.flowDepthRatio ?? 0;
@@ -240,6 +244,31 @@ export function CadDrainageWaterProfileChart({
             </g>
           ))}
 
+          {/* terreno natural sobre a rede */}
+          {profile.nodes.every((n) => n.groundZ != null) ? (
+            <polyline
+              points={profile.nodes.map((n, i) => `${toX(profile.distM[i] ?? 0)},${toY(n.groundZ!)}`).join(" ")}
+              fill="none"
+              stroke="#8b5e34"
+              strokeWidth={1.4}
+            />
+          ) : null}
+
+          {/* corpo do tubo (geratriz inferior até a superior) */}
+          {profile.segmentMeta.map((meta, i) => {
+            const x0 = toX(profile.distM[i]);
+            const x1 = toX(profile.distM[i + 1]);
+            return (
+              <polygon
+                key={`tubo-${i}`}
+                points={`${x0},${toY(meta.invertIn)} ${x1},${toY(meta.invertOut)} ${x1},${toY(meta.invertOut + meta.D)} ${x0},${toY(meta.invertIn + meta.D)}`}
+                fill="#f1f5f9"
+                stroke="#64748b"
+                strokeWidth={0.8}
+              />
+            );
+          })}
+
           {/* preenchimento por trecho */}
           {profile.segmentMeta.map((meta, i) => {
             const x0 = toX(profile.distM[i]);
@@ -279,15 +308,32 @@ export function CadDrainageWaterProfileChart({
             strokeDasharray="4 3"
           />
 
-          {/* nós e rótulos */}
+          {/* PVs: poço do fundo até a tampa, com cotas */}
           {profile.nodes.map((n, i) => {
             const x = toX(profile.distM[i] ?? 0);
-            const y = toY(profile.invertZ[i] ?? 0);
+            const fundo = (profile.invertZ[i] ?? 0) - 0.15;
+            const diam = Math.max(
+              profile.segmentMeta[Math.max(0, i - 1)]?.D ?? 0.4,
+              profile.segmentMeta[Math.min(i, profile.segmentMeta.length - 1)]?.D ?? 0.4,
+            );
+            const tampa = n.groundZ ?? (profile.invertZ[i] ?? 0) + diam + 0.6;
+            const yT = toY(tampa);
+            const yF = toY(fundo);
+            const w = 9;
+            const ehBoca = n.code.startsWith("BL");
             return (
               <g key={`node-${n.id}-${i}`}>
-                <circle cx={x} cy={y} r={2.5} fill="#0e7490" />
-                <text x={x} y={y - 7} fontSize={7} fill="#0f2848" textAnchor="middle">
+                <rect x={x - w / 2} y={yT} width={w} height={Math.max(4, yF - yT)} fill="#ffffff" stroke="#0b3a6e" strokeWidth={1.3} />
+                <line x1={x - w / 2 - 2.5} y1={yT} x2={x + w / 2 + 2.5} y2={yT} stroke="#0b3a6e" strokeWidth={2.4} />
+                <line x1={x - w / 2} y1={yF} x2={x + w / 2} y2={yF} stroke="#0b3a6e" strokeWidth={1.8} />
+                <text x={x} y={yT - 12} fontSize={7.5} fontWeight={700} fill="#0b3a6e" textAnchor="middle">
                   {n.code}
+                </text>
+                <text x={x} y={yT - 4} fontSize={6} fill="#475569" textAnchor="middle" fontFamily="ui-monospace, monospace">
+                  {ehBoca ? "" : `T ${tampa.toFixed(2)}`}
+                </text>
+                <text x={x} y={yF + 8} fontSize={6} fill="#475569" textAnchor="middle" fontFamily="ui-monospace, monospace">
+                  {`F ${(profile.invertZ[i] ?? 0).toFixed(2)}`}
                 </text>
               </g>
             );
@@ -306,7 +352,7 @@ export function CadDrainageWaterProfileChart({
                   ? `Cheio y/D=${meta.yOverD.toFixed(2)}`
                   : `Extrapolando y/D=${meta.yOverD.toFixed(2)}`;
             return (
-              <text key={`seg-${i}-label`} x={xMid} y={yLabel} fontSize={7.5} fill={color} textAnchor="middle">
+              <text key={`seg-${i}-label`} x={xMid} y={yLabel - 3} fontSize={7.5} fontWeight={600} fill={color} textAnchor="middle" stroke="#ffffff" strokeWidth={2.5} paintOrder="stroke">
                 {text}
               </text>
             );
@@ -328,7 +374,7 @@ export function CadDrainageWaterProfileChart({
                     i={fmt(meta.slopePct, 2)}% · y/D={fmt(meta.yOverD, 2)} · {cls.class}
                   </p>
                   <p className="text-[10px] text-[#475569]">
-                    invert {fmt(meta.invertIn, 2)} → {fmt(meta.invertOut, 2)} m · nivel d'agua{" "}
+                    invert {fmt(meta.invertIn, 2)} → {fmt(meta.invertOut, 2)} m · nível d&apos;água{" "}
                     {fmt(meta.waterIn, 2)} → {fmt(meta.waterOut, 2)} m
                   </p>
                 </div>

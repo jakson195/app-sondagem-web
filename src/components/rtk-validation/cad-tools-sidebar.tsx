@@ -188,7 +188,7 @@ export function CadToolsSidebar({
                 title={chrome(`section.${section.id}`)}
                 aria-label={chrome(`section.${section.id}`)}
                 aria-expanded={open}
-                className="flex w-full items-center justify-between rounded px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#6b7280] hover:bg-[#f9fafb]"
+                className="flex w-full items-center justify-between rounded px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-[#0f2848] hover:bg-[#f3f4f6]"
               >
                 {chrome(`section.${section.id}`)}
                 <span aria-hidden>{open ? "▾" : "▸"}</span>
@@ -201,10 +201,10 @@ export function CadToolsSidebar({
                       title={labels[tab]}
                       aria-label={labels[tab]}
                       onClick={() => onTabChange(tab)}
-                      className={`mt-0.5 w-full truncate rounded px-2 py-1 text-left text-[11px] font-medium uppercase tracking-wide ${
+                      className={`mt-0.5 w-full truncate rounded py-1 pl-5 pr-2 text-left text-[11px] font-normal tracking-wide ${
                         activeTab === tab
-                          ? "bg-[#0f2848] text-white"
-                          : "text-[#374151] hover:bg-[#f3f4f6]"
+                          ? "bg-[#0f2848] font-medium text-white"
+                          : "text-[#8a94a6] hover:bg-[#f3f4f6] hover:text-[#374151]"
                       }`}
                     >
                       {labels[tab]}
