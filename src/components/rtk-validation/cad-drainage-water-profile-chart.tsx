@@ -360,6 +360,19 @@ export function CadDrainageWaterProfileChart({
         </svg>
       </div>
 
+      {/* seção transversal de cada trecho: o tubo e a lâmina d'água dentro dele */}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {profile.segmentMeta.map((meta, i) => (
+          <SecaoTubo
+            key={`secao-${i}`}
+            codigo={meta.pipe.drainage?.code ?? meta.pipe.name ?? `TB-${i + 1}`}
+            diametroM={meta.D}
+            yOverD={meta.yOverD}
+            material={meta.pipe.drainage?.material}
+          />
+        ))}
+      </div>
+
       <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
         <div className="rounded border border-[#e5e7eb] p-2">
           <p className="text-[10px] font-semibold text-[#0f2848]">{t("drenagem.profileSegmentsTitle")}</p>
@@ -476,3 +489,66 @@ export function CadDrainageWaterProfileChart({
   );
 }
 
+
+/** Corte do tubo: círculo com a lâmina d'água preenchida até y/D. */
+function SecaoTubo({
+  codigo,
+  diametroM,
+  yOverD,
+  material,
+}: {
+  codigo: string;
+  diametroM: number;
+  yOverD: number;
+  material?: string;
+}) {
+  const r = 34;
+  const cx = 46;
+  const cy = 44;
+  const parede = 5;
+  const ratio = Math.max(0, Math.min(1, yOverD));
+  const cls = classifyDrainageFlowDepthRatio(ratio, DRAINAGE_LAMINA_RELATIVA_MAX).class;
+  const cor = cls === "Extrapolando" ? "#dc2626" : cls === "Cheio" ? "#d97706" : "#0ea5e9";
+  const ys = cy + r - 2 * r * ratio;
+  const dy = ys - cy;
+  const meia = Math.sqrt(Math.max(0, r * r - dy * dy));
+  const agua =
+    ratio <= 0.001
+      ? null
+      : ratio >= 0.999
+        ? <circle cx={cx} cy={cy} r={r} fill={cor} fillOpacity={0.55} />
+        : (
+          <path
+            d={`M ${cx - meia} ${ys} A ${r} ${r} 0 ${ratio > 0.5 ? 1 : 0} 0 ${cx + meia} ${ys} Z`}
+            fill={cor}
+            fillOpacity={0.55}
+          />
+        );
+  const laminaMm = Math.round(ratio * diametroM * 1000);
+  return (
+    <figure className="flex items-center gap-2 rounded-lg border border-[#e5e7eb] bg-[#f8fafc] px-2 py-1.5">
+      <svg width={92} height={88} viewBox="0 0 92 88" aria-label={`Seção do tubo ${codigo}`}>
+        <circle cx={cx} cy={cy} r={r + parede / 2} fill="none" stroke="#94a3b8" strokeWidth={parede} />
+        <circle cx={cx} cy={cy} r={r} fill="#ffffff" />
+        {agua}
+        {ratio > 0.001 && ratio < 0.999 ? (
+          <line x1={cx - meia} y1={ys} x2={cx + meia} y2={ys} stroke={cor} strokeWidth={1.5} />
+        ) : null}
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#0b3a6e" strokeWidth={1.4} />
+        <line x1={cx + r + 6} y1={cy + r} x2={cx + r + 6} y2={ys} stroke="#475569" strokeWidth={0.8} />
+      </svg>
+      <figcaption className="text-[10px] leading-4 text-[#334155]">
+        <p className="font-semibold text-[#0f2848]">{codigo}</p>
+        <p>
+          DN {Math.round(diametroM * 1000)} mm{material ? ` · ${material}` : ""}
+        </p>
+        <p>
+          lâmina {laminaMm} mm · y/D {ratio.toFixed(2)}
+        </p>
+        <p className="font-semibold" style={{ color: cor }}>
+          {cls}
+        </p>
+      </figcaption>
+    </figure>
+  );
+}

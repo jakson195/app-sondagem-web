@@ -275,6 +275,9 @@ function ContatoDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ empresaId: empresa.empresaId, mensagem, telefone, codigoIbge: cidade?.codigoIbge, servico }),
       });
+      if (r.status === 401) {
+        throw new Error("Para pedir contato, entre na sua conta DataGeo Digital ou crie uma conta grátis (Trial 90 dias).");
+      }
       const data = (await r.json()) as { error?: string };
       if (!r.ok) throw new Error(data.error ?? "Falha ao enviar.");
       setOk(true);

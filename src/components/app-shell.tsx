@@ -41,7 +41,6 @@ const coreNav = [
   { href: "/gestao-empresa", label: "🏢 Gestão · empresas" },
   { href: "/assinatura", label: "💳 Assinatura" },
   { href: "/admin/companies", label: "🏛️ Empresas · admin" },
-  { href: "/adm/agentes", label: "🤝 Agentes comerciais" },
 ] as const;
 
 function hrefWithObra(base: string, obraId: number | null) {
@@ -301,6 +300,8 @@ export function AppShell({
   }, [moduleNav, selectedObraId, isPlatformAdmin]);
 
   const isCadWorkspace = pathname === "/cad" || pathname.startsWith("/cad/");
+  /** Modo LOTEAMENTO: sem aba lateral; tudo parte do Ambiente CAD (barra fina no topo). */
+  const semAbaLateral = isLoteamentoProductMode();
 
   return (
     <div
@@ -327,6 +328,7 @@ export function AppShell({
         }
       `}</style>
       {/* Desktop sidebar */}
+      {semAbaLateral ? null : (
       <aside className="cad-app-chrome dg-sidebar hidden w-64 shrink-0 min-h-0 overflow-y-auto p-5 print:hidden md:flex md:flex-col">
         <div className="mb-6">
           <BrandLogo href="/dashboard" height={36} />
@@ -344,8 +346,11 @@ export function AppShell({
           <LogoutButton />
         </div>
       </aside>
+      )}
 
       {/* Mobile overlay */}
+      {semAbaLateral ? null : (
+      <>
       <div
         className={`cad-app-chrome fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity duration-200 print:hidden md:hidden ${
           mobileOpen ? "opacity-100" : "pointer-events-none opacity-0"
@@ -389,13 +394,36 @@ export function AppShell({
           <LogoutButton onClick={() => setMobileOpen(false)} />
         </div>
       </aside>
+      </>
+      )}
 
       <div
         className={`flex min-w-0 flex-1 flex-col ${
           isCadWorkspace ? "min-h-0 overflow-hidden" : ""
         }`}
       >
-        <header className="cad-app-chrome sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)]/90 px-4 backdrop-blur-md print:hidden md:hidden">
+        {semAbaLateral ? (
+          <header className="cad-app-chrome flex h-10 shrink-0 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-3 print:hidden">
+            <BrandLogo href="/cad" height={24} />
+            {!isCadWorkspace ? (
+              <Link href="/cad" className="dg-nav-item rounded-md px-2 py-1 text-xs font-semibold">
+                ← Ambiente CAD
+              </Link>
+            ) : null}
+            <div className="ml-auto flex items-center gap-2">
+              <CompanySwitcher isPlatformAdmin={isPlatformAdmin} compact />
+              <button
+                type="button"
+                onClick={() => void sair()}
+                className="dg-nav-item flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium"
+              >
+                <LogOut className="h-3.5 w-3.5" strokeWidth={2} />
+                Sair
+              </button>
+            </div>
+          </header>
+        ) : null}
+        <header className={`cad-app-chrome sticky top-0 z-30 h-14 items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)]/90 px-4 backdrop-blur-md print:hidden md:hidden ${semAbaLateral ? "hidden" : "flex"}`}>
           <button
             type="button"
             onClick={() => setMobileOpen(true)}

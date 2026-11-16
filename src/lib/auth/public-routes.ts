@@ -12,6 +12,7 @@ export const PUBLIC_EXACT_PATHS = new Set([
   "/funcionalidades",
   "/planos",
   "/contato",
+  "/empresas",
 ]);
 
 /** Prefixos de API acessíveis sem login. */
@@ -22,6 +23,9 @@ export const PUBLIC_API_PREFIXES = [
   "/api/auth/reset-password",
   "/api/billing/webhook",
   "/api/billing/mercadopago/webhook",
+  // diretório público de empresas (só busca; pedir contato continua exigindo login)
+  "/api/diretorio/busca",
+  "/api/diretorio/municipios",
 ] as const;
 
 export function isPublicPath(pathname: string): boolean {

@@ -14,6 +14,8 @@
       "infraHint": "Redes de drenagem e esgoto.",
       "documentos": "Documentos",
       "documentosHint": "Memorial descritivo e documentos do projeto.",
+      "viabilidade": "Viabilidade",
+      "viabilidadeHint": "Abrir o estudo de viabilidade deste loteamento (SINAPI).",
       "3d": "3D",
       "3dHint": "Abrir a maquete eletrônica do loteamento.",
       "need3d": "Gere o loteamento (vias e lotes) para abrir a maquete 3D."

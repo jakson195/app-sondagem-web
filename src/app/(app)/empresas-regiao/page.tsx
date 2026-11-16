@@ -1,7 +1,6 @@
-import { DiretorioBusca } from "@/components/diretorio/diretorio-busca";
+import { redirect } from "next/navigation";
 
-export const metadata = { title: "Empresas por região — DataGeo Digital" };
-
+/** A busca de empresas mudou para o site público (/empresas). */
 export default function EmpresasRegiaoPage() {
-  return <DiretorioBusca />;
+  redirect("/empresas");
 }

@@ -23,6 +23,8 @@ export default async function DashboardPage({
 }: {
   searchParams?: Promise<{ obraId?: string; projectId?: string }>;
 }) {
+  // Modo LOTEAMENTO: o painel fica escondido; quem entra cai direto no Ambiente CAD.
+  if (isLoteamentoProductMode()) redirect("/cad");
   const user = await getAuthUserFromCookies();
   if (!user) {
     redirect("/login");

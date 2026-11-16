@@ -2,14 +2,12 @@ import { NextResponse } from "next/server";
 import { buscarEmpresas, isServicoDiretorio, municipioPorCodigo } from "@/lib/diretorio/core";
 import { carregarPerfisPerto } from "@/lib/diretorio/db";
 import { isPrismaMissingTableError } from "@/lib/pg-error-utils";
-import { getAuthUserFromRequest } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
 /** Empresas que usam o app perto de uma cidade: ?ibge=4204608&raio=80&servico=topografia */
 export async function GET(req: Request) {
-  const user = await getAuthUserFromRequest(req);
-  if (!user) return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+  // Público: o site mostra só empresas com perfil visível e assinatura ativa.
   const sp = new URL(req.url).searchParams;
   const cidade = municipioPorCodigo(Number(sp.get("ibge")));
   if (!cidade) return NextResponse.json({ error: "Escolha uma cidade da lista." }, { status: 400 });

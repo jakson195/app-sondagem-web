@@ -6,8 +6,11 @@ type CompanyRow = { id: number; name: string; slug: string };
 
 export function CompanySwitcher({
   isPlatformAdmin = false,
+  compact = false,
 }: {
   isPlatformAdmin?: boolean;
+  /** Em linha, para a barra superior (sem o rótulo em cima). */
+  compact?: boolean;
 }) {
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
@@ -59,6 +62,24 @@ export function CompanySwitcher({
       setActiveId(companyId);
       window.location.reload();
     }
+  }
+
+  if (compact) {
+    return (
+      <select
+        aria-label="Empresa activa"
+        title="Empresa activa"
+        value={activeId ?? ""}
+        onChange={(e) => void onChange(Number(e.target.value))}
+        className="dg-input max-w-[14rem] px-2 py-1 text-xs"
+      >
+        {companies.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
+          </option>
+        ))}
+      </select>
+    );
   }
 
   return (

@@ -4315,6 +4315,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
   }
   /** Barra de módulos: abre as ferramentas do módulo no painel lateral (ou a maquete, no 3D). */
   function abrirModulo(id: CadModuleId) {
+    if (id === "viabilidade") {
+      openEstudoViabilidade();
+      return;
+    }
     if (id === "3d") {
       if (!maqueteReady.ok) {
         setModuloEscolhido("loteamento");

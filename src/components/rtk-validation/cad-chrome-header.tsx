@@ -4,6 +4,7 @@ import { ArrowLeft, Menu, Search, Settings, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
+import { isLoteamentoProductMode } from "@/lib/product-mode";
 import type { CadImportKind, CadInsertKind } from "@/lib/rtk-validation/cad/cad-io-kinds";
 import type { CadGoogleMapType } from "@/lib/google-maps-config";
 import { CadMenu, CadMenuCheck, CadMenuItem, CadMenuSep } from "./cad-ui-menu";
@@ -90,6 +91,7 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
 
   return (
     <header className="cad-interface pointer-events-auto relative z-[80] isolate flex h-12 shrink-0 items-center gap-1 border-b border-[#e5e7eb] bg-white px-2">
+      {isLoteamentoProductMode() ? null : (
       <button
         type="button"
         onClick={goBack}
@@ -100,6 +102,7 @@ export function CadChromeHeader(props: CadChromeHeaderProps) {
         <ArrowLeft className="h-4 w-4" />
         <span>{t("chrome.back")}</span>
       </button>
+      )}
       <button
         type="button"
         onClick={props.onToggleSidebar}

@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Droplets, FileText, LayoutGrid, Mountain, Route, Square } from "lucide-react";
+import { BarChart3, Box, Droplets, FileText, LayoutGrid, Mountain, Route, Square } from "lucide-react";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import type { CadToolsTab } from "./cad-tools-sidebar";
 
@@ -8,7 +8,7 @@ import type { CadToolsTab } from "./cad-tools-sidebar";
  * Barra de módulos do CAD (Gleba · Loteamento · Vias · Terreno · Infraestrutura · Documentos · 3D).
  * Só organiza a navegação: cada módulo abre as ferramentas já existentes no painel lateral.
  */
-export type CadModuleId = "gleba" | "loteamento" | "vias" | "terreno" | "infra" | "documentos" | "3d";
+export type CadModuleId = "gleba" | "loteamento" | "vias" | "terreno" | "infra" | "documentos" | "viabilidade" | "3d";
 
 export const CAD_MODULES: { id: CadModuleId; tabs: CadToolsTab[]; icon: typeof Square }[] = [
   { id: "gleba", tabs: ["draw", "layers", "properties", "commands", "sigef", "anm"], icon: Square },
@@ -17,6 +17,7 @@ export const CAD_MODULES: { id: CadModuleId; tabs: CadToolsTab[]; icon: typeof S
   { id: "terreno", tabs: ["contour", "tin", "hypsometric", "profile", "volumetria"], icon: Mountain },
   { id: "infra", tabs: ["drenagem"], icon: Droplets },
   { id: "documentos", tabs: ["memorial"], icon: FileText },
+  { id: "viabilidade", tabs: [], icon: BarChart3 },
   { id: "3d", tabs: [], icon: Box },
 ];
 
