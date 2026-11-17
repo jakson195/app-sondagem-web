@@ -3663,7 +3663,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
       if (hit) {
         setSelectedIds((prev) => (shiftKey ? (prev.includes(hit) ? prev.filter((id) => id !== hit) : [...prev, hit]) : [hit]));
         const hitEntity = project.entities.find((e) => e.id === hit);
-        focusDrainageCalc(hit, Boolean(hitEntity && isDrainagePipeEntity(hitEntity)));
+        if (hitEntity && isDrainageSelectableEntity(hitEntity)) focusDrainageCalc(hit, false);
       } else if (!shiftKey) {
         setSelectedIds([]);
       }
@@ -4839,14 +4839,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
     return t("drenagem.ok");
   }
 
-  function focusDrainageCalc(entityId: string | null, openTab = false) {
+  /**
+   * Seleciona um PV/trecho e mostra o cálculo dele. A planilha (janela móvel) só abre quando
+   * o pedido vem de um botão; clicar no desenho não reabre a janela que o usuário fechou.
+   */
+  function focusDrainageCalc(entityId: string | null, abrirPlanilha = false) {
     if (!entityId) return;
     const entity = project.entities.find((e) => e.id === entityId);
     if (!isDrainageSelectableEntity(entity)) return;
     setSelectedId(entityId);
     setToolsTab("drenagem");
-    setDrenagemPlanilhaOpen(true);
-    if (openTab) setActiveTab("planilha");
+    if (abrirPlanilha) setDrenagemPlanilhaOpen(true);
     const selected = selectDrainageCalcParams(project, entityId, currentDrainageParams());
     if (selected?.params) {
       setDrenagemNotice(
@@ -9824,7 +9827,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       type="button"
                       onClick={() => {
                         setDrenagemPlanilhaOpen(true);
-                        setActiveTab("planilha");
+                        setActiveTab("desenho");
                       }}
                       className="w-full rounded-lg bg-[#0369a1] px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-[#075985]"
                     >
@@ -9972,7 +9975,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                                   <tr
                                     key={pv.id}
                                     className={`cursor-pointer ${selectedId === pv.id ? "bg-[#e0f2fe]" : ""}`}
-                                    onClick={() => focusDrainageCalc(pv.id, false)}
+                                    onClick={() => focusDrainageCalc(pv.id, true)}
                                   >
                                     <td className="py-0.5 font-medium">{pv.drainage?.code ?? pv.label}</td>
                                     <td>{(pv.drainage?.stationM ?? 0).toFixed(1)}</td>
@@ -10376,7 +10379,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {activeTab === "planilha" ? (
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="relative min-h-0 flex-1 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setActiveTab("desenho")}
+                className="absolute bottom-3 right-3 z-10 rounded-md bg-[#0f2848] px-3 py-1.5 text-xs font-semibold text-white shadow-lg hover:bg-[#1e3a5f]"
+              >
+                ✕ Fechar planilha
+              </button>
               <CadDrainagePlanilha
                 project={project}
                 params={currentDrainageParams()}

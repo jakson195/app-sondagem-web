@@ -155,7 +155,7 @@ export function CadFloatingPanel({
 
   if (modo === "encaixado" || !caixa) {
     return (
-      <div className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white">
+      <div className="cad-tools-panel flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-[#e5e7eb] bg-white text-[#111827]">
         {cabecalho}
         {children("encaixado")}
       </div>
@@ -165,7 +165,7 @@ export function CadFloatingPanel({
     <div
       role="dialog"
       aria-label={title}
-      className="fixed z-[200] flex flex-col overflow-hidden rounded-xl border border-[#cbd5e1] bg-white shadow-2xl"
+      className="cad-tools-panel fixed z-[200] flex flex-col overflow-hidden rounded-xl border border-[#cbd5e1] bg-white text-[#111827] shadow-2xl"
       style={{ position: "fixed", zIndex: 200, left: caixa.x, top: caixa.y, width: caixa.w, height: caixa.h }}
     >
       {cabecalho}
