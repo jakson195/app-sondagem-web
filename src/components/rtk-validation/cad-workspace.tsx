@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { runQueuedInEffect } from "@/lib/react/queue-in-effect";
 import { useTranslations } from "@/lib/rtk-validation/cad-intl";
 import { useRouter } from "next/navigation";
@@ -608,6 +608,24 @@ function textosDoLote(lote: CadPolylineEntity, index: number, vias: CadPolylineE
   cacheTextosLote.set(lote, { vias, index, textos });
   return textos;
 }
+/** Identidade numérica estável de objetos (para compor chaves de cache). */
+const idsObjetos = new WeakMap<object, number>();
+let proximoIdObjeto = 1;
+function idDe(o: object): number {
+  let id = idsObjetos.get(o);
+  if (id == null) {
+    id = proximoIdObjeto++;
+    idsObjetos.set(o, id);
+  }
+  return id;
+}
+/**
+ * Elemento React já desenhado de cada entidade. Se nada que afeta o desenho dela mudou,
+ * devolve o mesmo objeto e o React pula a reconciliação (digitar num painel, mover o mouse,
+ * abrir menus etc. deixam de redesenhar milhares de elementos).
+ */
+const cacheElementos = new WeakMap<CadEntity, { chave: string; el: ReactNode }>();
+
 const cacheBocas = new WeakMap<object, ReturnType<typeof angulosDasBocas>>();
 function angulosDasBocasCache(project: CadProject) {
   const hit = cacheBocas.get(project.entities);
@@ -631,6 +649,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const spacePanRef = useRef(false);
   const panRafRef = useRef<number | null>(null);
   const pendingPanRef = useRef<ViewBounds | null>(null);
+  /** Grupo do desenho que se move por transform durante o pan (sem re-renderizar o React). */
+  const panGroupRef = useRef<SVGGElement | null>(null);
+  const basemapPanRef = useRef<HTMLDivElement | null>(null);
+  const panCommitAtRef = useRef(0);
+  const boundsRef = useRef<ViewBounds | null>(null);
   const [viewMode, setViewMode] = useState<"plan" | "3d">("plan");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -1070,6 +1093,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   );
 
   const bounds = viewBounds ?? computeViewportBoundsSafe(visibleEntities);
+  boundsRef.current = bounds;
 
   const viewport = useMemo(
     () => ({ ...bounds, width, height, padding }),
@@ -1091,6 +1115,40 @@ export function CadWorkspace({ userId }: { userId: string }) {
     if (!panning) return viewport;
     return { ...panning.bounds, width, height, padding };
   }, [panning, viewport, width, height, padding]);
+
+  /** Desloca desenho e mapa de fundo até a vista pendente, sem passar pelo React. */
+  function aplicarTransformPan() {
+    const pend = pendingPanRef.current;
+    const cur = boundsRef.current;
+    const g = panGroupRef.current;
+    if (!pend || !cur) {
+      if (g) g.removeAttribute("transform");
+      return;
+    }
+    const innerW = width - padding * 2;
+    const innerH = height - padding * 2;
+    const spanX = cur.maxX - cur.minX;
+    const spanY = cur.maxY - cur.minY;
+    const tx = spanX > 1e-9 ? ((cur.minX - pend.minX) / spanX) * innerW : 0;
+    const ty = spanY > 1e-9 ? ((pend.minY - cur.minY) / spanY) * innerH : 0;
+    if (g) g.setAttribute("transform", `translate(${tx} ${ty})`);
+    const base = basemapPanRef.current;
+    if (base && panning) {
+      const pb = panning.bounds;
+      const sX = pb.maxX - pb.minX;
+      const sY = pb.maxY - pb.minY;
+      const dx = sX > 1e-9 ? ((pb.minX - pend.minX) / sX) * innerW : 0;
+      const dy = sY > 1e-9 ? ((pend.minY - pb.minY) / sY) * innerH : 0;
+      base.style.transform = `translate(${(dx / width) * 100}%, ${(dy / height) * 100}%)`;
+    }
+  }
+
+  // quando a vista confirmada muda no meio do pan, recalcula o deslocamento residual
+  useLayoutEffect(() => {
+    if (panning) aplicarTransformPan();
+    else if (panGroupRef.current) panGroupRef.current.removeAttribute("transform");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY, panning]);
 
   const basemapPanStyle = useMemo(() => {
     if (!panning) return undefined;
@@ -5817,14 +5875,28 @@ export function CadWorkspace({ userId }: { userId: string }) {
   useEffect(() => {
     const el = canvasContainerRef.current;
     if (!el || viewMode === "3d") return;
+    // touchpad/mouse geram dezenas de eventos por segundo: junta tudo num zoom por quadro
+    let fator = 1;
+    let ancora: { sx: number; sy: number } | null = null;
+    let raf: number | null = null;
     const handler = (e: WheelEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const { sx, sy } = toViewBoxCoords(e.clientX, e.clientY);
-      applyZoomRef.current(e.deltaY > 0 ? ZOOM_OUT_FACTOR : ZOOM_IN_FACTOR, sx, sy);
+      ancora = toViewBoxCoords(e.clientX, e.clientY);
+      fator *= e.deltaY > 0 ? ZOOM_OUT_FACTOR : ZOOM_IN_FACTOR;
+      if (raf != null) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = null;
+        const f = Math.min(8, Math.max(1 / 8, fator));
+        fator = 1;
+        if (ancora && Math.abs(f - 1) > 1e-6) applyZoomRef.current(f, ancora.sx, ancora.sy);
+      });
     };
     el.addEventListener("wheel", handler, { passive: false });
-    return () => el.removeEventListener("wheel", handler);
+    return () => {
+      el.removeEventListener("wheel", handler);
+      if (raf != null) window.cancelAnimationFrame(raf);
+    };
   }, [viewMode]);
 
   function renderCoordinateGrid() {
@@ -6325,6 +6397,34 @@ export function CadWorkspace({ userId }: { userId: string }) {
       </g>
     );
   }
+  const chaveDesenhoGlobal = [
+    idDe(project.entities),
+    idDe(project.layers),
+    viewport.minX,
+    viewport.minY,
+    viewport.maxX,
+    viewport.maxY,
+    width,
+    height,
+    padding,
+    paperTone,
+    drenagemMinSlope,
+    isDrawWithPoints && snapToRtkPoints ? 1 : 0,
+  ].join("|");
+  const desenhoEntidades = visibleEntities.map((entity) => {
+    const sel = entity.id === selectedId || selectedIds.includes(entity.id);
+    const emRascunho =
+      entity.type === "point" && draft.length > 0
+        ? draft.some((v) => Math.hypot(v.x - entity.x, v.y - entity.y) < 1e-4)
+        : false;
+    const chave = `${chaveDesenhoGlobal}|${sel ? 1 : 0}${hoverSnapId === entity.id ? 1 : 0}${emRascunho ? 1 : 0}`;
+    const hit = cacheElementos.get(entity);
+    if (hit && hit.chave === chave) return hit.el;
+    const el = renderEntity(entity);
+    cacheElementos.set(entity, { chave, el });
+    return el;
+  });
+
 
   const selectedEntity = project.entities.find((e) => e.id === selectedId) ?? null;
   const selectedLayer = selectedEntity
@@ -10834,7 +10934,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
             ) : (
             <>
             {hasBasemap ? (
-              <div className="pointer-events-none absolute inset-0 overflow-hidden" style={basemapPanStyle}>
+              <div ref={basemapPanRef} className="pointer-events-none absolute inset-0 overflow-hidden" style={basemapPanStyle}>
                 <CadBasemapLayer
                   viewport={basemapViewport}
                   entities={visibleEntities}
@@ -10905,7 +11005,14 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   if (panRafRef.current == null) {
                     panRafRef.current = window.requestAnimationFrame(() => {
                       panRafRef.current = null;
-                      if (pendingPanRef.current) setViewBounds(pendingPanRef.current);
+                      // a cada quadro só move o desenho (transform); a vista real é
+                      // confirmada no máx. 4×/s para preencher as bordas que entram na tela
+                      aplicarTransformPan();
+                      const agora = performance.now();
+                      if (pendingPanRef.current && agora - panCommitAtRef.current > 250) {
+                        panCommitAtRef.current = agora;
+                        setViewBounds(pendingPanRef.current);
+                      }
                     });
                   }
                   return;
@@ -11393,6 +11500,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 }
                 const shouldRebuildEixo = eixoEditActiveRef.current && loteamentoAjusteEixo;
                 eixoEditActiveRef.current = false;
+                if (panning && pendingPanRef.current) setViewBounds(pendingPanRef.current);
+                pendingPanRef.current = null;
                 setPanning(null);
                 setVertexDragIndex(null);
                 setEntityMove(null);
@@ -11411,6 +11520,8 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 }
                 const shouldRebuildEixo = eixoEditActiveRef.current && loteamentoAjusteEixo;
                 eixoEditActiveRef.current = false;
+                if (panning && pendingPanRef.current) setViewBounds(pendingPanRef.current);
+                pendingPanRef.current = null;
                 setPanning(null);
                 setVertexDragIndex(null);
                 setEntityMove(null);
@@ -11430,9 +11541,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 <rect width={width} height={height} fill="#0b1220" />
               ) : null}
               <CadHatchDefs layers={visibleCadLayers} />
+              <g ref={panGroupRef}>
               <CadRasterSvgLayer rasters={canvasRasters} viewport={viewport} />
               {renderCoordinateGrid()}
-              {visibleEntities.map(renderEntity)}
+              {desenhoEntidades}
+              </g>
               {(modifySession?.previewEntities?.length
                 ? modifySession.previewEntities
                 : aiPreviewEntities
