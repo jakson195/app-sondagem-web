@@ -802,7 +802,7 @@ function drainageNodeLabel(
   return formatDrainageNodeCallout({ kind, code, invertZ, groundZ, outfall: kind === "outfall" });
 }
 
-function sampleGroundZ(
+export function sampleGroundZ(
   x: number,
   y: number,
   fallbackZ: number,
@@ -850,7 +850,7 @@ function syntheticAxisFromVia(via: CadPolylineEntity): CadVertex[] {
   return samples.length >= 2 ? samples : [a, b];
 }
 
-function streetAxes(project: CadProject): CadPolylineEntity[] {
+export function streetAxes(project: CadProject): CadPolylineEntity[] {
   const eixos = listLoteamentoEixos(project);
   if (eixos.length > 0) return eixos;
   return closedPolysOn(project, LOTEAMENTO_VIAS_LAYER_ID)

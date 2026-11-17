@@ -23,6 +23,14 @@ export const DRENAGEM_CORES = {
   emissario: "#b91c1c",
 } as const;
 
+/** Rede de esgoto: mesmos símbolos em tons de marrom/laranja. */
+export const ESGOTO_CORES = {
+  tuboBorda: "#7c2d12",
+  tuboMiolo: "#fdba74",
+  pv: "#7c2d12",
+  pvTampa: "#c2410c",
+} as const;
+
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
 export function pixelsPorMetro(viewport: CadViewport): number {
@@ -98,6 +106,27 @@ export function DrenagemNoSimbolo({
   destaque: boolean;
   corDestaque: string;
 }) {
+  if (entity.esgoto) {
+    const borda = destaque ? corDestaque : ESGOTO_CORES.pv;
+    if (entity.esgoto.kind === "ps") {
+      const l = clamp(pxPorM * 0.5, 5, 9);
+      return (
+        <g>
+          <rect x={sx - l} y={sy - l} width={l * 2} height={l * 2} fill="#fff" stroke={borda} strokeWidth={destaque ? 2.4 : 1.6} />
+          <line x1={sx - l} y1={sy - l} x2={sx + l} y2={sy + l} stroke={borda} strokeWidth={1.1} />
+          <line x1={sx - l} y1={sy + l} x2={sx + l} y2={sy - l} stroke={borda} strokeWidth={1.1} />
+        </g>
+      );
+    }
+    const r = clamp(pxPorM * 0.7, 5.5, 13);
+    const lanc = entity.esgoto.kind === "outfall";
+    return (
+      <g>
+        <circle cx={sx} cy={sy} r={r} fill="#fff" stroke={lanc ? DRENAGEM_CORES.emissario : borda} strokeWidth={destaque ? 3 : 2} />
+        <circle cx={sx} cy={sy} r={r * 0.48} fill={lanc ? DRENAGEM_CORES.emissario : ESGOTO_CORES.pvTampa} />
+      </g>
+    );
+  }
   const kind = entity.drainage?.kind ?? (isDrainageInletEntity(entity) ? "inlet" : "pv");
   const tap = entity.drainage?.tap === true;
   const borda = destaque ? corDestaque : undefined;
@@ -148,7 +177,9 @@ export function DrenagemTuboSimbolo({
   falha,
   destaque,
   corDestaque,
+  paleta,
 }: {
+  paleta?: "esgoto";
   pontos: { sx: number; sy: number }[];
   pxPorM: number;
   diametroMm?: number;
@@ -173,7 +204,14 @@ export function DrenagemTuboSimbolo({
   const dM = (diametroMm ?? 400) / 1000;
   // exagero de 3× para o tubo aparecer na planta, sempre entre 3 e 12 px
   const largura = clamp(dM * pxPorM * 3, 3.2, 12);
-  const borda = destaque ? corDestaque : falha ? DRENAGEM_CORES.erro : DRENAGEM_CORES.tuboBorda;
+  const borda = destaque
+    ? corDestaque
+    : falha
+      ? DRENAGEM_CORES.erro
+      : paleta === "esgoto"
+        ? ESGOTO_CORES.tuboBorda
+        : DRENAGEM_CORES.tuboBorda;
+  const miolo = paleta === "esgoto" ? ESGOTO_CORES.tuboMiolo : DRENAGEM_CORES.tuboMiolo;
   const setas: { x: number; y: number; ang: number }[] = [];
   for (let i = 0; i + 1 < pontos.length; i++) {
     const a = pontos[i]!;
@@ -190,7 +228,7 @@ export function DrenagemTuboSimbolo({
   return (
     <g>
       <polyline points={pts} fill="none" stroke={borda} strokeWidth={largura} strokeLinecap="round" strokeLinejoin="round" />
-      <polyline points={pts} fill="none" stroke={falha ? "#fca5a5" : DRENAGEM_CORES.tuboMiolo} strokeWidth={Math.max(1.2, largura - 2.4)} strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points={pts} fill="none" stroke={falha ? "#fca5a5" : miolo} strokeWidth={Math.max(1.2, largura - 2.4)} strokeLinecap="round" strokeLinejoin="round" />
       {setas.map((p, i) => (
         <path
           key={i}

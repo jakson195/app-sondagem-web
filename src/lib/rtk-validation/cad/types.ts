@@ -55,6 +55,40 @@ export interface CadDrainageProps {
   status?: CadDrainageStatus;
 }
 
+/** Rede coletora de esgoto (NBR 9649): PV, ponta seca, trecho e ligação predial. */
+export type CadEsgotoKind = "pv" | "ps" | "outfall" | "pipe" | "ligacao";
+export type CadEsgotoStatus = "ok" | "lamina" | "tensao" | "profundidade";
+
+export interface CadEsgotoProps {
+  kind: CadEsgotoKind;
+  code?: string;
+  groundZ?: number;
+  invertZ?: number;
+  depthM?: number;
+  fromId?: string;
+  toId?: string;
+  lengthM?: number;
+  slopePct?: number;
+  diameterMm?: number;
+  invertInZ?: number;
+  invertOutZ?: number;
+  /** Vazão de início de plano (L/s), já com o mínimo de 1,5 L/s. */
+  qiLps?: number;
+  /** Vazão de fim de plano (L/s). */
+  qfLps?: number;
+  lotes?: number;
+  habitantes?: number;
+  /** Lâmina y/D com a vazão final. */
+  yOverD?: number;
+  velocityMs?: number;
+  /** Tensão trativa com a vazão inicial (Pa). */
+  tensaoPa?: number;
+  velocidadeCriticaMs?: number;
+  depthUpM?: number;
+  depthDownM?: number;
+  status?: CadEsgotoStatus;
+}
+
 export interface CadPointEntity {
   id: string;
   type: "point";
@@ -72,6 +106,7 @@ export interface CadPointEntity {
   /** Rotação do rótulo em graus no SVG (Y para baixo), paralela à aresta/tubo. */
   rotationDeg?: number;
   drainage?: CadDrainageProps;
+  esgoto?: CadEsgotoProps;
 }
 
 export interface CadLineEntity {
@@ -113,6 +148,7 @@ export interface CadPolylineEntity {
   confrontations?: string[];
   drainage?: CadDrainageProps;
   lote?: CadLoteProps;
+  esgoto?: CadEsgotoProps;
 }
 
 export type CadEntity = CadPointEntity | CadLineEntity | CadPolylineEntity;

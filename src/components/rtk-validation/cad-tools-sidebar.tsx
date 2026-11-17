@@ -37,6 +37,7 @@ export type CadToolsTab =
   | "sigef"
   | "loteamento"
   | "drenagem"
+  | "esgoto"
   | "reurb";
 
 export const CAD_TOOLS_PANEL_WIDTH_PX = 268;
@@ -76,6 +77,7 @@ const TAB_ICONS: Record<CadToolsTab, typeof Pencil> = {
   sigef: Landmark,
   loteamento: LayoutGrid,
   drenagem: Droplets,
+  esgoto: Waves,
   reurb: Recycle,
 };
 
@@ -85,7 +87,7 @@ const SECTIONS: { id: SectionId; tabs: CadToolsTab[] }[] = [
   { id: "topo", tabs: ["contour", "tin", "hypsometric", "profile"] },
   { id: "earth", tabs: ["volumetria"] },
   { id: "loteamento", tabs: ["loteamento"] },
-  { id: "infra", tabs: ["drenagem"] },
+  { id: "infra", tabs: ["drenagem", "esgoto"] },
   { id: "regularizacao", tabs: ["reurb"] },
   { id: "orgaos", tabs: ["anm", "sigef"] },
 ];

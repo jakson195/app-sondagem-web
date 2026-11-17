@@ -322,6 +322,8 @@ import {
   pixelsPorMetro,
 } from "@/components/rtk-validation/cad-drainage-symbols";
 import { CadFloatingPanel } from "@/components/rtk-validation/cad-floating-panel";
+import { CadEsgotoPanel, CadEsgotoPlanilha } from "@/components/rtk-validation/cad-esgoto";
+import { ESGOTO_REDE_LAYER, isEsgotoNoEntity } from "@/lib/rtk-validation/cad/loteamento-esgoto";
 import { CadChromeHeader } from "@/components/rtk-validation/cad-chrome-header";
 import { CadChromeToolbar } from "@/components/rtk-validation/cad-chrome-toolbar";
 import { CadModifyPanel } from "@/components/rtk-validation/cad-modify-panel";
@@ -736,6 +738,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   const [drenagemError, setDrenagemError] = useState<string | null>(null);
   const [drenagemBusy, setDrenagemBusy] = useState(false);
   const [drenagemPlanilhaOpen, setDrenagemPlanilhaOpen] = useState(false);
+  const [esgotoPlanilhaOpen, setEsgotoPlanilhaOpen] = useState(false);
   const [pvDrag, setPvDrag] = useState<{
     id: string;
     startX: number;
@@ -6015,7 +6018,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
         labelFontSize,
       );
       const showMarker = !isCoordLabelEntity(entity) && !isPlanTextOnlyPoint(entity);
-      const isStructure = isDrainageStructureLayer(entity.layerId);
+      const isStructure = isDrainageStructureLayer(entity.layerId) || isEsgotoNoEntity(entity);
       const planRole = inferPlanTextRole(entity);
       const structureR = Math.min(13, Math.max(7, drenagemPxPorM * 0.7)) + (selected ? 2 : 0);
       const planFill =
@@ -6150,6 +6153,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
                 })()
               : null}
           </polygon>
+        ) : entity.layerId === ESGOTO_REDE_LAYER.id ? (
+          <DrenagemTuboSimbolo
+            paleta="esgoto"
+            pontos={entity.vertices.map((v) => worldToScreen(v.x, v.y, viewport))}
+            pxPorM={drenagemPxPorM}
+            diametroMm={entity.esgoto?.diameterMm}
+            ramal={false}
+            falha={entity.esgoto?.status != null && entity.esgoto.status !== "ok"}
+            destaque={selected}
+            corDestaque={selectStroke}
+          />
         ) : isDrainagePipeEntity(entity) ? (
           <DrenagemTuboSimbolo
             pontos={entity.vertices.map((v) => worldToScreen(v.x, v.y, viewport))}
@@ -6185,7 +6199,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
             {contourLabel}
           </text>
         ) : null}
-        {!isClosed && entity.layerId === DRENAGEM_TUBOS_LAYER.id && entity.name ? (() => {
+        {!isClosed && (entity.layerId === DRENAGEM_TUBOS_LAYER.id || entity.layerId === ESGOTO_REDE_LAYER.id) && entity.name ? (() => {
           const pose = polylineLabelPose(entity.vertices);
           if (!pose) return null;
           const { sx: mx, sy: my } = worldToScreen(pose.x, pose.y, viewport);
@@ -10107,6 +10121,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   {drenagemNotice ? <p className="text-xs text-emerald-700">{drenagemNotice}</p> : null}
                 </section>
               ),
+              esgoto: (
+                <CadEsgotoPanel
+                  project={project}
+                  onProjectChange={(next) => {
+                    pushUndo(modifyUndoRef.current, { project, selectedId });
+                    modifyRedoRef.current.length = 0;
+                    setProject(next);
+                  }}
+                  onAbrirPlanilha={() => setEsgotoPlanilhaOpen(true)}
+                />
+              ),
               reurb: (
                 <section className="space-y-4">
                   <div>
@@ -10421,7 +10446,25 @@ export function CadWorkspace({ userId }: { userId: string }) {
             </div>
           ) : (
             <>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden border border-[#1e293b]" style={{ background: cadPaperFill(paperTone) }}>
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden border border-[#1e293b]" style={{ background: cadPaperFill(paperTone) }}>
+          {(() => {
+            const sel = selectedId ? project.entities.find((e) => e.id === selectedId) : undefined;
+            if (!sel || !isDrainagePvEntity(sel)) return null;
+            const nome = sel.drainage?.code ?? sel.label?.split("\n")[0] ?? "PV";
+            return (
+              <div className="pointer-events-auto absolute left-1/2 top-14 z-[70] flex -translate-x-1/2 items-center gap-2 rounded-lg border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs text-[#0f2848] shadow-lg">
+                <span className="font-semibold">{nome}</span>
+                <span className="text-[#64748b]">arraste para mover</span>
+                <button
+                  type="button"
+                  onClick={() => deleteSelectedEntity(true)}
+                  className="rounded-md border border-red-300 px-2 py-0.5 font-medium text-red-700 hover:bg-red-50"
+                >
+                  Excluir
+                </button>
+              </div>
+            );
+          })()}
             <CadChromeToolbar
               tool={tool}
               coordLabelsVisible={coordLabelsVisible}
@@ -11069,6 +11112,19 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     }
                   }
                 }
+                // PV e boca de lobo têm prioridade sobre o eixo da rua (estão em cima dele)
+                if (tool === "select" && !modifySession && !picking && e.button === 0) {
+                  const wtsPv = (x: number, y: number) => worldToScreen(x, y, viewport);
+                  const pvHit = hitDrainagePvAtScreen(sx, sy, project, wtsPv, 12);
+                  if (pvHit) {
+                    const world = screenToWorld(sx, sy, viewport);
+                    setSelectedId(pvHit.id);
+                    setSelectedIds([pvHit.id]);
+                    focusDrainageCalc(pvHit.id, false);
+                    setPvDrag({ id: pvHit.id, startX: pvHit.x, startY: pvHit.y, originX: world.x, originY: world.y });
+                    return;
+                  }
+                }
                 if (
                   tool === "select" &&
                   !loteamentoPickLado &&
@@ -11703,6 +11759,21 @@ export function CadWorkspace({ userId }: { userId: string }) {
             />
           </div>
 
+          {esgotoPlanilhaOpen ? (
+            <CadFloatingPanel
+              id="esgoto-planilha"
+              title="Rede de esgoto — planilha de cálculo e perfil (NBR 9649)"
+              onClose={() => setEsgotoPlanilhaOpen(false)}
+            >
+              {() => (
+                <CadEsgotoPlanilha
+                  project={project}
+                  selectedId={selectedId}
+                  onSelectId={(id) => setSelectedId(id)}
+                />
+              )}
+            </CadFloatingPanel>
+          ) : null}
           {drenagemPlanilhaOpen && listDrainagePipes(project).length > 0 ? (
             <CadFloatingPanel
               id="drenagem-planilha"

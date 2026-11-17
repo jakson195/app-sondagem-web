@@ -15,7 +15,7 @@ export const CAD_MODULES: { id: CadModuleId; tabs: CadToolsTab[]; icon: typeof S
   { id: "loteamento", tabs: ["loteamento", "reurb"], icon: LayoutGrid },
   { id: "vias", tabs: ["loteamento"], icon: Route },
   { id: "terreno", tabs: ["contour", "tin", "hypsometric", "profile", "volumetria"], icon: Mountain },
-  { id: "infra", tabs: ["drenagem"], icon: Droplets },
+  { id: "infra", tabs: ["drenagem", "esgoto"], icon: Droplets },
   { id: "documentos", tabs: ["memorial"], icon: FileText },
   { id: "viabilidade", tabs: [], icon: BarChart3 },
   { id: "3d", tabs: [], icon: Box },
