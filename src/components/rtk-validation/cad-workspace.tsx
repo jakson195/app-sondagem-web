@@ -820,6 +820,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
   } | null>(null);
   const [maqueteOpen, setMaqueteOpen] = useState(false);
   const [drenagem3dOpen, setDrenagem3dOpen] = useState(false);
+  const [redes3dInicial, setRedes3dInicial] = useState<"todas" | "pluvial" | "esgoto">("todas");
   const [loteamentoAreaUtil, setLoteamentoAreaUtil] = useState("35");
   const [loteamentoAreaUtilAtiva, setLoteamentoAreaUtilAtiva] = useState(true);
   /** Ao definir, mover ou excluir área verde / utilidade pública, refaz os lotes na hora. */
@@ -6597,6 +6598,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
           coverM={DEFAULT_DRAINAGE_PARAMS.minCoverM}
           minSlopePct={parseDrawNumber(drenagemMinSlope) ?? DEFAULT_DRAINAGE_PARAMS.minSlopePct}
           onClose={() => setDrenagem3dOpen(false)}
+          redeInicial={redes3dInicial}
         />
       ) : null}
       <CadChromeHeader
@@ -10028,6 +10030,7 @@ export function CadWorkspace({ userId }: { userId: string }) {
                       title={drenagem3dReady.ok ? t("drenagem.view3dHint") : t("drenagem.view3dNeedNetwork")}
                       onClick={() => {
                         setMaqueteOpen(false);
+                        setRedes3dInicial("todas");
                         setDrenagem3dOpen(true);
                       }}
                       className="w-full rounded-lg bg-[#1d4ed8] px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-[#1e40af] disabled:cursor-not-allowed disabled:opacity-50"
@@ -10298,6 +10301,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
                     setProject(next);
                   }}
                   onAbrirPlanilha={() => setEsgotoPlanilhaOpen(true)}
+                  onVer3d={() => {
+                    setMaqueteOpen(false);
+                    setRedes3dInicial("esgoto");
+                    setDrenagem3dOpen(true);
+                  }}
                 />
               ),
               reurb: (

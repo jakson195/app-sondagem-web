@@ -19,6 +19,8 @@ type Props = {
   coverM?: number;
   minSlopePct?: number;
   onClose: () => void;
+  /** Quais redes aparecem ao abrir. */
+  redeInicial?: "todas" | "pluvial" | "esgoto";
 };
 
 const PIPE_OK = "#1d4ed8";
@@ -29,6 +31,9 @@ const INLET = "#0284c7";
 const INLET_GRATE = "#0f172a";
 const OUTFALL = "#b91c1c";
 const STREET = "#64748b";
+const ESG_PIPE = "#c2410c";
+const ESG_PV = "#7c2d12";
+const ESG_COVER = "#431407";
 
 function toThree(
   x: number,
@@ -79,7 +84,7 @@ function PipeMesh({
   return (
     <mesh geometry={geom} castShadow>
       <meshStandardMaterial
-        color={pipe.failed ? PIPE_FAIL : PIPE_OK}
+        color={pipe.failed ? PIPE_FAIL : pipe.rede === "esgoto" ? ESG_PIPE : PIPE_OK}
         roughness={0.32}
         metalness={0.28}
       />
@@ -104,8 +109,9 @@ function ShaftMesh({
   const yCover = y0 + height + coverH / 2;
   const isOutfall = shaft.kind === "outfall";
   const isInlet = shaft.kind === "inlet";
-  const color = isOutfall ? OUTFALL : isInlet ? INLET : PV_CONCRETE;
-  const cover = isInlet ? INLET_GRATE : isOutfall ? "#7f1d1d" : PV_COVER;
+  const esgoto = shaft.rede === "esgoto";
+  const color = isOutfall ? OUTFALL : isInlet ? INLET : esgoto ? ESG_PV : PV_CONCRETE;
+  const cover = isInlet ? INLET_GRATE : isOutfall ? "#7f1d1d" : esgoto ? ESG_COVER : PV_COVER;
 
   return (
     <group>
@@ -270,13 +276,27 @@ function DrainageScene({
   ve,
   showLabels,
   showStreets,
+  showPluvial = true,
+  showEsgoto = true,
 }: {
   scene: DrainageNetwork3dScene;
   resetNonce: number;
   ve: number;
   showLabels: boolean;
   showStreets: boolean;
+  showPluvial?: boolean;
+  showEsgoto?: boolean;
 }) {
+  const mostra = (rede: string | undefined) => (rede === "esgoto" ? showEsgoto : showPluvial);
+  const cenaVisivel = useMemo(
+    () => ({
+      ...scene,
+      pipes: scene.pipes.filter((p) => mostra(p.rede)),
+      shafts: scene.shafts.filter((s) => mostra(s.rede)),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scene, showPluvial, showEsgoto],
+  );
   const extent = scene.extentM;
   const groundY = (scene.medianGroundZ - scene.origin.z) * ve;
   const targetY = Math.max(groundY * 0.45, 0.8);
@@ -312,19 +332,21 @@ function DrainageScene({
         <meshStandardMaterial color="#16301c" transparent opacity={0.42} roughness={0.96} depthWrite={false} />
       </mesh>
       {showStreets ? <StreetContext streets={scene.streets} origin={scene.origin} groundY={groundY} /> : null}
-      {scene.pipes.map((p) => (
+      {cenaVisivel.pipes.map((p) => (
         <PipeMesh key={p.id} pipe={p} origin={scene.origin} ve={ve} />
       ))}
-      {scene.shafts.map((s) => (
+      {cenaVisivel.shafts.map((s) => (
         <ShaftMesh key={s.id} shaft={s} origin={scene.origin} ve={ve} />
       ))}
-      <DrainageLabels scene={scene} ve={ve} show={showLabels} />
+      <DrainageLabels scene={cenaVisivel} ve={ve} show={showLabels} />
     </>
   );
 }
 
-export function CadDrenagem3d({ project, coverM, minSlopePct, onClose }: Props) {
+export function CadDrenagem3d({ project, coverM, minSlopePct, onClose, redeInicial = "todas" }: Props) {
   const t = useTranslations("rtkCad.drenagem");
+  const [showPluvial, setShowPluvial] = useState(redeInicial !== "esgoto");
+  const [showEsgoto, setShowEsgoto] = useState(redeInicial !== "pluvial");
   const [resetNonce, setResetNonce] = useState(0);
   const [showLabels, setShowLabels] = useState(true);
   const [showStreets, setShowStreets] = useState(true);
@@ -347,7 +369,7 @@ export function CadDrenagem3d({ project, coverM, minSlopePct, onClose }: Props) 
     <div className="fixed inset-0 z-[100] flex flex-col bg-[#0b1220] text-white">
       <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[#1e3a5f] bg-[#0f172a] px-3 py-2">
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold text-[#e2e8f0]">{t("view3dTitle")}</h2>
+          <h2 className="truncate text-sm font-semibold text-[#e2e8f0]">Redes em 3D — drenagem pluvial e esgoto</h2>
           <p className="truncate text-[10px] text-[#94a3b8]">{t("view3dOrbit")}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#cbd5e1]">
@@ -372,11 +394,37 @@ export function CadDrenagem3d({ project, coverM, minSlopePct, onClose }: Props) 
             {t("view3dLegendOutfall")}
           </span>
           <span className="inline-flex items-center gap-1">
+            <i className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: ESG_PIPE }} />
+            Esgoto
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <i className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: ESG_PV }} />
+            PV esgoto
+          </span>
+          <span className="inline-flex items-center gap-1">
             <i className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: STREET }} />
             {t("view3dLegendStreet")}
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] text-[#cbd5e1]">
+          <label className="inline-flex cursor-pointer items-center gap-1 font-semibold text-[#93c5fd]">
+            <input
+              type="checkbox"
+              className="accent-[#38bdf8]"
+              checked={showPluvial}
+              onChange={(e) => setShowPluvial(e.target.checked)}
+            />
+            Pluvial
+          </label>
+          <label className="inline-flex cursor-pointer items-center gap-1 font-semibold text-[#fdba74]">
+            <input
+              type="checkbox"
+              className="accent-[#f97316]"
+              checked={showEsgoto}
+              onChange={(e) => setShowEsgoto(e.target.checked)}
+            />
+            Esgoto
+          </label>
           <label className="inline-flex cursor-pointer items-center gap-1">
             <input
               type="checkbox"
@@ -451,6 +499,8 @@ export function CadDrenagem3d({ project, coverM, minSlopePct, onClose }: Props) 
               ve={ve}
               showLabels={showLabels}
               showStreets={showStreets}
+              showPluvial={showPluvial}
+              showEsgoto={showEsgoto}
             />
           </Canvas>
         </div>

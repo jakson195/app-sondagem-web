@@ -49,10 +49,12 @@ export function CadEsgotoPanel({
   project,
   onProjectChange,
   onAbrirPlanilha,
+  onVer3d,
 }: {
   project: CadProject;
   onProjectChange: (p: CadProject) => void;
   onAbrirPlanilha: () => void;
+  onVer3d?: () => void;
 }) {
   const [params, setParams] = useState<Record<string, string>>(() =>
     Object.fromEntries(CAMPOS.map((c) => [c.k, String(DEFAULT_ESGOTO_PARAMS[c.k]).replace(".", ",")])),
@@ -150,6 +152,15 @@ export function CadEsgotoPanel({
             >
               Abrir planilha e perfil
             </button>
+            {onVer3d ? (
+              <button
+                type="button"
+                onClick={onVer3d}
+                className="rounded-lg bg-[#9a3412] px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-[#7c2d12]"
+              >
+                Ver em 3D
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => {

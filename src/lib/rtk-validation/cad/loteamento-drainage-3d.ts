@@ -26,7 +26,11 @@ export type Drainage3dVec3 = {
   z: number;
 };
 
+/** Qual rede: pluvial (drenagem) ou esgoto sanitário. */
+export type Rede3d = "pluvial" | "esgoto";
+
 export type Drainage3dPipeMesh = {
+  rede?: Rede3d;
   id: string;
   code: string;
   diameterMm: number;
@@ -41,6 +45,7 @@ export type Drainage3dPipeMesh = {
 };
 
 export type Drainage3dShaftMesh = {
+  rede?: Rede3d;
   id: string;
   code: string;
   kind: Drainage3dKind;
@@ -290,12 +295,66 @@ function resolvePipeEnds(
   return { start, end, lengthM: lengthM > 0 ? lengthM : dist2(start.x, start.y, end.x, end.y) };
 }
 
+/** PVs e trechos da rede de esgoto como peças 3D (mesmo formato da drenagem, rede = "esgoto"). */
+function redeEsgoto3d(project: CadProject): { pipes: Drainage3dPipeMesh[]; shafts: Drainage3dShaftMesh[] } {
+  const nos = project.entities.filter(
+    (e): e is CadPointEntity => e.type === "point" && e.layerId === "esgoto_pv" && Boolean(e.esgoto),
+  );
+  const shafts: Drainage3dShaftMesh[] = nos.map((n) => {
+    const g = finiteNum(n.esgoto?.groundZ) ? n.esgoto.groundZ : n.z;
+    const inv = finiteNum(n.esgoto?.invertZ) ? n.esgoto.invertZ : g - 1.05;
+    const ps = n.esgoto?.kind === "ps";
+    const lado = ps ? 0.45 : 1.0;
+    return {
+      rede: "esgoto",
+      id: n.id,
+      code: n.esgoto?.code ?? n.id,
+      kind: n.esgoto?.kind === "outfall" ? "outfall" : "pv",
+      x: n.x,
+      y: n.y,
+      invertZ: inv,
+      groundZ: g,
+      heightM: Math.max(g - inv, DRAINAGE_3D_MIN_SHAFT_M),
+      widthM: lado,
+      depthM: lado,
+      label: n.esgoto?.code ?? null,
+      cfct: `${formatDrainageCotaLine("CF", inv)}\n${formatDrainageCotaLine("CT", g)}`,
+    };
+  });
+  const pipes: Drainage3dPipeMesh[] = [];
+  for (const e of project.entities) {
+    if (e.type !== "polyline" || e.layerId !== "esgoto_rede" || !e.esgoto || e.vertices.length < 2) continue;
+    const a = e.vertices[0]!;
+    const b = e.vertices[e.vertices.length - 1]!;
+    const dn = finiteNum(e.esgoto.diameterMm) ? e.esgoto.diameterMm : 150;
+    // mesma convenção da drenagem: o tubo é posicionado pela geratriz inferior (CF)
+    const r = dn / 2000;
+    const start = { x: a.x, y: a.y, z: finiteNum(e.esgoto.invertInZ) ? e.esgoto.invertInZ : a.z };
+    const end = { x: b.x, y: b.y, z: finiteNum(e.esgoto.invertOutZ) ? e.esgoto.invertOutZ : b.z };
+    pipes.push({
+      rede: "esgoto",
+      id: e.id,
+      code: e.esgoto.code ?? e.id,
+      diameterMm: dn,
+      radiusM: Math.max(r, 0.04),
+      lengthM: Math.hypot(b.x - a.x, b.y - a.y),
+      length3dM: length3d(start, end),
+      start,
+      end,
+      midpoint: midpoint(start, end),
+      failed: e.esgoto.status != null && e.esgoto.status !== "ok",
+      label: `DN${dn}`,
+    });
+  }
+  return { pipes, shafts };
+}
+
 export function drainageNetwork3dReadiness(project: CadProject): DrainageNetwork3dReadiness {
   const pvs = listDrainagePvs(project);
   const pipes = listDrainagePipes(project);
   const inletCount = pvs.filter((p) => nodeKind(p) === "inlet").length;
   return {
-    ok: pvs.length > 0 || pipes.length > 0,
+    ok: pvs.length > 0 || pipes.length > 0 || project.entities.some((e) => e.layerId === "esgoto_rede"),
     pvCount: pvs.length,
     pipeCount: pipes.length,
     inletCount,
@@ -321,7 +380,8 @@ export function buildDrainageNetwork3d(
     const minS = minSlopePct / 100;
     const pvs = listDrainagePvs(project);
     const pipes = listDrainagePipes(project);
-    if (pvs.length === 0 && pipes.length === 0) return null;
+    const esgoto = redeEsgoto3d(project);
+    if (pvs.length === 0 && pipes.length === 0 && esgoto.pipes.length === 0) return null;
 
     const nodes: NodeDraft[] = pvs.map((pv) => {
       const elev = readNodeElev(pv);
@@ -418,19 +478,28 @@ export function buildDrainageNetwork3d(
 
     const pvCount = shaftCandidates.filter((s) => s.kind !== "inlet").length;
     const inletCount = shaftCandidates.filter((s) => s.kind === "inlet").length;
-    const shafts = shaftCandidates.map((s, i) => {
+    const shafts: Drainage3dShaftMesh[] = shaftCandidates.map((s, i) => {
       const sparseInlets = inletCount > 10 && s.kind === "inlet";
       const sparsePvs = pvCount > 36 && s.kind === "pv" && i % 2 === 1;
       return {
         ...s,
+        rede: "pluvial" as const,
         label: sparseInlets || sparsePvs ? null : s.label,
         cfct: sparseInlets ? null : s.cfct,
       };
     });
-    const labeledPipes = pipeMeshes.map((p, i) => ({
-      ...p,
-      label: pipeMeshes.length > 40 && i % 2 === 1 && !p.failed ? null : p.label,
-    }));
+    const labeledPipes = [
+      ...pipeMeshes.map((p, i) => ({
+        ...p,
+        rede: "pluvial" as const,
+        label: pipeMeshes.length > 40 && i % 2 === 1 && !p.failed ? null : p.label,
+      })),
+      ...esgoto.pipes.map((p, i) => ({
+        ...p,
+        label: esgoto.pipes.length > 40 && i % 2 === 1 && !p.failed ? null : p.label,
+      })),
+    ];
+    shafts.push(...esgoto.shafts.map((s, i) => ({ ...s, label: esgoto.shafts.length > 36 && i % 2 === 1 ? null : s.label })));
 
     const bounds: Drainage3dBounds = {
       minX: Infinity,

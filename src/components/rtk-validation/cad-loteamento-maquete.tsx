@@ -25,6 +25,7 @@ import {
 } from "@/lib/rtk-validation/cad/loteamento-maquete";
 import type { SecaoTipoParams } from "@/lib/rtk-validation/cad/street-profile";
 import type { CadProject } from "@/lib/rtk-validation/cad/types";
+import { buildDrainageNetwork3d, type DrainageNetwork3dScene } from "@/lib/rtk-validation/cad/loteamento-drainage-3d";
 
 const HOUSE_WALL_PITCHED = ["#f4f0e8", "#f7f3ec", "#efeae1", "#f6f1e9", "#f2eee6"];
 const HOUSE_ROOF_PITCHED = ["#e07028", "#d46220", "#e87c30", "#c8581c"];
@@ -277,6 +278,7 @@ function ExtrudedAreas({
   height,
   color,
   roughness = 0.88,
+  opacity = 1,
 }: {
   polys: MaquetePoly[];
   origin: { x: number; y: number };
@@ -284,6 +286,7 @@ function ExtrudedAreas({
   height: number;
   color: string | string[];
   roughness?: number;
+  opacity?: number;
 }) {
   const geoms = useMemo(() => {
     return polys
@@ -302,9 +305,13 @@ function ExtrudedAreas({
       {geoms.map((geom, i) => (
         <mesh key={i} geometry={geom} castShadow receiveShadow>
           <meshStandardMaterial
+            key={opacity < 1 ? "transparente" : "opaco"}
             color={Array.isArray(color) ? color[i % color.length] : color}
             roughness={roughness}
             metalness={0.02}
+            transparent={opacity < 1}
+            opacity={opacity}
+            depthWrite={opacity >= 1}
           />
         </mesh>
       ))}
@@ -936,6 +943,84 @@ function CameraRig({
   );
 }
 
+/**
+ * Redes subterrâneas (pluvial em azul, esgoto em marrom) dentro da maquete. A maquete é plana
+ * (terreno em y = 0), então cada peça é posta pela profundidade: y = −(CT − cota).
+ */
+function RedesSubterraneas({ redes, origin }: { redes: DrainageNetwork3dScene; origin: { x: number; y: number } }) {
+  const geoms = useMemo(() => {
+    const solo = (x: number, y: number, rede: string | undefined) => {
+      let best = Infinity;
+      let g = 0;
+      for (const s of redes.shafts) {
+        if ((s.rede ?? "pluvial") !== (rede ?? "pluvial")) continue;
+        const d = Math.hypot(s.x - x, s.y - y);
+        if (d < best) {
+          best = d;
+          g = s.groundZ;
+        }
+      }
+      return g;
+    };
+    return redes.pipes
+      .map((p) => {
+        const a = new THREE.Vector3(p.start.x - origin.x, p.start.z - solo(p.start.x, p.start.y, p.rede) + p.radiusM, -(p.start.y - origin.y));
+        const b = new THREE.Vector3(p.end.x - origin.x, p.end.z - solo(p.end.x, p.end.y, p.rede) + p.radiusM, -(p.end.y - origin.y));
+        const dir = b.clone().sub(a);
+        const len = dir.length();
+        if (len < 1e-3) return null;
+        // raio de exibição mínimo para a rede aparecer na maquete inteira (o cálculo usa o DN real)
+        const rv = Math.max(p.radiusM, 0.22);
+        const g = new THREE.CylinderGeometry(rv, rv, len, 12);
+        g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize()));
+        const mid = a.clone().add(b).multiplyScalar(0.5);
+        g.translate(mid.x, mid.y, mid.z);
+        return { id: p.id, g, esgoto: p.rede === "esgoto", falha: p.failed };
+      })
+      .filter((x): x is { id: string; g: THREE.CylinderGeometry; esgoto: boolean; falha: boolean } => x != null);
+  }, [redes, origin.x, origin.y]);
+  useEffect(() => () => geoms.forEach((x) => x.g.dispose()), [geoms]);
+  return (
+    <>
+      {geoms.map((x) => (
+        <mesh key={x.id} geometry={x.g}>
+          <meshStandardMaterial
+            color={x.falha ? "#dc2626" : x.esgoto ? "#c2410c" : "#1d4ed8"}
+            roughness={0.35}
+            metalness={0.2}
+          />
+        </mesh>
+      ))}
+      {redes.shafts.map((s) => {
+        const h = Math.max(0.2, s.groundZ - s.invertZ);
+        const esg = s.rede === "esgoto";
+        const boca = s.kind === "inlet";
+        return (
+          <group key={s.id} position={[s.x - origin.x, 0, -(s.y - origin.y)]}>
+            <mesh position={[0, -h / 2, 0]}>
+              {boca ? (
+                <boxGeometry args={[s.widthM, h, s.depthM]} />
+              ) : (
+                <cylinderGeometry args={[s.widthM / 2, s.widthM / 2, h, 16]} />
+              )}
+              <meshStandardMaterial
+                color={s.kind === "outfall" ? "#b91c1c" : boca ? "#0284c7" : esg ? "#7c2d12" : "#8b939c"}
+                roughness={0.75}
+                transparent
+                opacity={0.85}
+              />
+            </mesh>
+            <mesh position={[0, 0.1, 0]}>
+              <cylinderGeometry args={[(boca ? s.widthM : s.widthM) * 0.55, (boca ? s.widthM : s.widthM) * 0.55, 0.06, 16]} />
+              <meshStandardMaterial color={esg ? "#431407" : "#3f4a58"} roughness={0.5} />
+            </mesh>
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
 function MaqueteScene({
   scene,
   resetNonce,
@@ -944,6 +1029,7 @@ function MaqueteScene({
   showSidewalkTrees,
   showEixo,
   visual,
+  redes,
 }: {
   scene: LoteamentoMaqueteScene;
   resetNonce: number;
@@ -952,8 +1038,12 @@ function MaqueteScene({
   showSidewalkTrees: boolean;
   showEixo: boolean;
   visual: MaqueteVisual;
+  /** Com redes: modo "raio-x" (superfície semitransparente e tubulações à mostra). */
+  redes?: DrainageNetwork3dScene | null;
 }) {
   const P = VISUAL[visual];
+  const raioX = Boolean(redes);
+  const op = raioX ? 0.3 : 1;
   const origin = scene.origin;
   const extent = scene.extentM;
   const houses = useMemo(
@@ -989,22 +1079,31 @@ function MaqueteScene({
         shadow-radius={visual === "humanizado" ? 6 : 1}
       />
       <CameraRig extent={extent} resetNonce={resetNonce} />
-      <BlackVoidGround scene={scene} color={P.chao} />
-      {P.base ? (
+      {raioX ? null : <BlackVoidGround scene={scene} color={P.chao} />}
+      {P.base && !raioX ? (
         <ExtrudedAreas polys={scene.gleba} origin={origin} y0={-0.16} height={0.15} color={P.base} roughness={1} />
       ) : null}
-      <ExtrudedAreas polys={scene.asphalt} origin={origin} y0={0} height={0.06} color={P.asfalto} roughness={0.94} />
-      <ExtrudedAreas polys={scene.sidewalks} origin={origin} y0={0.04} height={0.08} color={P.calcada} roughness={0.88} />
+      <ExtrudedAreas polys={scene.asphalt} origin={origin} y0={0} height={0.06} color={P.asfalto} roughness={0.94} opacity={op} />
+      <ExtrudedAreas polys={scene.sidewalks} origin={origin} y0={0.04} height={0.08} color={P.calcada} roughness={0.88} opacity={op} />
+      {redes ? <RedesSubterraneas redes={redes} origin={origin} /> : null}
       <InstancedBoxes items={curbs} origin={origin} color={P.meioFio} roughness={0.7} />
-      {P.lote ? (
-        <ExtrudedAreas polys={lotPolys} origin={origin} y0={0.012} height={0.07} color={P.lote} roughness={0.95} />
+      {P.lote || raioX ? (
+        <ExtrudedAreas
+          polys={lotPolys}
+          origin={origin}
+          y0={0.012}
+          height={0.07}
+          color={P.lote ?? "#3f7a3a"}
+          roughness={0.95}
+          opacity={op}
+        />
       ) : (
         <GrassLots polys={lotPolys} origin={origin} />
       )}
       <LotBoundaryGrid lots={scene.lots} origin={origin} color={P.loteLinha} />
       <InstancedHouses houses={houses} origin={origin} paleta={P} />
-      <ExtrudedAreas polys={scene.reserva} origin={origin} y0={0.01} height={0.07} color={P.reserva} roughness={0.92} />
-      <ExtrudedAreas polys={scene.util} origin={origin} y0={0.01} height={0.07} color={P.util} roughness={0.95} />
+      <ExtrudedAreas polys={scene.reserva} origin={origin} y0={0.01} height={0.07} color={P.reserva} roughness={0.92} opacity={op} />
+      <ExtrudedAreas polys={scene.util} origin={origin} y0={0.01} height={0.07} color={P.util} roughness={0.95} opacity={op} />
       {visual === "humanizado" ? <PlazaPools polys={scene.util} origin={origin} /> : null}
       <InstancedTrees
         trees={scene.trees}
@@ -1061,6 +1160,8 @@ export function CadLoteamentoMaquete({
   const [showCars, setShowCars] = useState(true);
   const [showSidewalkTrees, setShowSidewalkTrees] = useState(true);
   const [showEixo, setShowEixo] = useState(true);
+  const redes3d = useMemo(() => buildDrainageNetwork3d(project), [project]);
+  const [showRedes, setShowRedes] = useState(false);
   const [visual, setVisual] = useState<MaqueteVisual>("humanizado");
   useEffect(() => {
     try {
@@ -1184,6 +1285,20 @@ export function CadLoteamentoMaquete({
             />
             {t("toggleEixo")}
           </label>
+          {redes3d ? (
+            <label
+              className="inline-flex cursor-pointer items-center gap-1 font-semibold text-[#fdba74]"
+              title="Mostra drenagem (azul) e esgoto (marrom) sob o terreno, com a superfície semitransparente"
+            >
+              <input
+                type="checkbox"
+                className="accent-[#f97316]"
+                checked={showRedes}
+                onChange={(e) => setShowRedes(e.target.checked)}
+              />
+              Redes subterrâneas
+            </label>
+          ) : null}
         </div>
         <button
           type="button"
@@ -1233,6 +1348,7 @@ export function CadLoteamentoMaquete({
               showCars={showCars}
               showSidewalkTrees={showSidewalkTrees}
               showEixo={showEixo}
+              redes={showRedes ? redes3d : null}
               visual={visual}
             />
           </Canvas>
