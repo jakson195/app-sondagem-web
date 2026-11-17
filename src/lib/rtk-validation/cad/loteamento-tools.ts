@@ -1,3 +1,4 @@
+import { caixaDe, pontoNaCaixa } from "./bbox-cache";
 import { detectCadGeorefFromProject, vertexToEn } from "./georef";
 import {
   applyLoteamentoLotClassification,
@@ -2538,6 +2539,8 @@ export function findLoteamentoLotAtPoint(
 ): CadPolylineEntity | null {
   const lots = listReurbLots(project).filter(isLoteamentoLotEntity);
   for (let i = lots.length - 1; i >= 0; i--) {
+    // caixa antes do teste de polígono (resultado igual, bem mais rápido)
+    if (!pontoNaCaixa(x, y, caixaDe(lots[i].vertices))) continue;
     if (pointInPolygon(x, y, lots[i].vertices)) return lots[i];
   }
   return null;

@@ -109,7 +109,20 @@ export function reurbLotSlug(index: number): string {
   return `lote_${String(index + 1).padStart(2, "0")}`;
 }
 
+/** Mesmo critério de localeCompare(…, "pt-BR", { numeric: true }), sem recriar o comparador. */
+const COLLATOR_LOTES = new Intl.Collator("pt-BR", { numeric: true });
+/** Lista ordenada por projeto (entidades + camadas); as entidades são imutáveis, então o cache é seguro. */
+const cacheLotes = new WeakMap<object, { layers: object; lots: CadPolylineEntity[] }>();
+
 export function listReurbLots(project: CadProject): CadPolylineEntity[] {
+  const hit = cacheLotes.get(project.entities);
+  if (hit && hit.layers === project.layers) return hit.lots;
+  const lots = calcularLotesReurb(project);
+  cacheLotes.set(project.entities, { layers: project.layers, lots });
+  return lots;
+}
+
+function calcularLotesReurb(project: CadProject): CadPolylineEntity[] {
   const closed = project.entities.filter(
     (e): e is CadPolylineEntity => e.type === "polyline" && Boolean(e.closed) && e.vertices.length >= 3,
   );
@@ -120,7 +133,7 @@ export function listReurbLots(project: CadProject): CadPolylineEntity[] {
       : closed.filter((e) => !isSkippedLotLayer(e.layerId, project.layers));
 
   return [...source].sort((a, b) => {
-    const byName = (a.name ?? "").localeCompare(b.name ?? "", "pt-BR", { numeric: true });
+    const byName = COLLATOR_LOTES.compare(a.name ?? "", b.name ?? "");
     if (byName !== 0) return byName;
     return a.id.localeCompare(b.id);
   });

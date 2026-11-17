@@ -4,7 +4,9 @@ import { useMemo, useState } from "react";
 import {
   DEFAULT_ESGOTO_PARAMS,
   clearEsgoto,
+  definirCotaPvEsgoto,
   gerarRedeEsgoto,
+  lembrarParametrosEsgoto,
   laminaParaVazao,
   listEsgotoTrechos,
   type EsgotoParams,
@@ -14,7 +16,8 @@ import type { CadPointEntity, CadPolylineEntity, CadProject } from "@/lib/rtk-va
 const num = (v: number | undefined, d = 2) =>
   v == null || !Number.isFinite(v) ? "—" : v.toLocaleString("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d });
 const lerNum = (s: string) => {
-  const n = Number(s.replace(",", "."));
+  const t = s.trim();
+  const n = Number(t.includes(",") ? t.replace(/\./g, "").replace(",", ".") : t);
   return Number.isFinite(n) ? n : null;
 };
 
@@ -37,6 +40,8 @@ const CAMPOS: Array<{ k: keyof EsgotoParams; rotulo: string; passo?: string }> =
   { k: "recobrimentoMinM", rotulo: "Recobrimento mín. (m)" },
   { k: "distMaxPvM", rotulo: "Distância máx. PV (m)" },
   { k: "profundidadeMaxM", rotulo: "Profundidade máx. (m)" },
+  { k: "afastamentoEixoM", rotulo: "Afastamento do eixo (m)" },
+  { k: "folgaSobPluvialM", rotulo: "Folga sob a pluvial (m)" },
 ];
 
 /** Painel lateral: parâmetros NBR 9649, gerar/remover a rede e resumo. */
@@ -69,6 +74,7 @@ export function CadEsgotoPanel({
       (p as Record<string, number>)[c.k] = n;
     }
     try {
+      lembrarParametrosEsgoto(p);
       const r = gerarRedeEsgoto(project, p);
       onProjectChange(r.project);
       setAviso(r.message);
@@ -95,7 +101,7 @@ export function CadEsgotoPanel({
       <div className="rounded-lg border border-[#fed7aa] bg-[#fff7ed] px-3 py-2">
         <h4 className="text-xs font-semibold text-[#7c2d12]">Rede de esgoto (NBR 9649)</h4>
         <p className="mt-0.5 text-[10px] text-[#6b7280]">
-          Coletor no eixo das ruas, PVs nos cruzamentos e a cada ≤ 80 m, ligação de cada lote e cálculo de vazão,
+          Coletor afastado do eixo (a pluvial fica no eixo) e abaixo dela onde se aproximam, PVs nos cruzamentos e a cada ≤ 80 m, ligação de cada lote e cálculo de vazão,
           diâmetro, declividade, lâmina e tensão trativa. Pré-dimensionamento: confira com as regras da concessionária.
         </p>
         <div className="mt-2 grid grid-cols-2 gap-1.5">
@@ -166,11 +172,14 @@ export function CadEsgotoPlanilha({
   project,
   selectedId,
   onSelectId,
+  onProjectChange,
 }: {
   project: CadProject;
   selectedId: string | null;
   onSelectId: (id: string) => void;
+  onProjectChange?: (p: CadProject) => void;
 }) {
+  const [avisoCota, setAvisoCota] = useState<string | null>(null);
   const trechos = listEsgotoTrechos(project);
   const nos = useMemo(
     () =>
@@ -201,9 +210,65 @@ export function CadEsgotoPlanilha({
   }
 
   const cab = ["Trecho", "Montante → Jusante", "L (m)", "Lotes", "Qi (L/s)", "Qf (L/s)", "DN", "i (%)", "y/D", "V (m/s)", "σ (Pa)", "Prof. mont.", "Prof. jus.", "Situação"];
+  const pvsDoCaminho = (() => {
+    const ids: string[] = [];
+    for (const t of caminho) {
+      for (const id of [t.esgoto?.fromId, t.esgoto?.toId]) if (id && !ids.includes(id)) ids.push(id);
+    }
+    return ids.map((id) => nos.get(id)).filter((n): n is CadPointEntity => Boolean(n));
+  })();
+  const semTerreno = [...nos.values()].every((n) => Math.abs(n.esgoto?.groundZ ?? 0) < 1e-9);
+
+  function mudarCota(pv: CadPointEntity, texto: string) {
+    const ct = lerNum(texto);
+    if (ct == null || !onProjectChange) return;
+    if (Math.abs(ct - (pv.esgoto?.groundZ ?? 0)) < 1e-6) return;
+    try {
+      const r = definirCotaPvEsgoto(project, pv.id, ct);
+      onProjectChange(r.project);
+      setAvisoCota(`${pv.esgoto?.code}: CT ${num(ct)} m. Rede recalculada.`);
+    } catch (e) {
+      setAvisoCota(e instanceof Error ? e.message : "Não foi possível recalcular.");
+    }
+  }
+
   return (
     <div className="space-y-3 p-2">
+      {semTerreno ? (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
+          Os PVs estão com cota 0,00 porque o projeto ainda não tem topografia. Importe os pontos ou as curvas de nível e
+          clique em “Recalcular rede de esgoto”, ou digite a CT de cada PV abaixo.
+        </p>
+      ) : null}
       <PerfilEsgoto caminho={caminho} nos={nos} />
+      {onProjectChange ? (
+        <div className="rounded-lg border border-[#fed7aa] bg-[#fffbf5] p-2">
+          <p className="mb-1 text-[11px] font-semibold text-[#7c2d12]">
+            Cotas dos PVs deste perfil (CT = tampa/terreno; ao mudar, a rede é recalculada)
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {pvsDoCaminho.map((pv) => (
+              <label key={pv.id} className="text-[10px] text-[#6b7280]">
+                <span className="font-semibold text-[#7c2d12]">{pv.esgoto?.code}</span>
+                {pv.esgoto?.cotaManual ? " (digitada)" : ""} · CT
+                <input
+                  key={`${pv.id}-${pv.esgoto?.groundZ}`}
+                  type="text"
+                  inputMode="decimal"
+                  defaultValue={(pv.esgoto?.groundZ ?? 0).toFixed(2).replace(".", ",")}
+                  onBlur={(e) => mudarCota(pv, e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                  className="ml-1 w-20 rounded border border-[#d1d5db] px-1.5 py-0.5 font-mono text-xs"
+                />
+                <span className="ml-1">CF {num(pv.esgoto?.invertZ)}</span>
+              </label>
+            ))}
+          </div>
+          {avisoCota ? <p className="mt-1 text-[11px] text-emerald-800">{avisoCota}</p> : null}
+        </div>
+      ) : null}
       <div className="overflow-auto rounded-lg border border-[#e5e7eb]">
         <table className="w-full border-collapse text-[11px]">
           <thead className="sticky top-0 bg-[#fff7ed]">

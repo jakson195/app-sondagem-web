@@ -76,6 +76,10 @@ export type EsgotoParams = {
   nManning: number;
   profundidadeMaxM: number;
   material: string;
+  /** Afastamento do coletor em relação ao eixo da rua (m); a pluvial fica no eixo. 0 = no eixo. */
+  afastamentoEixoM: number;
+  /** Folga vertical mínima abaixo da galeria pluvial onde as redes se aproximam (m). */
+  folgaSobPluvialM: number;
 };
 
 export const DEFAULT_ESGOTO_PARAMS: EsgotoParams = {
@@ -94,6 +98,8 @@ export const DEFAULT_ESGOTO_PARAMS: EsgotoParams = {
   nManning: 0.013,
   profundidadeMaxM: 4.5,
   material: "PVC ocre",
+  afastamentoEixoM: 2,
+  folgaSobPluvialM: 0.2,
 };
 
 const Q_MIN_LPS = 1.5;
@@ -148,6 +154,7 @@ type No = {
   groundZ: number;
   invertZ: number;
   kind: "pv" | "ps" | "outfall";
+  manual?: boolean;
 };
 type Aresta = { a: string; b: string; L: number };
 type Trecho = {
@@ -174,6 +181,40 @@ type Trecho = {
   vcMs: number;
   status: CadEsgotoStatus;
 };
+
+/** Desloca uma polilinha para o lado esquerdo (normal média nos vértices). */
+export function deslocarPolilinha<T extends { x: number; y: number; z: number }>(vs: T[], d: number): T[] {
+  if (Math.abs(d) < 1e-6 || vs.length < 2) return vs;
+  return vs.map((v, i) => {
+    const a = vs[Math.max(0, i - 1)]!;
+    const b = vs[Math.min(vs.length - 1, i + 1)]!;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l = Math.hypot(dx, dy) || 1;
+    return { ...v, x: v.x + (-dy / l) * d, y: v.y + (dx / l) * d };
+  });
+}
+
+/** Geratriz inferior da pluvial mais próxima (≤ raio m) no ponto, ou null. */
+function fundoPluvialPerto(project: CadProject, x: number, y: number, raio = 4): { inv: number; d: number } | null {
+  let melhor: { inv: number; d: number } | null = null;
+  for (const e of project.entities) {
+    if (e.type !== "polyline" || e.layerId !== "drenagem_tubos" || e.vertices.length < 2) continue;
+    for (let i = 0; i + 1 < e.vertices.length; i++) {
+      const a = e.vertices[i]!;
+      const b = e.vertices[i + 1]!;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const l2 = dx * dx + dy * dy;
+      const t = l2 < 1e-9 ? 0 : Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / l2));
+      const d = Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
+      if (d > raio) continue;
+      const inv = a.z + (b.z - a.z) * t;
+      if (!melhor || d < melhor.d) melhor = { inv, d };
+    }
+  }
+  return melhor;
+}
 
 let seq = 0;
 const newId = (p: string) => `${p}-${Date.now().toString(36)}-${(seq++).toString(36)}`;
@@ -206,6 +247,28 @@ export function isEsgotoNoEntity(e: { type: string; layerId: string }): e is Cad
 export function listEsgotoTrechos(project: CadProject): CadPolylineEntity[] {
   return project.entities.filter((e): e is CadPolylineEntity => isEsgotoPipeEntity(e));
 }
+/** Parâmetros da última geração (para recalcular a partir da planilha). */
+let ultimosParametros: Partial<EsgotoParams> = {};
+export function lembrarParametrosEsgoto(p: Partial<EsgotoParams>) {
+  ultimosParametros = { ...p };
+}
+export function parametrosEsgotoAtuais(): Partial<EsgotoParams> {
+  return ultimosParametros;
+}
+
+/** Muda a cota da tampa (CT) de um PV e recalcula a rede mantendo as outras cotas digitadas. */
+export function definirCotaPvEsgoto(project: CadProject, pvId: string, ct: number): GerarEsgotoResult {
+  const marcado: CadProject = {
+    ...project,
+    entities: project.entities.map((e) =>
+      e.id === pvId && e.type === "point" && e.esgoto
+        ? { ...e, z: ct, esgoto: { ...e.esgoto, groundZ: ct, cotaManual: true } }
+        : e,
+    ),
+  };
+  return gerarRedeEsgoto(marcado, ultimosParametros);
+}
+
 export function clearEsgoto(project: CadProject): CadProject {
   return {
     ...project,
@@ -238,6 +301,13 @@ export function gerarRedeEsgoto(project: CadProject, entrada: Partial<EsgotoPara
       ? alinhamentos
       : axes.map((a) => ({ id: a.id, name: a.name ?? a.id, vertices: a.vertices, intersections: [] }));
 
+  // cotas de tampa digitadas à mão numa rede anterior ficam valendo
+  const cotasManuais = project.entities.filter(
+    (e): e is CadPointEntity => e.type === "point" && e.esgoto?.cotaManual === true && e.esgoto.groundZ != null,
+  );
+  const cotaManualEm = (x: number, y: number) =>
+    cotasManuais.find((p) => dist(p.x, p.y, x, y) < 1.5)?.esgoto?.groundZ ?? null;
+
   // 1) PVs ao longo dos eixos (cruzamentos, pontas e no máximo a cada distMaxPvM)
   const snapM = 3;
   const nos: No[] = [];
@@ -245,8 +315,9 @@ export function gerarRedeEsgoto(project: CadProject, entrada: Partial<EsgotoPara
   const achaOuCria = (x: number, y: number, z: number): No => {
     const hit = nos.find((n) => dist(n.x, n.y, x, y) < snapM);
     if (hit) return hit;
-    const groundZ = sampleGroundZ(x, y, z, amostras);
-    const n: No = { id: newId("epv"), code: "", x, y, groundZ, invertZ: groundZ, kind: "pv" };
+    const manual = cotaManualEm(x, y);
+    const groundZ = manual ?? sampleGroundZ(x, y, z, amostras);
+    const n: No = { id: newId("epv"), code: "", x, y, groundZ, invertZ: groundZ, kind: "pv", manual: manual != null };
     nos.push(n);
     return n;
   };
@@ -257,7 +328,9 @@ export function gerarRedeEsgoto(project: CadProject, entrada: Partial<EsgotoPara
       z: 0,
       stationM: h.stationM ?? 0,
     }));
-    const estacoes = placePvsAlongVia(al.vertices, cfg.distMaxPvM, { snapM, anchors, reservaRings: reserva });
+    // a pluvial fica no eixo; o esgoto corre deslocado para não sobrepor
+    const linha = deslocarPolilinha(al.vertices, cfg.afastamentoEixoM);
+    const estacoes = placePvsAlongVia(linha, cfg.distMaxPvM, { snapM, anchors, reservaRings: reserva });
     const fila = estacoes.map((st) => achaOuCria(st.x, st.y, st.z));
     for (let i = 0; i + 1 < fila.length; i++) {
       const a = fila[i]!;
@@ -530,7 +603,11 @@ export function gerarRedeEsgoto(project: CadProject, entrada: Partial<EsgotoPara
       if (dnMm < dnMontante) continue;
       const D = dnMm / 1000;
       const chegadas = (entram.get(t.from) ?? []).map((m) => m.invOut);
-      const pelaCobertura = up.groundZ - cfg.recobrimentoMinM - D;
+      const pluvUp = fundoPluvialPerto(project, up.x, up.y);
+      const pelaCobertura = Math.min(
+        up.groundZ - cfg.recobrimentoMinM - D,
+        pluvUp ? pluvUp.inv - cfg.folgaSobPluvialM - D : Infinity,
+      );
       const invIn = chegadas.length > 0 ? Math.min(pelaCobertura, ...chegadas) : pelaCobertura;
       let I = Math.max(iMin, iTerreno);
       // tensão trativa com a vazão inicial
@@ -540,7 +617,11 @@ export function gerarRedeEsgoto(project: CadProject, entrada: Partial<EsgotoPara
         I *= 1.15;
       }
       let invOut = invIn - I * L;
-      const coberturaJus = dn.groundZ - cfg.recobrimentoMinM - D;
+      const pluvDn = fundoPluvialPerto(project, dn.x, dn.y);
+      const coberturaJus = Math.min(
+        dn.groundZ - cfg.recobrimentoMinM - D,
+        pluvDn ? pluvDn.inv - cfg.folgaSobPluvialM - D : Infinity,
+      );
       if (invOut > coberturaJus) {
         invOut = coberturaJus;
         I = (invIn - invOut) / L;
@@ -617,6 +698,7 @@ export function gerarRedeEsgoto(project: CadProject, entrada: Partial<EsgotoPara
       groundZ: n.groundZ,
       invertZ: n.invertZ,
       depthM: n.groundZ - n.invertZ,
+      cotaManual: n.manual || undefined,
     },
   }));
   const tubos: CadPolylineEntity[] = ordem.map((t) => {

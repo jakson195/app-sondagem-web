@@ -1,3 +1,4 @@
+import { caixaDe, caixasSeTocam } from "./bbox-cache";
 import { polygonCentroid } from "./ai-geometry-utils";
 import { formatCoordBr, pointInPolygon, polygonAreaM2, splitSvgLabelLines } from "./polygon-utils";
 import type { CadDrainageKind, CadEntity, CadPointEntity, CadPolylineEntity, CadVertex } from "./types";
@@ -283,8 +284,16 @@ function edgeAlongStreets(a: CadVertex, b: CadVertex, streets: CadPolylineEntity
   if (!streets || streets.length === 0) return false;
   const len = Math.hypot(b.x - a.x, b.y - a.y);
   if (len < 0.4) return false;
+  // Pré-filtro exato: um ponto a ≤ STREET_NEAR_M da via está na caixa da via ampliada por essa folga.
+  const caixaAresta = {
+    minX: Math.min(a.x, b.x),
+    minY: Math.min(a.y, b.y),
+    maxX: Math.max(a.x, b.x),
+    maxY: Math.max(a.y, b.y),
+  };
   for (const street of streets) {
     if (!street.closed || street.vertices.length < 3) continue;
+    if (!caixasSeTocam(caixaDe(street.vertices), caixaAresta, STREET_NEAR_M)) continue;
     let hits = 0;
     for (const t of [0.25, 0.5, 0.75]) {
       const p: [number, number] = [a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t];

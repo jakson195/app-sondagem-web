@@ -64,3 +64,55 @@ describe("rede de esgoto do loteamento", () => {
     console.log(r.message);
   });
 });
+
+describe("esgoto x pluvial", () => {
+  it("o coletor de esgoto fica afastado do eixo e abaixo da pluvial", async () => {
+    const { generateLoteamentoDrainage, listDrainagePipes } = await import("./loteamento-drainage");
+    const base = loteamento();
+    const comPluvial = generateLoteamentoDrainage(base).project;
+    const r = gerarRedeEsgoto(comPluvial);
+    const pluv = listDrainagePipes(comPluvial).filter((p) => p.drainage?.pipeRole !== "ramal");
+    const esg = listEsgotoTrechos(r.project);
+    // nenhum trecho de esgoto em cima de um coletor pluvial (meio do trecho a ≥ 1,5 m)
+    for (const t of esg) {
+      const a = t.vertices[0]!;
+      const b = t.vertices[1]!;
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      for (const p of pluv) {
+        const c = p.vertices[0]!;
+        const d = p.vertices[p.vertices.length - 1]!;
+        const dx = d.x - c.x;
+        const dy = d.y - c.y;
+        const l2 = dx * dx + dy * dy;
+        const u = Math.max(0, Math.min(1, ((mx - c.x) * dx + (my - c.y) * dy) / l2));
+        const dist = Math.hypot(mx - (c.x + u * dx), my - (c.y + u * dy));
+        assert.ok(dist >= 1.5, `${t.esgoto?.code} sobre a pluvial ${p.drainage?.code} (${dist.toFixed(2)} m)`);
+        if (dist < 4) {
+          const invPluv = c.z + (d.z - c.z) * u;
+          const topoEsg = (a.z + b.z) / 2 + (t.esgoto!.diameterMm! / 1000);
+          assert.ok(topoEsg <= invPluv - 0.15, `${t.esgoto?.code} acima da pluvial`);
+        }
+      }
+    }
+  });
+});
+
+describe("cota digitada no PV", () => {
+  it("muda a CT de um PV, recalcula e mantém a cota nas próximas gerações", async () => {
+    const { definirCotaPvEsgoto } = await import("./loteamento-esgoto");
+    const r1 = gerarRedeEsgoto(loteamento());
+    const pv = r1.project.entities.find((e) => e.type === "point" && e.esgoto?.kind === "pv")!;
+    const r2 = definirCotaPvEsgoto(r1.project, pv.id, 12.34);
+    const mesmo = r2.project.entities.find(
+      (e) => e.type === "point" && e.esgoto && Math.hypot(e.x - (pv as { x: number }).x, e.y - (pv as { y: number }).y) < 0.01,
+    );
+    assert.equal(mesmo?.type === "point" ? mesmo.esgoto?.groundZ : null, 12.34);
+    assert.equal(mesmo?.type === "point" ? mesmo.esgoto?.cotaManual : null, true);
+    const r3 = gerarRedeEsgoto(r2.project);
+    const denovo = r3.project.entities.find(
+      (e) => e.type === "point" && e.esgoto && Math.hypot(e.x - (pv as { x: number }).x, e.y - (pv as { y: number }).y) < 0.01,
+    );
+    assert.equal(denovo?.type === "point" ? denovo.esgoto?.groundZ : null, 12.34);
+  });
+});

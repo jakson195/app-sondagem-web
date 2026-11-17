@@ -322,6 +322,7 @@ import {
   pixelsPorMetro,
 } from "@/components/rtk-validation/cad-drainage-symbols";
 import { CadFloatingPanel } from "@/components/rtk-validation/cad-floating-panel";
+import { caixaDe, caixasSeTocam, pontoNaCaixa } from "@/lib/rtk-validation/cad/bbox-cache";
 import { CadEsgotoPanel, CadEsgotoPlanilha } from "@/components/rtk-validation/cad-esgoto";
 import { ESGOTO_REDE_LAYER, isEsgotoNoEntity } from "@/lib/rtk-validation/cad/loteamento-esgoto";
 import { CadChromeHeader } from "@/components/rtk-validation/cad-chrome-header";
@@ -566,6 +567,54 @@ async function exitDocumentFullscreen(): Promise<void> {
 
 function setCadFullscreenClass(on: boolean) {
   document.documentElement.classList.toggle(CAD_FULLSCREEN_CLASS, on);
+}
+
+// ---------------------------------------------------------------- caches de desenho
+// As entidades do CAD são imutáveis (editar cria objeto/array novo); por isso os caches
+// por identidade nunca ficam desatualizados e liberam memória sozinhos (WeakMap).
+const cacheVias = new WeakMap<object, CadPolylineEntity[]>();
+function viasDoProjeto(entities: CadEntity[]): CadPolylineEntity[] {
+  const hit = cacheVias.get(entities);
+  if (hit) return hit;
+  const vias = entities.filter(
+    (entity): entity is CadPolylineEntity =>
+      entity.type === "polyline" && Boolean(entity.closed) && entity.layerId === LOTEAMENTO_VIAS_LAYER_ID,
+  );
+  cacheVias.set(entities, vias);
+  return vias;
+}
+const cacheIndiceLotes = new WeakMap<object, Map<string, number>>();
+function indiceDosLotes(project: CadProject): Map<string, number> {
+  const lots = listReurbLots(project);
+  const hit = cacheIndiceLotes.get(lots);
+  if (hit) return hit;
+  const m = new Map(lots.map((lot, i) => [lot.id, i]));
+  cacheIndiceLotes.set(lots, m);
+  return m;
+}
+const cacheIndiceVias = new WeakMap<object, Map<string, number>>();
+function indiceDasVias(vias: CadPolylineEntity[]): Map<string, number> {
+  const hit = cacheIndiceVias.get(vias);
+  if (hit) return hit;
+  const m = new Map(vias.map((via, i) => [via.id, i]));
+  cacheIndiceVias.set(vias, m);
+  return m;
+}
+const cacheTextosLote = new WeakMap<CadPolylineEntity, { vias: CadPolylineEntity[]; index: number; textos: ReturnType<typeof buildCadastralLotPlanTexts> }>();
+function textosDoLote(lote: CadPolylineEntity, index: number, vias: CadPolylineEntity[]) {
+  const hit = cacheTextosLote.get(lote);
+  if (hit && hit.vias === vias && hit.index === index) return hit.textos;
+  const textos = buildCadastralLotPlanTexts(lote, index, { streets: vias });
+  cacheTextosLote.set(lote, { vias, index, textos });
+  return textos;
+}
+const cacheBocas = new WeakMap<object, ReturnType<typeof angulosDasBocas>>();
+function angulosDasBocasCache(project: CadProject) {
+  const hit = cacheBocas.get(project.entities);
+  if (hit) return hit;
+  const r = angulosDasBocas(project);
+  cacheBocas.set(project.entities, r);
+  return r;
 }
 
 export function CadWorkspace({ userId }: { userId: string }) {
@@ -5832,14 +5881,21 @@ export function CadWorkspace({ userId }: { userId: string }) {
     return <g>{items}</g>;
   }
 
-  const lotIndexById = new Map(listReurbLots(project).map((lot, i) => [lot.id, i]));
-  const streetPolys = project.entities.filter(
-    (entity): entity is CadPolylineEntity =>
-      entity.type === "polyline" && Boolean(entity.closed) && entity.layerId === LOTEAMENTO_VIAS_LAYER_ID,
-  );
-  const viaIndexById = new Map(streetPolys.map((via, i) => [via.id, i]));
+  // Derivados do desenho guardados por identidade (entidades imutáveis): pan/zoom não recalculam nada.
+  const lotIndexById = indiceDosLotes(project);
+  const streetPolys = viasDoProjeto(project.entities);
+  const viaIndexById = indiceDasVias(streetPolys);
   const drenagemPxPorM = pixelsPorMetro(viewport);
-  const drenagemBocas = angulosDasBocas(project);
+  const drenagemBocas = angulosDasBocasCache(project);
+  // Recorte da vista (culling): o que está fora da tela não é desenhado.
+  const vistaSpanM = Math.max(viewport.maxX - viewport.minX, viewport.maxY - viewport.minY);
+  const vistaFolgaM = vistaSpanM * 0.08;
+  const vistaCaixa = {
+    minX: viewport.minX - vistaFolgaM,
+    minY: viewport.minY - vistaFolgaM,
+    maxX: viewport.maxX + vistaFolgaM,
+    maxY: viewport.maxY + vistaFolgaM,
+  };
 
   function renderPlanTexts(
     texts: { x: number; y: number; label: string; rotationDeg: number; role: string }[],
@@ -5946,6 +6002,17 @@ export function CadWorkspace({ userId }: { userId: string }) {
   }
 
   function renderEntity(entity: CadEntity) {
+    const selectedEarly = entity.id === selectedId || selectedIds.includes(entity.id);
+    if (!selectedEarly) {
+      if (entity.type === "point") {
+        if (!pontoNaCaixa(entity.x, entity.y, vistaCaixa)) return null;
+      } else if (entity.type === "polyline") {
+        if (entity.vertices.length > 0 && !caixasSeTocam(caixaDe(entity.vertices), vistaCaixa)) return null;
+      } else if (entity.type === "line") {
+        const cx = { minX: Math.min(entity.start.x, entity.end.x), minY: Math.min(entity.start.y, entity.end.y), maxX: Math.max(entity.start.x, entity.end.x), maxY: Math.max(entity.start.y, entity.end.y) };
+        if (!caixasSeTocam(cx, vistaCaixa)) return null;
+      }
+    }
     const layer = layerMap.get(entity.layerId);
     const lineColor = cadPaperScreenStroke(getLayerLineColor(layer), paperTone);
     const selectStroke = cadPaperSelectStroke(paperTone);
@@ -6228,9 +6295,10 @@ export function CadWorkspace({ userId }: { userId: string }) {
           return renderPlanTexts([street], CAD_PLAN_INK, lotMinSpanM(entity.vertices));
         })() : null}
         {!isContour && entity.closed && entity.layerId === LOTEAMENTO_LOTES_LAYER_ID ? (() => {
-          const texts = buildCadastralLotPlanTexts(entity, lotIndexById.get(entity.id) ?? 0, {
-            streets: streetPolys,
-          });
+          // nível de detalhe: lote com menos de ~14 px na tela não recebe textos (ilegíveis)
+          const cx = caixaDe(entity.vertices);
+          if (Math.min(cx.maxX - cx.minX, cx.maxY - cx.minY) * drenagemPxPorM < 14) return null;
+          const texts = textosDoLote(entity, lotIndexById.get(entity.id) ?? 0, streetPolys);
           return renderPlanTexts(texts, CAD_PLAN_INK, lotMinSpanM(entity.vertices));
         })() : null}
         {!isContour && entity.closed && !SKIP_POLYGON_CENTER_LABEL_LAYERS.has(entity.layerId) ? (() => {
@@ -11770,6 +11838,11 @@ export function CadWorkspace({ userId }: { userId: string }) {
                   project={project}
                   selectedId={selectedId}
                   onSelectId={(id) => setSelectedId(id)}
+                  onProjectChange={(next) => {
+                    pushUndo(modifyUndoRef.current, { project, selectedId });
+                    modifyRedoRef.current.length = 0;
+                    setProject(next);
+                  }}
                 />
               )}
             </CadFloatingPanel>

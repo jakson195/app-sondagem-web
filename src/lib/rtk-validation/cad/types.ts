@@ -87,6 +87,8 @@ export interface CadEsgotoProps {
   depthUpM?: number;
   depthDownM?: number;
   status?: CadEsgotoStatus;
+  /** Cota do terreno (tampa) digitada pelo usuário: é mantida ao recalcular a rede. */
+  cotaManual?: boolean;
 }
 
 export interface CadPointEntity {
