@@ -385,7 +385,11 @@ function PerfilEsgoto({ caminho, nos }: { caminho: CadPolylineEntity[]; nos: Map
               <polygon points={`${x0},${Y(a)} ${x1},${Y(b)} ${x1},${Y(b + D)} ${x0},${Y(a + D)}`} fill="#fff7ed" stroke="#9a3412" strokeWidth={0.9} />
               <polygon points={`${x0},${Y(a)} ${x1},${Y(b)} ${x1},${Y(b + y)} ${x0},${Y(a + y)}`} fill="#b45309" fillOpacity={0.45} />
               <text x={(x0 + x1) / 2} y={Y(Math.max(a, b) + D) - 5} fontSize={8} textAnchor="middle" fill="#7c2d12" stroke="#fff" strokeWidth={2.5} paintOrder="stroke">
-                {`${e.code} DN${e.diameterMm} i=${num(e.slopePct, 2)}% y/D=${num(e.yOverD)}`}
+                {x1 - x0 > 150
+                  ? `${e.code} DN${e.diameterMm} i=${num(e.slopePct, 2)}% y/D=${num(e.yOverD)}`
+                  : x1 - x0 > 40
+                    ? e.code
+                    : ""}
               </text>
             </g>
           );

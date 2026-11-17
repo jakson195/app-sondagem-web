@@ -13,6 +13,7 @@
  */
 import { extractSurveyElevationPoints } from "./contour";
 import { listReservaRings, pipeIntersectsReserva, placePvsAlongVia, pointInAnyReserva, sampleGroundZ, streetAxes, type DrainageStation } from "./loteamento-drainage";
+import { AREA_APP_LAYER_ID, AREA_RESERVA_LEGAL_LAYER_ID } from "./loteamento-tools";
 import { pointInPolygon } from "./polygon-utils";
 import { LOTEAMENTO_LOTES_LAYER_ID } from "./reurb";
 import { buildStreetAlignments } from "./street-profile";
@@ -293,7 +294,15 @@ export function gerarRedeEsgoto(project: CadProject, entrada: Partial<EsgotoPara
   const cfg: EsgotoParams = { ...DEFAULT_ESGOTO_PARAMS, ...entrada };
   const axes = streetAxes(project);
   if (axes.length === 0) throw new Error("Gere o loteamento com vias/eixos antes de criar a rede de esgoto.");
-  const reserva = listReservaRings(project);
+  // o esgoto só desvia de área verde e APP; pode passar por área remanescente ou de utilidade pública
+  const reserva = listReservaRings(project).filter((ring) =>
+    project.entities.some(
+      (e) =>
+        e.type === "polyline" &&
+        e.vertices === ring &&
+        (e.layerId === AREA_RESERVA_LEGAL_LAYER_ID || e.layerId === AREA_APP_LAYER_ID),
+    ),
+  );
   const amostras = extractSurveyElevationPoints(project.entities);
   const alinhamentos = buildStreetAlignments(axes);
   const linhas =
@@ -377,14 +386,19 @@ export function gerarRedeEsgoto(project: CadProject, entrada: Partial<EsgotoPara
     for (let rodada = 0; rodada < 50; rodada++) {
       const grupos = new Set(comp.values());
       if (grupos.size <= 1) break;
-      const pts = pontasDe();
-      let melhor: { a: No; b: No; d: number } | null = null;
+      // qualquer PV pode receber a interligação (não só as pontas): assim a ligação fica no lado baixo
+      const pts = nos.filter((n) => comp.has(n.id));
+      void pontasDe;
+      // liga pela parte baixa do terreno (o esgoto desce por gravidade), sem ir longe demais
+      const zMin = Math.min(...nos.map((n) => n.groundZ));
+      let melhor: { a: No; b: No; d: number; c: number } | null = null;
       for (const a of pts) {
         for (const b of nos) {
           if (!comp.has(b.id) || comp.get(a.id) === comp.get(b.id)) continue;
           const d = dist(a.x, a.y, b.x, b.y);
           if (d < 0.5 || pipeIntersectsReserva(a.x, a.y, b.x, b.y, reserva)) continue;
-          if (!melhor || d < melhor.d) melhor = { a, b, d };
+          const c = d + 25 * (Math.max(a.groundZ, b.groundZ) - zMin);
+          if (!melhor || c < melhor.c) melhor = { a, b, d, c };
         }
       }
       if (!melhor) break;
@@ -405,8 +419,14 @@ export function gerarRedeEsgoto(project: CadProject, entrada: Partial<EsgotoPara
     grau.set(e.a, (grau.get(e.a) ?? 0) + 1);
     grau.set(e.b, (grau.get(e.b) ?? 0) + 1);
   }
-  const pontas = pvs.filter((n) => (grau.get(n.id) ?? 0) <= 1);
-  const lanc = [...(pontas.length > 0 ? pontas : pvs)].sort((a, b) => a.groundZ - b.groundZ || a.y - b.y)[0]!;
+  // lançamento no PV mais baixo; empate (até 10 cm) prefere ponta de rede
+  const lanc = [...pvs].sort(
+    (a, b) =>
+      (Math.abs(a.groundZ - b.groundZ) > 0.1 ? a.groundZ - b.groundZ : 0) ||
+      (grau.get(a.id) ?? 0) - (grau.get(b.id) ?? 0) ||
+      a.groundZ - b.groundZ ||
+      a.y - b.y,
+  )[0]!;
   lanc.kind = "outfall";
   const adj = new Map<string, Aresta[]>();
   for (const e of arestas) {
